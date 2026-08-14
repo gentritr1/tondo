@@ -1,0 +1,12 @@
+{
+  "name": "tondo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tondo — a simple UNO-style pizza card game around a ring table.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node test/rules.test.js"
+  },
+  "dependencies": { "ws": "^8.18.0" }
+}
