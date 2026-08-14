@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TONDO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wght@500;600;700&family=VT323&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body data-screen="home">
+
+<!-- preloaded so a portrait never pops in a frame late -->
+<div class="art-preload" aria-hidden="true">
+  <img alt="" src="./assets/avatar-chef-bot.png">
+  <img alt="" src="./assets/carmela.png">
+  <img alt="" src="./assets/dominic.png">
+  <img alt="" src="./assets/pina.png">
+</div>
+
+<!-- ------------------------------------------------------------------ HOME -->
+<section id="screen-home" class="screen home">
+  <div class="home-card">
+    <h1 class="wordmark">TONDO</h1>
+    <p class="tagline">A pizza card game for 2&ndash;4 players.</p>
+
+    <label class="field" for="name-input">
+      <span class="field-label">Your name</span>
+      <input id="name-input" class="input" type="text" maxlength="14" autocomplete="nickname" placeholder="Chef">
+    </label>
+
+    <button id="create-btn" type="button" class="btn btn-primary btn-block">Create table</button>
+
+    <div class="rule"><span>or join one</span></div>
+
+    <div class="join-row">
+      <label class="field field-grow" for="code-input">
+        <span class="field-label">Table code</span>
+        <input id="code-input" class="input code-input" type="text" maxlength="12" autocapitalize="characters" spellcheck="false" placeholder="BASIL-4821">
+      </label>
+      <button id="join-btn" type="button" class="btn">Join</button>
+    </div>
+
+    <p id="home-msg" class="msg" role="status" aria-live="polite"></p>
+  </div>
+</section>
+
+<!-- ----------------------------------------------------------------- LOBBY -->
+<section id="screen-lobby" class="screen lobby">
+  <div class="lobby-card">
+    <div class="lobby-head">
+      <div class="field-label">Table code</div>
+      <div class="code-row">
+        <span id="room-code" class="code">&mdash;</span>
+        <button id="copy-btn" type="button" class="btn btn-ghost">Copy</button>
+      </div>
+    </div>
+
+    <ul id="seat-list" class="seat-list"></ul>
+
+    <div id="host-controls" class="lobby-actions">
+      <button id="addbot-btn" type="button" class="btn">Add bot</button>
+      <button id="start-btn" type="button" class="btn btn-primary">Start game</button>
+    </div>
+    <p id="lobby-wait" class="msg">Waiting for the host to start&hellip;</p>
+
+    <p id="lobby-msg" class="msg" role="status" aria-live="polite"></p>
+    <button id="leave-btn" type="button" class="btn btn-ghost btn-block">Leave table</button>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ GAME -->
+<section id="screen-game" class="screen game">
+
+  <div class="strip">
+    <div class="strip-mark">TONDO</div>
+    <div id="queue" class="queue"></div>
+    <div id="strip-code" class="strip-code"></div>
+  </div>
+
+  <div id="stage" class="stage">
+    <div id="ring" class="ring"></div>
+
+    <div class="center">
+      <div id="plaque" class="plaque">
+        <div class="plaque-head">
+          <span id="match-label" class="plaque-label">Match</span>
+          <span id="dir-badge" class="dir-badge">&#8635;</span>
+        </div>
+        <div class="plaque-row">
+          <div class="plaque-pair">
+            <span id="match-glyph" class="match-glyph"></span>
+            <span id="match-suit" class="match-suit"></span>
+          </div>
+          <div id="match-or-wrap" class="plaque-pair">
+            <span class="match-or">or</span>
+            <span id="match-value" class="match-value"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="pile">
+        <div id="deck" class="deck"><span class="deck-text">Deck<br><b id="deck-count">0</b></span></div>
+        <div id="top-card" class="top-card">
+          <div id="top-index" class="card-index"></div>
+          <div id="top-glyph" class="card-glyph"></div>
+          <div id="top-suit" class="card-suit"></div>
+        </div>
+      </div>
+
+      <div class="dir">
+        <span id="dir-glyph" class="dir-glyph">&#8635;</span>
+        <span id="dir-label" class="dir-label">Clockwise</span>
+      </div>
+    </div>
+
+    <div id="seats"></div>
+    <div id="event-ribbon" class="ribbon"></div>
+    <div id="banner" class="banner" hidden></div>
+  </div>
+
+  <div class="tray">
+    <p id="live-polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+    <p id="live-alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></p>
+
+    <div id="you-strip" class="you-strip">
+      <span id="you-ticket" class="you-ticket"></span>
+      <span id="you-portrait" class="you-portrait"></span>
+      <span id="you-name" class="you-name">You</span>
+      <span id="you-pips" class="you-pips"></span>
+      <span id="you-count" class="you-count"></span>
+      <span id="you-status" class="you-status"></span>
+    </div>
+
+    <div class="label-row">
+      <div id="hand-label" class="hand-label">Your hand</div>
+      <div id="playable-label" class="playable-label"></div>
+    </div>
+
+    <!-- contextual bars -->
+    <div id="tondo-bar" class="bar bar-tondo" hidden>
+      <div class="bar-text">
+        <div class="bar-head">Call TONDO before you play</div>
+        <div class="bar-sub">Two cards left. Forget it and anyone can catch you for +2.</div>
+      </div>
+      <button id="tondo-btn" type="button" class="btn btn-tondo">Call TONDO</button>
+    </div>
+
+    <div id="callout-bar" class="bar bar-callout" hidden>
+      <div class="bar-text">
+        <div id="callout-head" class="bar-head">Forgot TONDO &mdash; call them out</div>
+        <div id="callout-sub" class="bar-sub">On one card, never said it.</div>
+      </div>
+      <div id="callout-buttons" class="bar-buttons"></div>
+    </div>
+
+    <div id="drawn-bar" class="bar bar-drawn" hidden>
+      <div id="drawn-card" class="drawn-card">
+        <div id="drawn-index" class="card-index"></div>
+        <div id="drawn-glyph" class="card-glyph"></div>
+        <div id="drawn-suit" class="card-suit"></div>
+      </div>
+      <div class="bar-text">
+        <div id="drawn-msg" class="drawn-msg"></div>
+        <div class="bar-buttons">
+          <button id="drawn-play" type="button" class="btn btn-play">Play it</button>
+          <button id="drawn-keep" type="button" class="btn btn-quiet">Keep &amp; pass</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="wild-bar" class="bar bar-wild" hidden>
+      <div class="wild-row">
+        <div class="wild-card">
+          <div class="card-index" id="wild-corner"></div>
+          <div class="card-glyph" id="wild-centre"></div>
+          <div class="card-suit">WILD</div>
+        </div>
+        <div id="wild-title" class="bar-head">Pick the next topping</div>
+      </div>
+      <div id="wild-grid" class="wild-grid" role="group" aria-labelledby="wild-title"></div>
+    </div>
+
+    <div id="hand-wrap" class="hand-wrap">
+      <div id="hand-row" class="hand-row"></div>
+      <div id="fade-left" class="fade fade-left" hidden></div>
+      <div id="fade-right" class="fade fade-right" hidden></div>
+    </div>
+
+    <div id="action-row" class="action-row">
+      <button id="draw-btn" type="button" class="btn btn-draw">Draw a card</button>
+      <button id="newround-btn" type="button" class="btn btn-primary" hidden>New round</button>
+      <div id="message" class="message"></div>
+    </div>
+
+    <div class="foot">
+      <div id="hint" class="hint"></div>
+      <button id="game-leave" type="button" class="btn btn-tiny">Leave</button>
+    </div>
+  </div>
+</section>
+
+<div id="net-banner" class="net-banner" hidden></div>
+
+<script type="module">
+  const params = new URLSearchParams(location.search);
+  if (params.has('mock')) await import('./js/mock.js');
+  await import('./js/app.js');
+</script>
+</body>
+</html>
