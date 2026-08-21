@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "tondo",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "port": 4600,
+      "autoPort": true
+    }
+  ]
+}

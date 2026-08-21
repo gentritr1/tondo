@@ -17,8 +17,8 @@ const CODE_WORDS = [
 ];
 
 const TICK_MS = 250;
-const BOT_FOLLOWUP_MS = 300; // a shout does not end the turn; move again shortly
-const BOT_CALLOUT_MS = 1000; // a human gets a beat to remember TONDO first
+const BOT_FOLLOWUP_MS = 900; // a shout does not end the turn; a beat, then the move
+const BOT_CALLOUT_MS = 1400; // a human gets a beat to remember TONDO first
 const AWAY_TURN_MS = 10000; // resolve the turn of a player whose socket went
 const EMPTY_ROOM_TTL_MS = 60000;
 const MAX_NAME_LENGTH = 16;
@@ -51,6 +51,7 @@ class Room {
     this.rolledFor = new Set();
     this.calloutPlans = [];
     this.emptySince = 0;
+    this.roundCount = 0;
   }
 
   // -- seats ---------------------------------------------------------------
@@ -101,6 +102,17 @@ class Room {
     this.hostId = next ? next.id : null;
   }
 
+  /**
+   * Host powers follow the host while they are here. A host whose socket is
+   * gone mid-game keeps the title (they may come back) but must not be able
+   * to freeze the table: while they are away any seated human may deal.
+   */
+  isActingHost(seatId) {
+    if (this.hostId === seatId) return true;
+    const host = this.findSeat(this.hostId);
+    return !host || host.isBot || !host.connected;
+  }
+
   removeSeat(seatId) {
     const index = this.seats.findIndex((s) => s.id === seatId);
     if (index === -1) return;
@@ -123,7 +135,9 @@ class Room {
       return { ok: false, error: `A table holds at most ${game.MAX_PLAYERS} players.` };
     }
     this.game = game.createGame(
-      this.seats.map((s) => ({ id: s.id, name: s.name, isBot: s.isBot }))
+      this.seats.map((s) => ({ id: s.id, name: s.name, isBot: s.isBot })),
+      // The lead rotates round by round so the host does not open every deal.
+      { startIndex: this.roundCount++ % this.seats.length }
     );
     this.phase = 'playing';
     this.rolledFor.clear();
@@ -161,14 +175,20 @@ class Room {
       this.awayDueAt = 0;
       return;
     }
-    if (!force && this.game.turnSerial === this.timedTurnSerial) return;
+    const serialChanged = this.game.turnSerial !== this.timedTurnSerial;
+    if (!force && !serialChanged) return;
     this.timedTurnSerial = this.game.turnSerial;
 
     const current = game.currentPlayer(this.game);
     const seat = current ? this.findSeat(current.id) : null;
     const now = Date.now();
-    this.botDueAt = seat && seat.isBot ? now + bot.thinkMs() : 0;
-    this.awayDueAt = seat && !seat.isBot && !seat.connected ? now + AWAY_TURN_MS : 0;
+    // A forced re-arm inside the same turn keeps a clock that is already
+    // running: an unrelated player's disconnect must not rewind the ten
+    // seconds an away player has left, or postpone a bot forever.
+    const wantBot = Boolean(seat && seat.isBot);
+    const wantAway = Boolean(seat && !seat.isBot && !seat.connected);
+    this.botDueAt = wantBot ? (serialChanged || !this.botDueAt ? now + bot.thinkMs() : this.botDueAt) : 0;
+    this.awayDueAt = wantAway ? (serialChanged || !this.awayDueAt ? now + AWAY_TURN_MS : this.awayDueAt) : 0;
   }
 
   /**
@@ -211,7 +231,7 @@ class Room {
       roomCode: this.code,
       youId: seatId,
       hostId: this.hostId,
-      isHost: this.hostId === seatId,
+      isHost: this.isActingHost(seatId),
       seats: this.seats.map((s) => ({
         id: s.id,
         name: s.name,
@@ -282,10 +302,17 @@ class RoomManager {
     if (!room) return { ok: false, error: 'No table has that code.' };
 
     // A token is the key to one seat. Only the client that was given it may
-    // sit back down, so nobody can walk into another player's hand.
+    // sit back down, so nobody can walk into another player's hand. The token
+    // outranks a lingering socket: after a half-open drop the server can
+    // believe the old socket is alive for up to a heartbeat, and refusing the
+    // rightful owner for that long would cost them their seat. Take it over.
     const claimed = room.findSeatByToken(token);
     if (claimed) {
-      if (claimed.connected) return { ok: false, error: 'That seat is already in use.' };
+      const ghost = claimed.socket;
+      if (claimed.connected && ghost && ghost !== socket) {
+        claimed.socket = null; // detach first so the ghost's close is a no-op
+        try { ghost.terminate(); } catch { /* already dead */ }
+      }
       claimed.socket = socket;
       claimed.connected = true;
       claimed.disconnectedAt = null;
@@ -295,20 +322,24 @@ class RoomManager {
       return { ok: true, room, seat: claimed, reconnected: true };
     }
 
-    if (room.phase !== 'lobby') {
-      return { ok: false, error: 'That round already started. Wait for the next one.' };
+    if (room.phase === 'playing') {
+      return { ok: false, error: 'That round is being played. Wait for the next one.' };
     }
     if (room.seats.length >= game.MAX_PLAYERS) {
       return { ok: false, error: 'That table is full.' };
     }
+    // Lobby or round over: either way there is a seat to take before the deal.
     const seat = room.addSeat({ name: cleaned, socket });
     room.emptySince = 0;
     return { ok: true, room, seat };
   }
 
   /** A socket closed. In the lobby the seat goes; mid-game it waits. */
-  handleDisconnect(room, seat) {
+  handleDisconnect(room, seat, socket = null) {
     if (!room || !seat) return;
+    // A close event can arrive after a reconnect took the seat over. Only the
+    // socket that still holds the seat may vacate it.
+    if (socket && seat.socket && seat.socket !== socket) return;
     seat.socket = null;
     seat.connected = false;
     seat.disconnectedAt = Date.now();
@@ -382,6 +413,14 @@ class RoomManager {
     if (room.humanSeats().length === 0) {
       this.cleanupIfEmpty(room);
       return;
+    }
+    // The TTL is armed here, from observed state, so no seat-removal path can
+    // forget it: a room with humans on paper but none connected is counting
+    // down, and one reconnect resets the count.
+    if (room.connectedHumanSeats().length === 0) {
+      if (!room.emptySince) room.emptySince = now;
+    } else {
+      room.emptySince = 0;
     }
     if (room.emptySince && now - room.emptySince > EMPTY_ROOM_TTL_MS) {
       if (this.rooms.get(room.code) === room) this.rooms.delete(room.code);

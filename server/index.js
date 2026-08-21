@@ -22,6 +22,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.png': 'image/png',
+  '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
 };
@@ -86,6 +87,13 @@ function sendError(socket, message) {
   send(socket, { type: 'error', message });
 }
 
+/** PROTOCOL.md: a refused seated message ships an `error` plus a fresh
+ *  snapshot, so a client that got out of step is put back in it. */
+function refuse(socket, room, seatId, message) {
+  sendError(socket, message);
+  send(socket, room.snapshotFor(seatId));
+}
+
 wss.on('connection', (socket) => {
   const session = { room: null, seatId: null };
 
@@ -119,7 +127,9 @@ wss.on('connection', (socket) => {
     session.seatId = null;
     if (!room || !seat) return;
     try {
-      manager.handleDisconnect(room, seat);
+      // The socket rides along so a close that arrives after a reconnect took
+      // the seat over cannot vacate the new owner.
+      manager.handleDisconnect(room, seat, socket);
     } catch (err) {
       console.error('[tondo] disconnect failed:', err);
     }
@@ -131,21 +141,21 @@ wss.on('connection', (socket) => {
 function handleMessage(socket, session, message) {
   // ---- joining ----------------------------------------------------------
   if (message.type === 'createRoom' || message.type === 'joinRoom') {
-    if (session.room) {
-      const oldRoom = session.room;
-      const oldSeat = oldRoom.findSeat(session.seatId);
-      session.room = null;
-      session.seatId = null;
-      manager.handleDisconnect(oldRoom, oldSeat);
-    }
+    // The new table is granted BEFORE the old seat is torn down: a bad code
+    // or a full house must not leave the sender seatless.
     const result = message.type === 'createRoom'
       ? manager.createRoom(message.name, socket)
       : manager.joinRoom(message.code, message.name, socket, message.token);
 
     if (!result.ok) return sendError(socket, result.error);
 
+    const oldRoom = session.room;
+    const oldSeat = oldRoom ? oldRoom.findSeat(session.seatId) : null;
     session.room = result.room;
     session.seatId = result.seat.id;
+    if (oldRoom && oldSeat && (oldRoom !== result.room || oldSeat.id !== result.seat.id)) {
+      manager.handleDisconnect(oldRoom, oldSeat);
+    }
     send(socket, {
       type: 'joined',
       roomCode: result.room.code,
@@ -164,35 +174,35 @@ function handleMessage(socket, session, message) {
   if (!seat) return sendError(socket, 'Your seat is gone. Please join again.');
 
   switch (message.type) {
-    // ---- lobby ---------------------------------------------------------
+    // ---- lobby (and between rounds) ------------------------------------
     case 'addBot': {
-      if (room.hostId !== seatId) return sendError(socket, 'Only the host can add a bot.');
-      if (room.phase !== 'lobby') return sendError(socket, 'Bots only join in the lobby.');
-      if (room.seats.length >= game.MAX_PLAYERS) return sendError(socket, 'The table is full.');
+      if (!room.isActingHost(seatId)) return refuse(socket, room, seatId, 'Only the host can add a bot.');
+      if (room.phase === 'playing') return refuse(socket, room, seatId, 'Bots join between rounds.');
+      if (room.seats.length >= game.MAX_PLAYERS) return refuse(socket, room, seatId, 'The table is full.');
       room.addSeat({ name: bot.pickBotName(room.seats.map((s) => s.name)), isBot: true });
       break;
     }
     case 'removeSeat': {
-      if (room.hostId !== seatId) return sendError(socket, 'Only the host can remove a seat.');
-      if (room.phase !== 'lobby') return sendError(socket, 'Seats only change in the lobby.');
+      if (!room.isActingHost(seatId)) return refuse(socket, room, seatId, 'Only the host can remove a seat.');
+      if (room.phase === 'playing') return refuse(socket, room, seatId, 'Seats only change between rounds.');
       const target = room.findSeat(message.seatId);
-      if (!target) return sendError(socket, 'That seat is empty.');
-      if (!target.isBot) return sendError(socket, 'You can only remove bots.');
+      if (!target) return refuse(socket, room, seatId, 'That seat is empty.');
+      if (!target.isBot) return refuse(socket, room, seatId, 'You can only remove bots.');
       room.removeSeat(target.id);
       break;
     }
     case 'startGame': {
-      if (room.hostId !== seatId) return sendError(socket, 'Only the host can start the game.');
-      if (room.phase !== 'lobby') return sendError(socket, 'The game already started.');
+      if (!room.isActingHost(seatId)) return refuse(socket, room, seatId, 'Only the host can start the game.');
+      if (room.phase !== 'lobby') return refuse(socket, room, seatId, 'The game already started.');
       const started = room.startRound();
-      if (!started.ok) return sendError(socket, started.error);
+      if (!started.ok) return refuse(socket, room, seatId, started.error);
       break;
     }
     case 'newRound': {
-      if (room.hostId !== seatId) return sendError(socket, 'Only the host can deal again.');
-      if (room.phase !== 'roundOver') return sendError(socket, 'The round is not over.');
+      if (!room.isActingHost(seatId)) return refuse(socket, room, seatId, 'Only the host can deal again.');
+      if (room.phase !== 'roundOver') return refuse(socket, room, seatId, 'The round is not over.');
       const started = room.startRound();
-      if (!started.ok) return sendError(socket, started.error);
+      if (!started.ok) return refuse(socket, room, seatId, started.error);
       break;
     }
     case 'leaveRoom': {
@@ -211,14 +221,9 @@ function handleMessage(socket, session, message) {
     case 'pass':
     case 'tondo':
     case 'callout': {
-      if (room.phase !== 'playing') return sendError(socket, 'The round is not running.');
+      if (room.phase !== 'playing') return refuse(socket, room, seatId, 'The round is not running.');
       const result = manager.applyAction(room, seatId, message);
-      if (!result.ok) {
-        sendError(socket, result.error);
-        // Put the client's picture back in step with the server.
-        send(socket, room.snapshotFor(seatId));
-        return;
-      }
+      if (!result.ok) return refuse(socket, room, seatId, result.error);
       break;
     }
 
@@ -227,7 +232,7 @@ function handleMessage(socket, session, message) {
       return;
 
     default:
-      return sendError(socket, `Unknown message: ${message.type}`);
+      return refuse(socket, room, seatId, `Unknown message: ${message.type}`);
   }
 
   room.broadcast();

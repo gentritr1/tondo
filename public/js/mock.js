@@ -281,8 +281,13 @@ function route(msg) {
       return;
 
     case 'addBot': {
-      const nextBot = BOTS[table.seats.length - 1];
-      if (!nextBot) { emit({ type: 'error', message: 'The table is full.' }); emit(snapshot()); return; }
+      // Pick by id, not by count: removing a middle bot then adding one must
+      // never seat the same id twice (the real server cannot).
+      const seatedIds = new Set(table.seats.map((s) => s.id));
+      const nextBot = BOTS.find((b) => !seatedIds.has(b.id));
+      if (!nextBot || table.seats.length >= 4) {
+        emit({ type: 'error', message: 'The table is full.' }); emit(snapshot()); return;
+      }
       table.seats.push(Object.assign({}, nextBot));
       emit(snapshot());
       return;
@@ -311,6 +316,7 @@ function route(msg) {
       g.hand = g.hand.filter((x) => x.id !== msg.cardId);
       g.topCard = { id: card.id, suit: card.suit, value: card.value };
       g.activeSuit = card.value === 'WILD' ? (msg.suit || 'cheese') : card.suit;
+      if (card.value === 'REVERSE') g.direction *= -1;
       g.playableCardIds = [];
       g.drawnDecisionCardId = null;
       g.canDeclareTondo = false;

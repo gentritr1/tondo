@@ -1,47 +1,480 @@
-/* TONDO — ported from docs/design/ring-table.dc.html.
-   Colours, type and card construction are the design's; the geometry that the
-   prototype computed per frame in JS is expressed here as CSS instead. */
+/* TONDO — the whole product in the "Stone Oven" language
+   (docs/design/stone-oven-spec.md; components extracted from the designer's
+   file). One geometry variable still drives the table AND the seats; the card
+   anatomy is now one shared system scaled from a single per-card width.
+
+   Home and lobby now speak the same language: the legacy dark-blue token set
+   is gone, and the shared .btn/.input primitives below are the Stone Oven
+   ones the game screen was already overriding to. */
+
+/* `--table-d` is the one geometry variable (see .stage). Registering it as a
+   real <length> is what lets it be TRANSITIONED: a context bar toggles
+   `.stage.is-compressed`, which used to resize the table — and therefore the
+   whole seat orbit — in a single frame. Registered, it eases instead.
+   `inherits: true` keeps the ring, the seats and the oven mark reading it
+   exactly as before.
+   (Do not write a seat selector with a star-slash in this comment: it closes
+   the comment early and silently swallows the rule below.) */
+@property --table-d {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+/* Everything the table wears is now DERIVED from the table, not re-declared as
+   a pixel constant per breakpoint. Registering each one as a real <length> buys
+   two things:
+     1. `getComputedStyle(el).getPropertyValue('--seat-back')` resolves to px
+        instead of handing back the raw `clamp(...)` token stream — app.js sizes
+        the flight ghost from that value, and a token stream would silently
+        become NaN and fall back to a hard-coded 34.
+     2. It is what makes the derived value a real length at all, so a clamp of
+        a length against px bounds type-checks.
+   They are deliberately NOT listed in any `transition-property`: see the note
+   on --table-fit in .stage for why the furniture must snap while the table
+   itself eases. */
+@property --card-w      { syntax: "<length>"; inherits: true; initial-value: 96px; }
+@property --top-card-w  { syntax: "<length>"; inherits: true; initial-value: 126px; }
+@property --deck-w      { syntax: "<length>"; inherits: true; initial-value: 70px; }
+@property --seat-tile   { syntax: "<length>"; inherits: true; initial-value: 62px; }
+@property --seat-back   { syntax: "<length>"; inherits: true; initial-value: 46px; }
+@property --seat-edge   { syntax: "<length>"; inherits: true; initial-value: 96px; }
+@property --you-tile    { syntax: "<length>"; inherits: true; initial-value: 46px; }
+@property --wild-card-w { syntax: "<length>"; inherits: true; initial-value: 62px; }
+/* One unit for the whole Slice Ledger topping set. The concept sheet draws its
+   toppings in px against a 320px pie (pepperoni 26, basil 28, cheese 26x22,
+   anchovy 31x14), so every shape below is written as `calc(var(--tp-u) * N)`
+   with those exact numbers and only this one variable carries the scale.
+   It is 1/428 of the table rather than the concept's 1/320: our sauce ring has
+   to share its width with a full-size discard card and MATCH plaque, which the
+   concept's pie does not, so a literal 1/320 topping left the annulus with
+   room for barely one piece. Registered as a <length> so app.js can read it
+   back in px when it works out how far a topping must clear the centre. */
+@property --tp-u { syntax: "<length>"; inherits: true; initial-value: 1px; }
+@property --shake-x { syntax: "<length>"; inherits: false; initial-value: 0px; }
 
 :root {
-  --bg: #0d0f1a;
-  --panel: #101528;
-  --panel-2: #121729;
-  --line: #242c49;
-  --bone: #f4f7ff;
-  --accent: #ffe14d;
-  --focus: #7de2ff;
-  --pepperoni: #ff2e6b;
-  --cheese: #ffc93d;
-  --basil: #3ddc7f;
-  --anchovy: #4d9dff;
-  --dim: #6f7ba3;
-  --dim-2: #8f9bc4;
-  --card-w: 92px;
-  --card-h: 128px;
+  /* Lets `height: auto` interpolate, so a bar or the hand can grow from and
+     collapse to nothing without the max-height hack. Nothing in this file
+     transitions width/height except the enter/exit system below, so this
+     cannot animate anything by accident. */
+  interpolate-size: allow-keywords;
+
+  /* ---- Stone Oven palette ------------------------------------------- */
+  --page: #070C16;
+  --page-glow: #121B2E;
+  --shell: #0E1729;
+  --tray-bg: #0A1120;
+  --hair: rgba(255,247,232,.08);
+  --hair-2: rgba(255,247,232,.16);
+  --ink: #FFF7E8;          /* cream ink — card borders, letters */
+  --gold: #F5CB5C;
+  --crust: #E0A44A;
+  --crust-2: #E8B45E;
+  --navy: #16233C;
+  --paper: #FFFCF2;
+  --paper-2: #F3E4C6;
+  --paper-ink: #9A7434;
+
+  /* suits: gradient + 3D bottom lip + flat mark colour */
+  --pep-bg: linear-gradient(160deg,#D9503A,#B33421); --pep-edge: #7C2416; --pep-mark: #B33421; --pep-solid: #D9503A;
+  --bas-bg: linear-gradient(160deg,#4ECB78,#2FA25B); --bas-edge: #1C6B3C; --bas-mark: #2FA25B; --bas-solid: #4ECB78;
+  --chz-bg: linear-gradient(160deg,#F5CB5C,#E0A63C); --chz-edge: #9A6C1C; --chz-mark: #E0A63C; --chz-solid: #F5CB5C;
+  --anc-bg: linear-gradient(160deg,#6E9EE0,#4A76BE); --anc-edge: #2F4E82; --anc-mark: #4A76BE; --anc-solid: #6E9EE0;
+  --wild-bg: linear-gradient(160deg,#1E2E4C,#16233C); --wild-edge: #0B1526;
+
+  /* The rank chip's GROUND (see .card-index). A card face is a mid-tone
+     gradient, and no flat ink clears 4.5:1 against both of its stops: cream
+     measured 1.45:1 on cheese's light stop, and pure black only reaches
+     3.43:1 on pepperoni's dark one — so the digit brings its own ground
+     instead. Each is the suit's own darkest ink, the same family as the card's
+     3D lip, so the chip reads as part of the card rather than an applique.
+     Measured against --ink: pep 9.4, cheese 8.0, basil 8.6, anchovy 7.7. */
+  --pep-ink: #7C2416;
+  --bas-ink: #155230;
+  --chz-ink: #6B460C;
+  --anc-ink: #2F4E82;
+  --wild-ink: #0B1526;
+
+  /* ---- the ink alpha ladder --------------------------------------------
+     Muted cream had no ladder: `rgba(255,247,232, a)` appeared on 50 lines
+     with 22 distinct alphas, and eight of those steps failed WCAG AA. These
+     four are now the only steps allowed to carry words. Ratios are measured
+     composited against --shell (#0E1729) — the darkest surface muted text
+     sits on, so every other surface in the app measures better:
+       --ink-1  .92   loud secondary text        (~15:1)
+       --ink-2  .72   10-11px caps labels        (~10:1; small type needs the
+                                                  headroom, so labels never
+                                                  use a lower rung)
+       --ink-3  .58   body-size muted text       (~6.5:1) — the FLOOR for words
+       --ink-4  .40   glyphs, rules, decoration  (~3.6:1) — never words
+     Anything fainter than --ink-4 is decoration and must not carry meaning.
+     (The exact measured ratios are re-checked in the verification sweep; see
+     the project notes for the numbers this ladder was tuned against.) */
+  --ink-1: rgba(255,247,232,.92);
+  --ink-2: rgba(255,247,232,.72);
+  --ink-3: rgba(255,247,232,.58);
+  --ink-4: rgba(255,247,232,.40);
+
+  /* ---- geometry ------------------------------------------------------ */
+  /* Card widths are LENGTHS. The scale factor is a length divided by a length,
+     which CSS Values 4 types as a plain <number>:
+         --cs: calc(var(--cw) / 96px)
+     so every `calc(22px * var(--cs))` downstream still type-checks. This was
+     verified empirically in this browser before it was relied on — see
+     docs and the note below; the failure mode of getting it wrong is silent
+     (Chrome drops the px-squared declaration and falls back to the 13.33px
+     minimum font size, which looks like "the design is a bit off").
+     The earlier scar in this file was `calc(var(--cw) / 96)` — dividing a
+     length by a NUMBER, which yields a length. Dividing by `96px` is the fix,
+     not the same mistake. */
+
+  /* The hand lives in the tray, not on the table, so it scales against the
+     space the tray actually has: viewport height sets how tall a card may be
+     before it eats the stage, viewport width keeps a 7-card hand from
+     overflowing on desktop. A longer hand simply scrolls (by design).
+     Bounds: 74px is the smallest a face stays legible with its index, mark and
+     suit code; 132px is the point where a 7-card hand (7x132 + gaps + padding
+     = 1000px) still fits inside --measure, so the cap is the tray's own width
+     rather than an arbitrary "looks big enough". */
+  --card-w: clamp(74px, min(13vw, 10.4dvh), 132px);
+  --you-tile: clamp(36px, calc(var(--card-w) * .48), 56px);
+  --wild-card-w: clamp(50px, calc(var(--card-w) * .646), 84px);
+
+  /* How much vertical room the stage does NOT get: the strip plus the tray.
+     Measured, not guessed — at --card-w 96px the strip is 53px and the tray
+     344px, and the tray is that height plus the hand card's own height, so
+     259px + 1.4375 x --card-w reproduces 397px exactly. Re-derived per
+     breakpoint band below wherever the tray's furniture changes. */
+  --chrome-h: calc(259px + var(--card-w) * 1.4375);
+
+  --card-lift: 0px;
+  --measure: 1120px;
+
+  /* ---- motion tokens --------------------------------------------------
+     Strong custom curves only: the built-in CSS easings are too weak to read
+     as intentional, and `ease-in` is banned outright (it delays the exact
+     moment the eye is on the element). --e-pop carries this game's playful
+     personality: a ~0.2 overshoot reserved for landings, pops and wins. */
+  --e-out: cubic-bezier(.23, 1, .32, 1);        /* entries, exits, feedback */
+  --e-in-out: cubic-bezier(.77, 0, .175, 1);    /* on-screen movement */
+  --e-pop: cubic-bezier(.34, 1.45, .5, 1);      /* playful settle, ~.2 bounce */
+  --t-press: 140ms;   /* button/card press feedback */
+  --t-micro: 120ms;
+  --t-state: 200ms;
+  --t-travel: 260ms;
+  /* Enter/exit of everything the client toggles with `hidden`. Asymmetric:
+     the enter is the event, the exit is the system tidying up after it. */
+  --t-enter: 200ms;
+  --t-exit: 140ms;
+  /* The reflow itself. A bar and the hand it replaces are two halves of ONE
+     transition, so their SIZE runs at the same duration in both directions —
+     an asymmetric height would make the tray grow and shrink out of step and
+     the stage would visibly wobble. Only the opacity is asymmetric. */
+  --t-swap: 200ms;
+  /* The pie is scenery, not feedback: it may cross-dissolve slower than the
+     UI budget without ever feeling like a delayed response. */
+  --t-pizza: 420ms;
+  --t-text-out: 120ms;  /* a label crossfading to new text */
+  --t-text-in: 180ms;
+
+  --font-display: 'Bricolage Grotesque', 'Archivo Black', system-ui, sans-serif;
+  --font-body: 'DM Sans', system-ui, -apple-system, Segoe UI, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-ticket: var(--font-mono);
+  --font-voice: 'Instrument Serif', Georgia, 'Times New Roman', serif;
 }
 
 * { box-sizing: border-box; }
+
+/* The `hidden` attribute outranks every display rule in this file. This has
+   now bitten twice (a new `display` on a JS-toggled class silently un-hid it),
+   so the guard is global rather than per-class. */
+[hidden] { display: none !important; }
+
+/* ==========================================================================
+   ENTER / EXIT — one treatment for everything the client toggles with `hidden`
+   ==========================================================================
+   Nothing in this app may appear or leave on a snap: an element popping into
+   the layout and shoving its neighbours reads as a glitch, not as a change.
+
+   The `!important` above is NOT weakened, and it does not need to be:
+   transition declarations sit in a HIGHER cascade origin than important author
+   declarations, so `transition: display … allow-discrete` still holds the
+   element rendered for the length of its exit. Verified live in this browser
+   (display stayed `flex` at 50ms and 200ms of a 300ms exit, `none` at 450ms).
+
+   Two flavours:
+     .fx-panel — owns layout. Collapses its own height/padding/margin so the
+                 tray, and therefore the stage and the table, resize smoothly
+                 instead of jumping.
+     .fx-fade  — owns no layout (absolute/fixed) or only a sliver of it. Fades
+                 and travels a few px; never scales from 0.                    */
+
+/* Two channels, two curves, and the split is measured rather than assumed.
+   The CONTENT arriving is an entry → --e-out. The LAYOUT resolving around it
+   is on-screen movement → --e-in-out. Running the reflow on --e-out was the
+   first thing tried and it was wrong: cubic-bezier(.23,1,.32,1) has covered
+   ~35% of the distance by the end of frame one, so a 118px tray change still
+   opened with a 44.5px step (measured) and only then glided. On --e-in-out
+   the first frame moves under a pixel. */
+.fx-panel {
+  height: auto;
+  /* The collapse must be clipped or the content spills over its neighbours.
+     The margin keeps the clip clear of the shadows that legitimately paint
+     outside the box: a drawn card's `0 14px 22px` (~36px) and a primary
+     button's 3px bottom lip. */
+  overflow: clip;
+  overflow-clip-margin: 44px;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--e-out),
+    transform var(--t-enter) var(--e-out),
+    height var(--t-swap) var(--e-in-out),
+    margin-top var(--t-swap) var(--e-in-out),
+    margin-bottom var(--t-swap) var(--e-in-out),
+    padding-block var(--t-swap) var(--e-in-out),
+    display var(--t-swap) allow-discrete;
+}
+.fx-panel[hidden] {
+  height: 0;
+  margin-top: 0;
+  /* A panel in a `gap`-spaced column (the lobby card) leaves the gap behind
+     when it collapses; --row-gap-eat lets it swallow its own gap too. */
+  margin-bottom: calc(var(--row-gap-eat, 0px) * -1);
+  padding-block: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  /* Opacity leaves early; the height keeps the shared --t-swap so the two
+     halves of a swap stay in step. */
+  transition:
+    opacity var(--t-exit) var(--e-out),
+    transform var(--t-exit) var(--e-out),
+    height var(--t-swap) var(--e-in-out),
+    margin-top var(--t-swap) var(--e-in-out),
+    margin-bottom var(--t-swap) var(--e-in-out),
+    padding-block var(--t-swap) var(--e-in-out),
+    display var(--t-swap) allow-discrete;
+}
+@starting-style {
+  .fx-panel:not([hidden]) {
+    height: 0; margin-top: 0; padding-block: 0;
+    margin-bottom: calc(var(--row-gap-eat, 0px) * -1);
+    opacity: 0; transform: translateY(6px);
+  }
+}
+
+.fx-fade {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--e-out),
+    transform var(--t-enter) var(--e-out),
+    display var(--t-enter) allow-discrete;
+}
+.fx-fade[hidden] {
+  opacity: 0;
+  /* .97, never 0 — nothing in the real world appears out of nothing. */
+  transform: translateY(4px) scale(.98);
+  transition-duration: var(--t-exit);
+}
+@starting-style {
+  .fx-fade:not([hidden]) { opacity: 0; transform: translateY(4px) scale(.98); }
+}
+
+/* Buttons keep their own press-feedback timing — a 200ms `:active` scale would
+   feel unheard — so they take opacity and the discrete display flip only. */
+.btn.fx-fade {
+  transition:
+    opacity var(--t-enter) var(--e-out),
+    transform var(--t-press) var(--e-out),
+    filter var(--t-micro) var(--e-out),
+    border-color var(--t-micro) var(--e-out),
+    background-color var(--t-micro) var(--e-out),
+    color var(--t-micro) var(--e-out),
+    display var(--t-enter) allow-discrete;
+}
+.btn.fx-fade[hidden] { opacity: 0; transform: scale(.97); transition-duration: var(--t-exit); }
+@starting-style {
+  .btn.fx-fade:not([hidden]) { opacity: 0; transform: scale(.97); }
+}
+
+/* An element that only leaves a hole in a text run (the plaque's "or VALUE")
+   closes the hole and eats its own gap, so the plaque resizes instead of
+   snapping narrower. */
+.fx-tight {
+  overflow: clip;
+  opacity: 1;
+  transition:
+    opacity var(--t-enter) var(--e-out),
+    width var(--t-swap) var(--e-in-out),
+    margin-left var(--t-swap) var(--e-in-out),
+    display var(--t-swap) allow-discrete;
+}
+.fx-tight[hidden] {
+  opacity: 0;
+  width: 0;
+  margin-left: calc(var(--gap-eat, 10px) * -1);
+}
+@starting-style {
+  .fx-tight:not([hidden]) { opacity: 0; width: 0; margin-left: calc(var(--gap-eat, 10px) * -1); }
+}
+
+/* Text that changes in place is also something arriving on screen. `.txt-fade`
+   supplies the opacity channel for elements that have no other transition;
+   elements that are ALSO .fx-fade already have one and just reuse it. */
+.txt-fade { transition: opacity var(--t-text-in) var(--e-out); }
+/* Set by setText() in app.js for exactly --t-text-out before the swap. Last in
+   the block so it outranks the `opacity: 1` of every rule above. */
+.fx-panel.is-swapping, .fx-fade.is-swapping, .txt-fade.is-swapping {
+  opacity: 0;
+  transition-duration: var(--t-text-out);
+}
 
 html, body {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: var(--bg);
-  color: #e8ecff;
-  font-family: 'Archivo', system-ui, sans-serif;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-body);
   -webkit-text-size-adjust: 100%;
 }
+body { height: 100dvh; }
 
-/* ------------------------------------------------------------ animations */
-@keyframes tondo-refuse { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-3px)} 50%{transform:translateX(3px)} 75%{transform:translateX(-2px)} }
-@keyframes tondo-slam { 0%{transform:translate(-50%,-50%) scale(.5);opacity:0} 55%{transform:translate(-50%,-50%) scale(1.1);opacity:1} 100%{transform:translate(-50%,-50%) scale(1);opacity:1} }
-@keyframes tondo-appear { 0%{opacity:0} 100%{opacity:1} }
-@keyframes tondo-pop { 0%{transform:scale(.72);opacity:0} 70%{transform:scale(1.06);opacity:1} 100%{transform:scale(1);opacity:1} }
-@keyframes tondo-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
-@keyframes tondo-flash { 0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,0)} 30%{box-shadow:0 0 0 7px rgba(255,255,255,.5)} }
+/* ------------------------------------------------------------ animations
+   Every keyframe below moves `transform` and/or `opacity` only — the two
+   properties that skip layout and paint. Anything that used to animate
+   `box-shadow` or `filter` on a large element now drives a pseudo-element's
+   opacity instead. */
+/* Animating `transform` here REPLACED the fan's own rotate/translateY/scale, so a
+   refused card straightened, dropped 14.4px, shook, and snapped back. The shake
+   is a registered length instead, composed into the card's transform chain. */
+@keyframes tondo-refuse { 0%,100%{--shake-x:0px} 25%{--shake-x:-3px} 50%{--shake-x:3px} 75%{--shake-x:-2px} }
+/* The win/turn plaque is a rare, loud event: it gets the overshoot. */
+/* The Y anchor here must match .banner's own transform exactly — these
+   keyframes REPLACE it while they run, so a mismatch makes the banner jump to
+   a different place for the length of the slam and back afterwards. */
+@keyframes tondo-slam {
+  0%   {transform:translate(-50%,0) translateY(12px) scale(.92) rotate(-2deg);opacity:0}
+  100% {transform:translate(-50%,0) translateY(0) scale(1) rotate(-2deg);opacity:1}
+}
+/* Exit is the system responding, not the user deciding: faster, and it just
+   leaves — no overshoot on the way out. */
+@keyframes tondo-leave {
+  0%   {transform:translate(-50%,0) translateY(0) scale(1) rotate(-2deg);opacity:1}
+  100% {transform:translate(-50%,0) translateY(-8px) scale(.97) rotate(-2deg);opacity:0}
+}
+@keyframes tondo-appear { 0%{opacity:0;transform:translateY(8px) scale(.97)} 100%{opacity:1;transform:translateY(0) scale(1)} }
+@keyframes tondo-pop { 0%{transform:translateY(5px) scale(.94);opacity:.4} 100%{transform:translateY(0) scale(1);opacity:1} }
+@keyframes tondo-ring-pulse { 0%{opacity:.9;transform:scale(1)} 100%{opacity:0;transform:scale(1.14)} }
+/* (was: @keyframes bar-in — a keyframe restarts from zero when a bar is
+   retriggered mid-exit, and it could not move the layout the bar displaces.
+   Bars now use the .fx-panel transition above, which retargets.) */
+/* was: box-shadow spread (paint on every turn) — now a scaling ring */
+@keyframes token-hop { 0%{opacity:.65;transform:scale(1)} 100%{opacity:0;transform:scale(2.6)} }
+/* The slap. The first frame is exactly where the flight ghost stops (10px
+   high, 7% oversized — see LAND_RISE in app.js), so the ghost can be swapped
+   for the real card without a jump; then the card drops through itself and
+   settles. */
+@keyframes top-card-land {
+  0%   { transform:rotate(-3deg) translateY(-10px) scale(1.07); opacity:1;
+         animation-timing-function: cubic-bezier(.3,0,.2,1) }
+  58%  { transform:rotate(-3deg) translateY(2px) scale(.982); opacity:1;
+         animation-timing-function: cubic-bezier(.33,1,.68,1) }
+  100% { transform:rotate(-3deg) translateY(0) scale(1); opacity:1 }
+}
+/* was: filter:brightness on the whole 576px oven (full repaint each turn) */
+@keyframes table-turn { 0%{opacity:.55} 100%{opacity:0} }
+/* MATCH plaque acknowledging a new topping — squash, then settle. */
+@keyframes plaque-pop {
+  0%   { transform:rotate(-2deg) scale(.972) }
+  58%  { transform:rotate(-2deg) scale(1.028) }
+  100% { transform:rotate(-2deg) scale(1) }
+}
+/* A picked Wild washes its colour outward across the sauce. */
+@keyframes sauce-sweep { 0%{opacity:0;transform:scale(.5)} 45%{opacity:1} 100%{opacity:1;transform:scale(1)} }
+/* A topping landing in its owner's wedge. Squash-and-stretch, from the
+   concept's `tondoDrop`: it falls in oversized, flattens on impact, then
+   springs back. The fall height is written in --tp-u so it scales with the
+   pie exactly as the topping does. */
+@keyframes tondoDrop {
+  /* Each segment carries its own curve. A single rule-level bouncy curve put the
+     whole fall in the first 78ms of 520 and left 440ms of wobble. The fall itself
+     ACCELERATES — that is gravity, and the file's ban on ease-in is about UI
+     entrances, not a falling object. 2.1x read as flying at the camera, not
+     falling in, so the entry starts nearer its landed size. */
+  0%   { transform: translateY(calc(var(--tp-u) * -54)) scale(1.35); opacity: 0;
+         animation-timing-function: cubic-bezier(.55, .06, .68, .19) }
+  55%  { transform: translateY(0) scale(.86); opacity: 1;
+         animation-timing-function: cubic-bezier(.34, 1.4, .5, 1) }
+  78%  { transform: translateY(0) scale(1.08); opacity: 1;
+         animation-timing-function: var(--e-out) }
+  100% { transform: translateY(0) scale(1); opacity: 1 }
+}
+/* the grease ring the impact throws out */
+@keyframes tondoRipple {
+  0%   { transform: scale(.3); opacity: .85 }
+  100% { transform: scale(2.4); opacity: 0 }
+}
+/* Reduced motion keeps the fade that explains the change, drops the travel. */
+@keyframes rm-fade { 0%{opacity:0} 100%{opacity:1} }
 
 @media (prefers-reduced-motion: reduce) {
-  * { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+  /* "Fewer and gentler", not zero: movement goes, the comprehension-carrying
+     opacity/colour changes stay. The blanket damper below kills everything,
+     then the rules after it hand the fades back. */
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important; /* an infinite loop at 1ms is a strobe */
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* Colour/opacity keep their timing; transform is dropped from the list, so
+     lifts, fans and hops apply instantly. */
+  .btn, .input, .card, .deck, .seat, .seat-body, .you-pill, .chip {
+    transition-property: opacity, color, background-color, border-color, filter !important;
+    transition-duration: 160ms !important;
+  }
+  .banner, .help-dialog[open], .top-card.is-landing, .plate.is-pop, .plate.is-loud {
+    animation: rm-fade 160ms linear 1 !important;
+  }
+  /* Enter/exit: the fade that explains the change is kept, the travel and the
+     size animation are dropped. `display` MUST keep the fade's duration —
+     the blanket 1ms damper above would otherwise tear the element out of the
+     layout before a single frame of the fade had painted. */
+  .fx-panel, .fx-fade, .btn.fx-fade, .fx-tight, .txt-fade, .turn-token {
+    transition-property: opacity, display !important;
+    transition-duration: 160ms !important;
+    transition-behavior: allow-discrete !important;
+  }
+  .fx-panel[hidden], .fx-fade[hidden], .btn.fx-fade[hidden] { transform: none !important; }
+  /* The height still snaps to 0 (that is the point), so the clip has to let go
+     or the fade would be invisible behind it. */
+  .fx-panel { overflow: visible !important; }
+  /* The table resizing is movement, not comprehension: it steps. */
+  .stage { transition: none !important; }
+  .banner.is-leaving { animation: rm-fade 140ms linear 1 reverse !important; }
+  /* Pure attention-getters carry no information a fade can't: silence them. */
+  .card.refuse, .turn-token.hop::after, .stage.is-turn-change .ring::after,
+  .plaque.is-pop, .plaque.flash::after, .plate.is-loud::after,
+  .sauce-tint.is-sweeping { animation: none !important; }
+  /* A topping still has to APPEAR — that is the state change. It just does not
+     fall, squash or throw a ripple; the grease ring is pure decoration. */
+  .tp-drop { animation: rm-fade 160ms linear both !important; }
+  .tp-ripple { display: none !important; }
+  .tp { transition: opacity 160ms linear !important; transform: none !important; }
+  .wedge-glow { transition: opacity 160ms linear !important; }
+  /* Ownership changing hands is a comprehension-carrying colour change, so it
+     keeps its cross-dissolve like every other fade in this block — it was
+     missing here and fell to the 1ms blanket damper, which hard-cut it.
+     (The `.turn-token { transition: none }` rule that used to sit here was
+     dead-wrong AND won: at equal specificity it came after the fx rule above,
+     so it also killed the token's opacity fade. The token's MOVEMENT is
+     already dropped by that rule listing only opacity and display.) */
+  .wedge-tones { transition: opacity 160ms linear !important; }
 }
 
 /* ---------------------------------------------------------------- shared */
@@ -49,350 +482,1505 @@ html, body {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
-.art-preload { position: absolute; width: 0; height: 0; overflow: hidden; opacity: 0; pointer-events: none; }
 
-:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
 
+/* One button system for the whole product: a quiet cream-on-glass chip with a
+   hairline, and a gold primary that sits on a 3px bottom lip like the cards. */
 .btn {
-  font-family: 'Archivo Black', system-ui, sans-serif;
-  font-size: 13px; letter-spacing: .01em;
-  color: #c3cbe6; background: transparent;
-  border: 2px solid #2f3960; border-radius: 14px;
+  font-family: var(--font-body);
+  font-size: 14px; font-weight: 700; letter-spacing: .01em;
+  color: rgba(255,247,232,.7); background: rgba(255,247,232,.06);
+  border: 1px solid var(--hair-2); border-radius: 14px;
   padding: 12px 16px; min-height: 44px; cursor: pointer;
-  transition: filter 140ms ease-out, transform 140ms ease-out, border-color 140ms ease-out;
+  transition: filter var(--t-micro) var(--e-out), transform var(--t-press) var(--e-out), border-color var(--t-micro) var(--e-out), background-color var(--t-micro) var(--e-out), color var(--t-micro) var(--e-out);
 }
-.btn:hover:not(:disabled) { border-color: #46527f; filter: brightness(1.06); }
-.btn:active:not(:disabled) { transform: translateY(1px); }
-.btn:disabled { cursor: default; opacity: .45; }
-.btn-primary { color: #0d0f1a; background: var(--accent); border-color: transparent; box-shadow: 0 3px 16px rgba(0,0,0,.5); }
-.btn-play { color: #0d0f1a; background: var(--basil); border-color: transparent; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
-.btn-tondo { color: #0d0f1a; background: var(--accent); border-color: transparent; box-shadow: 0 3px 16px rgba(0,0,0,.5); flex: 0 0 auto; }
-.btn-cta { color: #0d0f1a; background: var(--pepperoni); border-color: transparent; box-shadow: 0 3px 16px rgba(0,0,0,.5); flex: 0 0 auto; }
-.btn-quiet { font-family: 'Archivo', system-ui, sans-serif; font-weight: 700; }
-.btn-ghost { border-color: #262e4c; color: #8590b5; }
+/* Hover motion is gated: a touch tap fires :hover and leaves the button
+   stuck in its raised state. */
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover:not(:disabled) { border-color: rgba(255,247,232,.34); color: var(--ink); transform: translateY(-1px); }
+}
+/* Press feedback: the button sinks onto its 3D lip AND scales, so it feels
+   heard on every pointer type, not just the ones that can hover. */
+.btn:active:not(:disabled) { transform: translateY(1px) scale(.97); }
+.btn:disabled { cursor: default; opacity: .58; }
+.btn-primary { color: var(--navy); background: var(--gold); border-color: transparent; box-shadow: 0 3px 0 rgba(96,58,14,.55); }
+.btn-primary:hover:not(:disabled) { color: var(--navy); border-color: transparent; }
+/* Disabled text is formally exempt from 1.4.3, but this is the label on the
+   button that is BLOCKING the player ("Start the game" before two seats are
+   filled), and at an effective alpha of .232 it measured 2.07:1 — unreadable.
+   The dimming stays on the button's own opacity; the label steps up a rung so
+   the words survive it. */
+.btn-primary:disabled { color: var(--ink-1); background: rgba(255,247,232,.08); border-color: transparent; box-shadow: none; }
+.btn-play { color: var(--ink); background: var(--bas-bg); border-color: transparent; box-shadow: 0 3px 0 var(--bas-edge); }
+.btn-tondo { color: var(--navy); background: var(--gold); border-color: transparent; box-shadow: 0 3px 0 rgba(96,58,14,.55); flex: 0 0 auto; }
+.btn-cta { color: var(--ink); background: var(--pep-bg); border-color: transparent; box-shadow: 0 3px 0 var(--pep-edge); flex: 0 0 auto; }
+.btn-quiet { font-family: var(--font-body); font-weight: 700; }
+.btn-ghost { background: transparent; border-color: var(--hair-2); color: rgba(255,247,232,.55); }
 .btn-block { width: 100%; }
-/* still reads as a quiet control, but keeps a 44px touch target */
-.btn-tiny { font-family: 'Archivo', system-ui, sans-serif; font-size: 11px; font-weight: 600;
-  padding: 6px 14px; min-height: 44px; border-width: 1px; border-radius: 999px; color: #8590b5; }
+.btn-tiny { font-family: var(--font-body); font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  padding: 6px 14px; min-height: 44px; border-width: 1px; border-radius: 999px;
+  background: transparent; color: var(--ink-2); }
 
+/* Inputs are navy wells sunk into the panel; focus lights a gold ring. */
 .input {
-  width: 100%; font-family: 'Archivo', system-ui, sans-serif; font-size: 16px; font-weight: 600;
-  color: var(--bone); background: #0d1120; border: 2px solid #262e4c; border-radius: 14px;
-  padding: 12px 14px; min-height: 48px;
+  width: 100%; font-family: var(--font-body); font-size: 16px; font-weight: 500;
+  color: var(--ink); background: rgba(7,12,22,.72);
+  border: 1px solid var(--hair-2); border-radius: 14px;
+  padding: 13px 14px; min-height: 48px;
+  transition: border-color var(--t-micro) var(--e-out), background-color var(--t-micro) var(--e-out), box-shadow var(--t-micro) var(--e-out);
 }
-.input::placeholder { color: #4e5878; }
-.code-input { font-family: 'VT323', monospace; font-size: 22px; letter-spacing: .08em; text-transform: uppercase; }
+.input:hover { border-color: rgba(255,247,232,.28); }
+.input:focus { border-color: rgba(245,203,92,.7); background: rgba(7,12,22,.9); box-shadow: 0 0 0 3px rgba(245,203,92,.22); outline: none; }
+.input::placeholder { color: var(--ink-3); }
+.code-input { font-family: var(--font-ticket); font-weight: 500; font-size: 17px; letter-spacing: .12em; text-transform: uppercase; }
 
-.field { display: flex; flex-direction: column; gap: 6px; }
+.field { display: flex; flex-direction: column; gap: 7px; }
 .field-grow { flex: 1 1 auto; min-width: 0; }
-.field-label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
-.msg { margin: 0; font-size: 13px; font-weight: 600; line-height: 1.35; color: var(--dim-2); min-height: 18px; }
+.field-label {
+  font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .2em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+/* Status lines speak, so they take the table's serif voice. */
+.msg {
+  margin: 0; font-family: var(--font-voice); font-style: italic; font-weight: 400;
+  font-size: 15px; line-height: 1.35; color: rgba(255,247,232,.5); min-height: 20px;
+}
 
 .screen { display: none; height: 100%; }
 body[data-screen="home"]  #screen-home,
 body[data-screen="lobby"] #screen-lobby { display: flex; align-items: center; justify-content: center; padding: 20px; overflow: auto; }
 body[data-screen="game"]  #screen-game { display: flex; flex-direction: column; }
 
-/* ------------------------------------------------------------------ home */
+/* Stale game actions quiet down while reconnecting; help and leave stay usable. */
+body.is-offline .stage { opacity: .72; }
+body.is-offline .deck,
+body.is-offline .card.is-playable,
+body.is-offline .bar .btn,
+body.is-offline .btn-draw,
+body.is-offline #newround-btn { opacity: .55; cursor: wait; }
+
+/* ==========================================================================
+   HOME + LOBBY — Stone Oven
+   The same page ground as the game screen (radial glow over #070C16) with the
+   shell panel floating on it, so the three screens read as one product.
+   ========================================================================== */
+
+body[data-screen="home"] #screen-home,
+body[data-screen="lobby"] #screen-lobby {
+  background: radial-gradient(ellipse 90% 46% at 50% 0%, var(--page-glow), var(--page) 72%);
+}
+
 .home-card, .lobby-card {
   width: 100%; max-width: 420px;
   display: flex; flex-direction: column; gap: 14px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 22px;
-  padding: 26px 22px; box-shadow: 0 18px 50px rgba(0,0,0,.5);
+  --row-gap-eat: 14px;   /* must match the gap above: see .fx-panel[hidden] */
+  background: var(--shell);
+  border: 1px solid var(--hair-2); border-radius: 22px;
+  padding: 28px 22px 24px;
+  box-shadow: 0 26px 60px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,247,232,.06);
 }
-.wordmark {
-  margin: 0; font-family: 'Archivo Black', system-ui, sans-serif;
-  font-size: 54px; line-height: 1; letter-spacing: .02em; color: var(--accent);
-  text-shadow: 0 4px 0 rgba(255,46,107,.55);
-}
-.tagline { margin: -6px 0 4px; font-size: 14px; font-weight: 600; color: var(--dim-2); }
-.rule { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
-.rule::before, .rule::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--line); }
-.join-row { display: flex; gap: 10px; align-items: flex-end; }
 
-/* ----------------------------------------------------------------- lobby */
-.lobby-head { display: flex; flex-direction: column; gap: 6px; }
-.code-row { display: flex; align-items: center; gap: 12px; }
-.code { font-family: 'VT323', monospace; font-size: 46px; line-height: 1; letter-spacing: .06em; color: var(--focus); }
-.seat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.seat-row {
-  display: flex; align-items: center; gap: 10px;
-  background: #131834; border: 1px solid #2b3454; border-radius: 14px; padding: 8px 10px;
+/* The header treatment from the game strip, blown up: letter-spaced gold.
+   The text-indent gives back the trailing letter-space so it centres true. */
+.wordmark {
+  margin: 0; text-align: center;
+  font-family: var(--font-display); font-weight: 800;
+  font-size: 46px; line-height: 1; letter-spacing: .14em; text-indent: .14em;
+  color: var(--gold); text-shadow: none;
 }
-.seat-row .portrait { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 11px; border: 2.5px solid #2b3454; background-size: cover; background-position: center; }
-.seat-row .who { flex: 1 1 auto; min-width: 0; font-family: 'Archivo Black', system-ui, sans-serif; font-size: 14px; color: var(--bone); }
-.tag { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; }
-.tag-host { color: #0d0f1a; background: var(--accent); }
-.tag-bot { color: #9aa5cc; background: rgba(255,255,255,.08); }
-.tag-away { color: #0d0f1a; background: var(--pepperoni); }
+.tagline {
+  margin: -4px 0 6px; text-align: center;
+  font-family: var(--font-voice); font-style: italic; font-weight: 400;
+  font-size: 18px; line-height: 1.3; color: rgba(255,247,232,.5);
+}
+.home-card > [data-help-open] { align-self: center; border-color: transparent; color: var(--gold); }
+.home-card > [data-help-open]:hover { color: var(--gold); border-color: rgba(245,203,92,.4); }
+.rule {
+  display: flex; align-items: center; gap: 12px;
+  font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .2em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.rule::before, .rule::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--hair); }
+.join-row { display: flex; gap: 10px; align-items: flex-end; }
+.join-row > .btn { min-height: 48px; flex: 0 0 auto; }
+
+/* ------------------------------------------------------------------ lobby */
+.lobby-head { display: flex; flex-direction: column; gap: 7px; }
+.lobby-mark {
+  font-family: var(--font-display); font-weight: 800; font-size: 17px;
+  letter-spacing: .14em; color: var(--gold); margin-bottom: 4px;
+}
+.code-row { display: flex; align-items: center; gap: 12px; }
+.code {
+  flex: 1 1 auto; min-width: 0;
+  font-family: var(--font-display); font-weight: 800; font-size: 32px; line-height: 1.05;
+  letter-spacing: .03em; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 44px floor: "Copy" measured 63x38 and "Remove" 34 tall. Both grow
+   vertically only — the rows they sit in are 64px and 48px, so nothing else
+   moves and no neighbouring target is crowded. */
+.code-row .btn-ghost { flex: 0 0 auto; padding: 9px 15px; min-height: 44px; border-radius: 999px; font-size: 12px; }
+
+.seat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.seat-row {
+  display: flex; align-items: center; gap: 10px; min-height: 64px;
+  background: rgba(255,247,232,.05); border: 1px solid var(--hair-2);
+  border-radius: 16px; padding: 9px 12px;
+}
+/* the game screen's seat tile, at lobby size: tone gradient, cream border,
+   3D lip, leaning -5deg with the initial standing straight up */
+.seat-row .seat-chip {
+  width: 44px; height: 44px; flex: 0 0 auto; margin-right: 3px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 34%;
+  background: var(--tone-bg, var(--chz-bg));
+  border: 3px solid var(--ink);
+  box-shadow: 0 4px 0 var(--tone-edge, var(--chz-edge)), 0 10px 16px rgba(0,0,0,.42);
+  transform: rotate(-5deg);
+}
+.seat-chip .initial {
+  font-family: var(--font-display); font-weight: 800; font-size: 19px; line-height: 1;
+  color: var(--ink); transform: rotate(5deg);
+}
+.seat-row .who {
+  flex: 1 1 auto; min-width: 0;
+  font-family: var(--font-body); font-size: 15px; font-weight: 700; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.seat-row .btn-tiny { flex: 0 0 auto; min-height: 44px; padding: 6px 12px; }
+
+.seat-ghost { background: transparent; border: 1px dashed rgba(255,247,232,.14); }
+.seat-ghost .who {
+  font-family: var(--font-voice); font-style: italic; font-weight: 400;
+  font-size: 15px; color: var(--ink-3);
+}
+.ghost-plus {
+  width: 44px; height: 44px; flex: 0 0 auto; margin-right: 3px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 34%; border: 2px dashed rgba(255,247,232,.18);
+  font-family: var(--font-display); font-weight: 800; font-size: 20px; line-height: 1;
+  color: var(--ink-3); transform: rotate(-5deg);
+}
+
+.tag {
+  flex: 0 0 auto;
+  font-family: var(--font-display); font-weight: 800; font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; padding: 4px 9px; border-radius: 999px;
+  color: var(--navy); background: var(--ink);
+}
+.tag-host { color: var(--navy); background: var(--gold); }
+.tag-you { color: var(--navy); background: var(--ink); }
+.tag-bot { color: rgba(255,247,232,.72); background: rgba(255,247,232,.12); }
+.tag-away { color: var(--ink); background: var(--pep-bg); }
+
 .lobby-actions { display: flex; gap: 10px; }
 .lobby-actions .btn { flex: 1 1 auto; }
 
-/* ------------------------------------------------------------------ game */
-.strip {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
-  padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
-}
-.strip-mark { font-family: 'Archivo Black', system-ui, sans-serif; font-size: 11px; color: var(--accent); letter-spacing: .04em; }
-.strip-code { font-family: 'VT323', monospace; font-size: 17px; letter-spacing: .06em; color: #4e5878; flex: 0 0 auto; }
-.queue { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
-.chip { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 3px 10px 3px 7px; border-radius: 999px; transition: background 220ms ease-out; }
-.chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
-.chip .txt { font-size: 13.5px; font-weight: 700; white-space: nowrap; }
-.chip-next { background: #182042; padding: 3px 8px 3px 6px; }
-.chip-next .dot { width: 7px; height: 7px; }
-.chip-next .txt { font-size: 12.5px; font-weight: 600; color: #9aa5cc; }
+/* ==========================================================================
+   GAME SCREEN — Stone Oven
+   ========================================================================== */
 
+body[data-screen="game"] { background: var(--page); }
+#screen-game { background: radial-gradient(ellipse 90% 46% at 50% 0%, var(--page-glow), var(--page) 72%); }
+
+/* ------------------------------------------------------------ header bar */
+.strip {
+  flex: 0 0 auto;
+  padding: calc(11px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) 11px calc(20px + env(safe-area-inset-left));
+  background: transparent; border-bottom: 1px solid var(--hair);
+}
+.strip-inner { display: flex; align-items: center; gap: 13px; width: 100%; max-width: var(--measure); min-width: 0; margin-inline: auto; }
+.strip-mark { font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: .14em; color: var(--gold); flex: 0 0 auto; }
+.strip-code { font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .18em; color: var(--ink-2); flex: 0 0 auto; }
+/* The 30px circle is the VISUAL; the target is 44x44. Growing the circle
+   itself would put a fat button next to a 15px wordmark, so the hit area is a
+   centred pseudo-element instead — it costs no layout and no pixels. The two
+   neighbours it reaches into (.strip-code, a text span, and the flex gap) are
+   not interactive, so nothing can be hit by accident. */
+.strip-help {
+  position: relative;
+  width: 30px; height: 30px; min-height: 30px; padding: 0; flex: 0 0 auto;
+  border-radius: 50%; border: 1px solid rgba(255,247,232,.2);
+  font-family: var(--font-body); font-weight: 700; font-size: 13px; color: rgba(255,247,232,.55);
+}
+.strip-help::before {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%); border-radius: 50%;
+}
+.strip-help:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
+.queue { display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.chip {
+  display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
+  padding: 5px 13px; border-radius: 999px;
+  background: rgba(224,164,74,.16); border: 1px solid rgba(224,164,74,.45);
+  /* `background` is a shorthand — name the one property that actually moves. */
+  transition: background-color 200ms var(--e-out), border-color 200ms var(--e-out);
+}
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--crust); }
+.chip .txt { font-family: var(--font-body); font-weight: 700; font-size: 13px; color: var(--crust-2); white-space: nowrap; }
+.chip-next { background: transparent; border-color: transparent; padding: 0; }
+.chip-next .txt { font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 16px; color: var(--ink-3); }
+
+/* ------------------------------------------------------------- the stage */
 .stage {
   position: relative; flex: 1 1 auto; min-height: 220px; overflow: hidden;
-  background: radial-gradient(58% 52% at 50% 42%, #1d2549 0%, rgba(29,37,73,0) 76%), #0e1122;
+  background: radial-gradient(ellipse 56% 46% at 50% 52%, rgba(224,164,74,.07), transparent 70%);
+
+  /* ---- the table, as a continuous function of the space it is given -------
+     The old expression was `min(68vw, 50vh, 576px)`, and on any large window
+     the 576px cap bound: a 2560x1440 screen got the same table as a 1280 one,
+     stranded in the middle of a 2560x1043 stage (22.5% of its width, 55% of
+     its height). Worse, everything the table wears was an absolute pixel value
+     re-declared per breakpoint, so the furniture was a step function of the
+     VIEWPORT while the table was a function of the SPACE. They are now one
+     function.
+
+     `vh` was also the wrong height term. The stage is not the viewport: it is
+     what is left after the strip and the tray, and those are a roughly
+     constant number of PIXELS, not a fraction of the height. So the height
+     term is `100dvh - chrome`, which is why the table can now keep growing on
+     a tall screen instead of stalling at a fixed fraction. */
+  --stage-h: max(200px, calc(100dvh - var(--chrome-h) - var(--bar-h, 0px)));
+  /* .88 is the share of the stage the circle may take. The remaining 12% is
+     the band the top seat's plate needs above the circumference before its
+     clamp drags it down onto the MATCH plaque; today's cleanest measured
+     layouts already sit at 89-91% of stage height, so this is the observed
+     ceiling rather than a new guess. 92vw keeps the rim off the side edges on
+     narrow screens, and 960px is the "do not get comical" cap — at 960 the
+     discard is a 210px card and a seat tile is 104px, roughly 1.7x the
+     reference sheet, and the height term binds before it on every screen
+     shorter than ~1500px anyway. */
+  --table-fit: min(92vw, calc(var(--stage-h) * .88), 960px);
+
+  /* ONE variable drives the table: the oven's diameter and the seats' orbit
+     both read it, so they can never drift apart again. It is registered as a
+     <length> (see @property at the top of this file) so it can be eased —
+     `.is-compressed` moves it by ~150px, which used to land in one frame and
+     took the whole seat orbit with it. Same duration as the tray swap that
+     triggers it, so the table and the tray resolve together. */
+  --table-d: var(--table-fit);
+
+  /* ---- what the table wears ----------------------------------------------
+     Proportions measured off the reference sheet at table 576: the discard is
+     .219 of the table, a seat tile .108, an opponent's card back .08, the deck
+     .122. Deriving them here is what makes the whole board one object.
+
+     They read --table-fit, NOT --table-d, and that is load-bearing rather than
+     cosmetic. --table-d is transitioned; --table-fit is a plain unregistered
+     token stream and cannot be. flyToPile() computes the flight ghost's
+     landing scale from `topEl.getBoundingClientRect()` at play time, and
+     `.is-compressed` is toggled from the same snapshot that starts the flight
+     (a callout appears exactly when an opponent plays down to one card), so a
+     discard whose size EASED over the next 200ms would leave the ghost landing
+     at the wrong scale. Both values come from the one expression, so nothing
+     can drift; only the table itself animates.
+     Each is clamped: the floor is where the piece stops being readable, the
+     ceiling is where it stops being furniture and becomes scenery. */
+  --top-card-w: clamp(58px,  calc(var(--table-fit) * .219), 210px);
+  /* The tile has a FLOOR as well as a ratio, and the floor is not optional.
+     .108 reproduces the reference 62px tile at the reference 576px table, but
+     a squarish laptop window is height-starved: 1280x900 lands on a 446px
+     table, and .108 of that is a 48px avatar — SMALLER than the 62px it used
+     to be, which is the opposite of what the seats are for. The seats carry
+     identity and turn state; they are the part of the board a player reads
+     fastest, and they should not shrink because the room got shorter.
+     So: take the ratio, but never less than the floor. The floor is itself
+     fluid (it tracks the smaller of 4.9vw / 6.9dvh) so it does not become a
+     new fixed step — it reaches 62px at 1280x900 and 1440x900, holds 50px at
+     1024x768, and stops mattering entirely above a 574px table, where .108
+     overtakes it and the tile goes on growing to its 104px cap. */
+  --seat-floor: clamp(46px, min(4.9vw, 6.9dvh), 62px);
+  --seat-tile:  clamp(28px,  max(calc(var(--table-fit) * .108), var(--seat-floor)), 104px);
+  --seat-back:  clamp(20px,  calc(var(--table-fit) * .08),   78px);
+  --deck-w:     clamp(44px,  calc(var(--table-fit) * .122), 118px);
+  /* Toppings are furniture too: derived from --table-fit, so they snap with
+     the rest of the board while the table itself eases. The floor keeps a
+     pepperoni at 16px (still a legible disc) on the smallest phone table. */
+  --tp-u: max(.62px, calc(var(--table-fit) * .002334));
+
+  /* The seat's own scale factor, hoisted here so the pill can be sized from it
+     (see .seat for what --ss drives). */
+  --ss: calc(var(--seat-tile) / 62px);
+  /* --seat-edge exists to keep a seat's WIDEST part — its status pill — on the
+     stage, so it is derived from the pill rather than guessed from the tile.
+     Half the pill plus 6px of air reproduces the hand-tuned 96px at the
+     reference 190px pill, and it self-corrects in the bands below that cap the
+     pill narrower: guessing from the tile instead left a 320px-wide phone with
+     the seat pinned 60px in and its tile 2px inside the MATCH plaque. */
+  /* --min-orbit stops a side seat landing ON the MATCH plaque when the table
+     is small. It existed only inside the phone band as a flat 110px, so every
+     desktop-class window has been running with the `0px` fallback in
+     .seat-left / .seat-right — invisible while desktop tables were large, and
+     it surfaced the moment the tile got a floor (a 1024x768 window in the
+     compressed `tondo` state put both side tiles 11.8px inside the plaque).
+
+     The centre column's width is TEXT, not geometry, so it cannot be derived
+     from --table-fit: measured worst case is `Match ↻ ● Pepperoni or Flip`,
+     the longest suit against the longest ACTIONS label, at 272px on desktop
+     (the mock scenes all say `Basil or 7` and only reach 205px — sizing this
+     against what the mocks happen to render would leave the real worst case
+     overlapping). Half of that, plus the tile's own half, plus the fan of card
+     backs the tile is pushed inward by, plus air. The phone band keeps its own
+     hand-tuned 110px against its narrower 218px plaque.
+
+     The second term is the seat BOX's half-width, not the tile's. A side seat
+     is `fan | tile` (row-reverse on the left), and the seat is centred on this
+     offset, so the tile sits a full half-box inward of it — measuring the
+     first attempt showed the tile's inner edge exactly `fan + gap` past where
+     a tile-only derivation predicted. The fan measures 2.06 x --seat-back
+     (backs overlap), the gap is 7px, hence tile/2 + 1.05 x back + 12px of
+     air. */
+  --min-orbit: calc(136px + var(--seat-tile) * .5 + var(--seat-back) * 1.05 + 12px);
+  --pill-max:  clamp(98px, calc(190px * var(--ss)), 260px);
+  --seat-edge: calc(var(--pill-max) * .5 + 6px);
+
+  transition: --table-d var(--t-swap) var(--e-in-out);
 }
-/* The ring and the pile sit at the table's middle. The design put them at 45%
-   of the stage; 50% here, because the tray grows when a contextual bar opens
-   and 45% walked the plaque into the top seat's plate. */
+/* A context bar takes a bite out of the stage. Instead of re-declaring a
+   smaller table per breakpoint, the bar declares its own height and the one
+   expression above absorbs it — so the table contracts continuously and by
+   exactly as much as it lost. Measured: a bar adds 78.5px to the desktop tray
+   and up to 143.8px on a phone (the callout bar, which wraps two buttons). */
+.stage.is-compressed { --bar-h: 84px; }
+
+/* --- the stone oven ----------------------------------------------------- */
+/* --- the pie: stone rim → cartoon crust → sauce ------------------------
+   Full cartoon: flat saturated shapes with chunky edges, built entirely from
+   CSS so every part squashes, ripples and scales with --table-d. The old
+   photographed pie (assets/pizza-*.webp, assets/pizza-table-v2.webp) is
+   unwired — the files stay on disk, nothing references them. */
 .ring {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
-  /* sized off the stage's height so a tray with an open bar can never clip it */
-  height: min(92%, 74vw, 46vh); width: auto; aspect-ratio: 1 / 1; border-radius: 50%;
-  border: 2px solid var(--ring-line, rgba(61,220,127,.26));
-  background: radial-gradient(closest-side, var(--ring-fill, rgba(61,220,127,.12)), transparent 78%);
+  height: var(--table-d); width: var(--table-d); border-radius: 50%;
+  /* The stone board the pie sits on; the pad is what makes it read as a rim.
+     It MUST be written against --table-d and not as a bare percentage: padding
+     percentages resolve against the containing block's INLINE size, which here
+     is the whole stage, not the table. Measured: the same `2.2%` rim was
+     8.25px on a 375px-wide phone and 39.59px on an 1800px-wide desktop, so the
+     rim ate 17.8% of the desktop table and left the sauce 304px across on a
+     445.68px board — 50px of the topping ring, gone to a rounding of the wrong
+     box. Written this way it is 2.2% of the TABLE everywhere (9.8px at 445). */
+  padding: calc(var(--table-d) * .022); overflow: hidden;
+  background: linear-gradient(160deg, #2A3247, #151C2C 60%, #0F1420);
+  box-shadow: 0 26px 54px rgba(0,0,0,.6), inset 0 2px 0 rgba(255,247,232,.1), inset 0 -8px 18px rgba(0,0,0,.5);
   pointer-events: none; z-index: 2;
 }
-.center { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 4;
-  display: flex; flex-direction: column; align-items: center; gap: 5px; }
-.plaque {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  background: #121729; border: 2px solid var(--suit-color, var(--basil)); border-radius: 14px;
-  padding: 7px 13px; white-space: nowrap; box-shadow: 0 3px 16px rgba(0,0,0,.6);
+/* The turn-change flash: a warm overlay fading out on top of the oven, rather
+   than `filter: brightness()` on the 576px element itself (which repainted the
+   crust, the sauce and their shadows every single turn). */
+.ring::after {
+  content: ""; position: absolute; inset: 2.8%; border-radius: 50%;
+  background: radial-gradient(circle at 50% 46%, rgba(255,236,190,.5), rgba(255,200,120,.16) 62%, transparent 78%);
+  opacity: 0; pointer-events: none;
 }
-.plaque.flash { animation: tondo-flash 372ms 2; }
-.plaque-head { display: flex; align-items: center; gap: 6px; }
-.plaque-label { font-weight: 700; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #7b87ae; }
-.dir-badge { font-size: 15px; line-height: 1; color: var(--dim-2); }
-.plaque-row { display: flex; align-items: baseline; gap: 8px; }
-.plaque-pair { display: flex; align-items: baseline; gap: 6px; }
-.match-glyph { font-size: 18px; line-height: 1; color: var(--suit-color); }
-.match-suit { font-family: 'Archivo Black', system-ui, sans-serif; font-size: 20px; line-height: 1; color: var(--suit-color); }
-.match-or { font-size: 13px; font-weight: 600; line-height: 1; color: var(--dim); }
-.match-value { font-family: 'Archivo Black', system-ui, sans-serif; font-size: 20px; line-height: 1; color: var(--bone); }
+.stage.is-turn-change .ring::after { animation: table-turn 220ms var(--e-out) 1; }
 
-.pile { display: flex; align-items: flex-end; gap: 10px; }
-.deck {
-  width: 62px; height: 87px; display: flex; align-items: center; justify-content: center;
-  background: #161c33; border: 2px solid #2b3454; border-radius: 12px; box-shadow: 0 3px 16px rgba(0,0,0,.5);
+.ring-gold { position: absolute; inset: 1.1%; border-radius: 50%; border: 1px solid rgba(245,203,92,.22); z-index: 1; }
+
+/* the crust disc — flat bake gradient, one bold rim line, no photo texture */
+.crust {
+  position: relative; width: 100%; height: 100%; border-radius: 50%;
+  background: radial-gradient(circle at 36% 26%, #F6D290 0%, #E5AE5C 26%, #D89A45 48%, #B87A2A 76%, #8E5A1C 100%);
+  box-shadow: inset 0 -14px 30px rgba(70,38,8,.55), inset 0 8px 18px rgba(255,236,190,.35);
+  overflow: hidden;
 }
-.deck-text { font-size: 10px; font-weight: 600; letter-spacing: .06em; color: #6b83b8; text-align: center; line-height: 1.35; }
-.deck-text b { font-family: 'VT323', monospace; font-size: 20px; letter-spacing: .04em; }
-.top-card {
-  position: relative; z-index: 1; width: 80px; height: 112px; padding: 5px;
-  display: flex; flex-direction: column; align-items: center; justify-content: space-between; overflow: hidden;
-  border: 6px solid #fff; border-radius: 16px;
-  box-shadow: 0 5px 0 rgba(10,12,20,.35), 0 12px 18px rgba(0,0,0,.5);
+.crust-char, .crust-flour, .sauce-slices, .sauce-cheese, .wedge-tones, .sauce-tint, .sauce-vignette {
+  position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+}
+/* oven blisters and flour — flat dots, cartoon shorthand for a baked edge */
+.crust-char {
+  background-image:
+    radial-gradient(circle at 14% 40%, rgba(74,38,10,.55) 0 1.3%, transparent 1.5%),
+    radial-gradient(circle at 88% 54%, rgba(74,38,10,.5)  0 1.6%, transparent 1.8%),
+    radial-gradient(circle at 52% 4%,  rgba(74,38,10,.45) 0 1.1%, transparent 1.3%),
+    radial-gradient(circle at 26% 90%, rgba(74,38,10,.5)  0 1.4%, transparent 1.6%),
+    radial-gradient(circle at 76% 88%, rgba(74,38,10,.4)  0 1.1%, transparent 1.3%),
+    radial-gradient(circle at 6%  62%, rgba(74,38,10,.42) 0 1%,   transparent 1.2%);
+}
+.crust-flour {
+  background-image:
+    radial-gradient(circle at 30% 16%, rgba(255,240,205,.5)  0 .7%, transparent .9%),
+    radial-gradient(circle at 66% 12%, rgba(255,240,205,.35) 0 .55%, transparent .75%),
+    radial-gradient(circle at 92% 34%, rgba(255,240,205,.3)  0 .55%, transparent .75%),
+    radial-gradient(circle at 12% 74%, rgba(255,240,205,.28) 0 .5%,  transparent .7%);
+}
+
+/* The sauce disc. 8.5% of the crust is the crust ring itself — that reproduces
+   the concept's proportion (its 296px pie carries a 26px rim) and it is also
+   what leaves the topping annulus wide enough to clear the discard card. */
+.sauce {
+  position: absolute; inset: 8.5%; border-radius: 50%; overflow: hidden;
+  background: radial-gradient(circle at 42% 32%, #A03A22 0%, #7E2617 52%, #56160D 100%);
+  box-shadow: inset 0 14px 34px rgba(30,6,2,.6), inset 0 0 0 .6% rgba(232,175,84,.6);
+}
+/* One wash of the owner's seat tone per slice — see renderWedgeTones.
+   Masked to the OUTER band on purpose. A flat conic wash strong enough to be
+   read had to be strong everywhere, including across the middle of the pie
+   where the discard sits and where the sauce most needs to look like sauce.
+   Ramping it in from 38% of the radius puts the colour where the wedge is
+   widest, where its toppings land and where its owner's seat is — and buys
+   back enough headroom to run the alpha half again as strong for the same
+   damage to the pie. */
+.wedge-tones {
+  transition: opacity var(--t-pizza) var(--e-out);
+  -webkit-mask-image: radial-gradient(circle closest-side, transparent 38%, #000 82%);
+          mask-image: radial-gradient(circle closest-side, transparent 38%, #000 82%);
+}
+/* melted cheese: soft flat blobs, not a texture map */
+.sauce-cheese {
+  background-image:
+    radial-gradient(ellipse 7% 5.5% at 24% 28%, rgba(255,232,170,.46), rgba(255,232,170,0) 70%),
+    radial-gradient(ellipse 9% 6.5% at 74% 24%, rgba(255,232,170,.4),  rgba(255,232,170,0) 70%),
+    radial-gradient(ellipse 8% 6%   at 78% 76%, rgba(255,232,170,.36), rgba(255,232,170,0) 72%),
+    radial-gradient(ellipse 6.5% 5% at 26% 78%, rgba(255,232,170,.3),  rgba(255,232,170,0) 72%);
+}
+/* THE CUT — one per wedge boundary. `--wedge-span` and `--wedge-from` are set
+   by app.js from the player count, so 2, 3 and 4 players cut the pie into 2, 3
+   or 4 equal slices with no leftover sliver.
+
+   This carries wedge ownership now, and it has to, because the FILLS cannot.
+   The four seat tones are hue-separated but not luminance-separated: washed
+   over this sauce they sit within .03 of each other, so adjacent wedges
+   measure 1.03-1.26:1 at ANY alpha (measured: .13 -> 1.004-1.118, .50 ->
+   1.111-1.357). Chasing 3:1 with the wash would mean painting the pie in flat
+   primaries and losing the pizza. A boundary has no such limit — it can be as
+   loud as it likes without touching the sauce inside it.
+   Cream cut with a scorch line under it, measured against the three sauce
+   stops: 3.27 / 4.24 / 5.52:1 — past the 3:1 that WCAG 1.4.11 asks of a
+   meaningful graphical distinction, at every radius the vignette allows.
+   The `from` is rolled back half the stroke so the cut is CENTRED on the
+   boundary rather than sitting to one side of it. */
+.sauce-slices {
+  background: repeating-conic-gradient(from calc(var(--wedge-from, 135deg) - 1.1deg),
+    rgba(255,240,205,.62) 0deg 1.1deg,
+    rgba(46,10,4,.5) 1.1deg 2.2deg,
+    transparent 2.2deg var(--wedge-span, 90deg));
+}
+/* The lit wedge: whose turn it is, as a sector of the pie. It sweeps to the
+   new wedge with a slight overshoot; a Flip sends it the long way round (see
+   moveGlow in app.js), and --glow-t carries the longer duration that needs. */
+/* The lit wedge has to stay the LOUDEST thing on the pie, now that the cuts
+   read at 3.27-5.52:1. Alpha alone could not do it: gold over this sauce only
+   reaches 1.34-1.69:1 at .26 and still 2.0-3.4:1 at .64, where the pie has
+   turned into a lamp and the wedge has stopped looking like food. So the lit
+   slice is OUTLINED instead — its two radial edges and its rim arc are solid
+   gold at 3.31-7.07:1 against the wedge they sit on, ahead of the cuts at
+   every sauce stop, while the fill inside stays a .13 wash the sauce is still
+   visible through. Three lit sides against a two-sided cut is also the larger
+   shape, so it wins the glance as well as the measurement. */
+.wedge-glow {
+  position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+  background:
+    conic-gradient(from 0deg,
+      #FFE796 0deg 1.3deg,
+      transparent 1.3deg calc(var(--wedge-span, 90deg) - 1.3deg),
+      #FFE796 calc(var(--wedge-span, 90deg) - 1.3deg) var(--wedge-span, 90deg),
+      transparent var(--wedge-span, 90deg) 360deg),
+    conic-gradient(from 0deg,
+      rgba(245,203,92,.13) 0deg var(--wedge-span, 90deg),
+      transparent var(--wedge-span, 90deg) 360deg);
+  transform: rotate(var(--glow-rot, 0deg));
+  transition: transform var(--glow-t, 420ms) cubic-bezier(.34, 1.15, .5, 1),
+              opacity var(--t-state) var(--e-out);
+}
+/* The third side of the outline: the arc where the lit slice meets the crust.
+   Masked to the same sector, so it sweeps with the glow and needs no geometry
+   of its own. `closest-side` is load-bearing — the default farthest-corner
+   would put the ring outside the pie. */
+.wedge-glow::before {
+  content: ""; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle closest-side,
+    transparent 0 90%, #FFE796 92%, #FFE796 96%, transparent 98%);
+  -webkit-mask-image: conic-gradient(from 0deg, #000 0deg var(--wedge-span, 90deg), transparent var(--wedge-span, 90deg) 360deg);
+          mask-image: conic-gradient(from 0deg, #000 0deg var(--wedge-span, 90deg), transparent var(--wedge-span, 90deg) 360deg);
+}
+.wedge-glow[data-lit="0"] { opacity: 0; }
+/* The marker on the lit wedge's centre line, out at the rim. It rides inside
+   .wedge-glow, so it sweeps with it and needs no rotation of its own beyond
+   half a wedge. Its bar is sized in --tp-u, NOT in %: the rail it hangs off is
+   a zero-width line, and 24% of zero is what made the first one invisible. */
+.wedge-edge {
+  position: absolute; left: 50%; top: 0; width: 0; height: 50%;
+  transform-origin: 50% 100%; transform: rotate(calc(var(--wedge-span, 90deg) / 2));
+}
+.wedge-edge::after {
+  content: ""; position: absolute; top: calc(var(--tp-u) * 2);
+  left: calc(var(--tp-u) * -19); width: calc(var(--tp-u) * 38);
+  height: calc(var(--tp-u) * 1.6); border-radius: 999px;
+  background: var(--gold); box-shadow: 0 0 calc(var(--tp-u) * 8) rgba(245,203,92,.9);
+}
+/* the one layer that still answers to the active topping */
+.sauce-tint { background: radial-gradient(circle at 50% 46%, var(--ring-fill, transparent) 0%, transparent 74%); }
+/* Picking a Wild's topping is rare and consequential: the new colour washes
+   outward across the sauce instead of swapping in place. Transform + opacity
+   only — the gradient colour itself is set once, before the sweep starts. */
+.sauce-tint.is-sweeping { animation: sauce-sweep 280ms var(--e-out) 1; }
+
+/* --- the ledger: one topping per card played, in its owner's wedge ------- */
+/* `overflow: visible` is deliberate and is half of the annulus floor (the
+   other half is in layoutLedger). When the centre column has eaten the sauce
+   band in some direction, a topping is pushed OUTWARD rather than under the
+   discard — and it used to be pushed straight past this clip and disappear.
+   The crust is the outer limit now: .crust still clips, so a starved topping
+   lands on the bake instead of vanishing. */
+.ledger { position: absolute; inset: 0; z-index: 2; border-radius: 50%; overflow: visible; pointer-events: none; }
+/* A topping is three nested nodes on purpose: the point carries POSITION and
+   the age fade, the dropper carries the landing keyframes, the shape carries
+   its own rotation. Nothing has to share a transform with anything else. */
+.tp {
+  position: absolute; width: 0; height: 0;
+  transform: scale(var(--age-s, 1));
+  opacity: var(--age-o, 1);
+  transition: transform 320ms var(--e-out), opacity 320ms var(--e-out);
+}
+.tp-drop { position: absolute; left: 0; top: 0; width: 0; height: 0;
+  animation: tondoDrop 420ms linear var(--drop-delay, 0ms) both; }
+.tp-ripple {
+  position: absolute; left: calc(var(--tp-u) * -19); top: calc(var(--tp-u) * -19);
+  width: calc(var(--tp-u) * 38); height: calc(var(--tp-u) * 38);
+  border-radius: 50%; border: calc(var(--tp-u) * 1.4) solid rgba(255,240,205,.8);
+  /* Fires ON impact (55% of the 420ms fall = 231ms), not before it: at the old
+     timing the ring was already half-faded while the topping was still in the air. */
+  animation: tondoRipple 380ms var(--e-out) calc(var(--drop-delay, 0ms) + 231ms) both;
+  pointer-events: none;
+}
+.tp-shape {
+  position: absolute;
+  left: calc(var(--tp-w) / -2); top: calc(var(--tp-h) / -2);
+  width: var(--tp-w); height: var(--tp-h);
+  transform: rotate(var(--tp-rot, 0deg));
+  background: var(--tp-c);
+  box-shadow: 0 calc(var(--tp-u) * 3) calc(var(--tp-u) * 5) rgba(40,10,4,.5),
+              inset 0 calc(var(--tp-u) * -2.5) 0 rgba(0,0,0,.16);
+}
+/* The four toppings, at the concept's own dimensions in --tp-u units. */
+.tp-shape--pepperoni { --tp-w: calc(var(--tp-u) * 26); --tp-h: calc(var(--tp-u) * 26); --tp-c: var(--pep-mark); border-radius: 50%; }
+.tp-shape--basil     { --tp-w: calc(var(--tp-u) * 28); --tp-h: calc(var(--tp-u) * 28); --tp-c: var(--bas-mark); border-radius: 66% 6% 66% 6%; }
+.tp-shape--cheese    { --tp-w: calc(var(--tp-u) * 26); --tp-h: calc(var(--tp-u) * 22); --tp-c: var(--chz-mark); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.tp-shape--anchovy   { --tp-w: calc(var(--tp-u) * 31); --tp-h: calc(var(--tp-u) * 14); --tp-c: var(--anc-mark); border-radius: 52% 42% 52% 42%; }
+/* the clip-path wedge has no box to cast an inset lip into */
+.tp-shape--cheese { box-shadow: 0 calc(var(--tp-u) * 3) calc(var(--tp-u) * 5) rgba(40,10,4,.5); }
+
+.sauce-vignette { background: radial-gradient(circle at 50% 46%, transparent 40%, rgba(20,4,2,.42) 100%); }
+.oven-mark {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display); font-weight: 800;
+  font-size: calc(var(--table-d) * .08); letter-spacing: .36em;
+  color: rgba(255,240,205,.09); transform: translateX(calc(var(--table-d) * .016));
+  white-space: nowrap;
+}
+
+/* --- centre: MATCH plaque + discard ------------------------------------- */
+.center {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 4;
+  display: flex; flex-direction: column; align-items: center; gap: calc(var(--table-d) * .038);
+}
+.plaque {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 17px 9px; border-radius: 11px; white-space: nowrap;
+  background: linear-gradient(var(--paper), var(--paper-2));
+  border: 0;
+  box-shadow: 0 3px 0 rgba(96,58,14,.5), 0 10px 20px rgba(0,0,0,.35);
+  transform: rotate(-2deg);
+  z-index: 2;   /* the buried discards lean up into this gap */
+}
+.plaque::after, .plate::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 14px;
+  border: 2px solid rgba(255,247,232,.75); opacity: 0; pointer-events: none;
+}
+.plaque.flash::after { animation: tondo-ring-pulse 220ms var(--e-out) 1; }
+/* The plaque is the answer to "what can I play?" — when that answer changes
+   it acknowledges itself once, briefly, with the playful settle. */
+.plaque.is-pop { animation: plaque-pop 200ms var(--e-pop) 1; }
+.plaque-head { display: flex; align-items: center; gap: 6px; }
+.plaque-label { font-family: var(--font-mono); font-weight: 500; font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--paper-ink); }
+.dir-badge { font-size: 13px; line-height: 1; color: rgba(154,116,52,.75); }
+/* --gap-eat is the gap #match-or-wrap must swallow as it collapses, or the
+   plaque would still snap by one gap when a Wild removes the value half. */
+.plaque-row { display: flex; align-items: center; gap: 10px; --gap-eat: 10px; }
+.plaque-pair { display: flex; align-items: center; gap: 8px; }
+.match-glyph {
+  width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--suit-solid, var(--bas-solid));
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,.18);
+  font-size: 0; /* the dot IS the glyph; the character never paints */
+}
+.match-suit { font-family: var(--font-display); font-weight: 800; font-size: 17px; line-height: 1; color: var(--suit-edge, var(--bas-edge)); }
+.match-or { font-family: var(--font-body); font-weight: 400; font-size: 13px; line-height: 1; color: var(--paper-ink); }
+.match-value { font-family: var(--font-display); font-weight: 800; font-size: 17px; line-height: 1; color: var(--navy); }
+
+.pile {
+  position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
+  filter: drop-shadow(0 18px 22px rgba(20,4,2,.55));
+}
+/* Higher specificity than the shared card anatomy below, which would
+   otherwise re-assert position:relative and give the buried cards real
+   layout width (shoving the top card off centre). */
+.pile > .under-card { position: absolute; left: 50%; top: 50%; margin-left: calc(var(--cw) * -0.5); margin-top: calc(var(--cw) * -0.71875); }
+#under-1 { --cw: var(--top-card-w); opacity: .72; transform: rotate(9deg); }
+#under-2 { --cw: var(--top-card-w); opacity: .45; transform: rotate(-14deg); }
+/* `.pile >` is load-bearing, not decoration — this is the third instance of
+   this file's selector-ORDER scar. The shared card-anatomy rule further down
+   lists `.top-card` and re-asserts `--cw: var(--card-w)` at equal specificity,
+   so the discard has been silently rendering at the HAND card's width while
+   the two buried cards (matched by #under-1 / #under-2, which outrank it) used
+   --top-card-w. Measured before this fix at 1280x900: top card 94px, its own
+   variable 97.6px; at 2560x1440 the gap would have been 132 vs 191. */
+.pile > .top-card { --cw: var(--top-card-w); }
+.top-card { position: relative; z-index: 1; transform: rotate(-3deg); }
+/* `linear` at rule level is deliberate and inert: both segments of
+   top-card-land declare their own animation-timing-function. */
+.top-card.is-landing { animation: top-card-land 260ms linear 1; }
+/* While a played card is still in the air, the pile shows what it is about to
+   cover — otherwise the ghost flies toward a card that already arrived. */
+.top-card.is-inflight { opacity: 0; }
+
+/* The oven fills the middle of the stage, so the draw pile lives in the
+   bottom-left corner where nothing else ever lands. */
+.deck {
+  position: absolute; left: 26px; bottom: 20px; z-index: 5;
+  --cw: var(--deck-w);
+  --cs: calc(var(--cw) / 96px);
+  width: var(--cw); height: calc(var(--cw) * 1.4375);
+  appearance: none; background: transparent; border: 0; padding: 0; cursor: pointer;
+  transition: transform var(--t-press) var(--e-out), filter var(--t-micro) var(--e-out), opacity var(--t-micro) var(--e-out);
+}
+.deck > .deck-face { position: absolute; inset: 0; }
+.deck { transform: rotate(-6deg); }
+@media (hover: hover) and (pointer: fine) {
+  .deck:not(:disabled):hover { transform: rotate(-6deg) translateY(-4px); filter: brightness(1.08); }
+}
+.deck:not(:disabled):active { transform: rotate(-6deg) translateY(1px) scale(.97); }
+.deck:disabled { cursor: default; opacity: .6; }
+.deck-text {
+  position: absolute; right: -9px; bottom: -8px; min-width: 24px; height: 24px; padding: 0 5px;
+  display: flex; align-items: center; justify-content: center; border-radius: 12px;
+  background: var(--ink); border: 2px solid #9A6C1C;
+  font-family: var(--font-display); font-weight: 800; font-size: 12px; color: var(--navy);
 }
 .dir { display: flex; align-items: center; gap: 7px; }
-.dir-glyph { font-size: 19px; line-height: 1; color: var(--dim-2); }
-.dir-label { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.dir-glyph { font-size: 15px; line-height: 1; color: var(--ink-4); }
+.dir-label { font-family: var(--font-mono); font-weight: 500; font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-2); }
 
-/* seat plates */
-.seat { position: absolute; transform: translate(-50%,-50%); width: 112px; z-index: 6; transition: opacity 200ms ease-out; }
-.seat-left  { left: 14%; top: 45%; }
-.seat-top   { left: 50%; top: 12%; }
-.seat-right { left: 86%; top: 45%; }
-.seat.is-idle { opacity: .72; }
-.seat.is-next { opacity: .92; }
-.plate { display: flex; flex-direction: column; align-items: center; gap: 7px; }
-.plate.is-acting { animation: tondo-bob 1400ms ease-in-out infinite; }
-.plate.is-loud { animation: tondo-flash 372ms 2; }
-.stack { position: relative; padding-bottom: 5px; }
-.fan { display: flex; align-items: flex-end; justify-content: center; min-height: 31px; }
-.pip { width: 22px; height: 31px; flex: 0 0 auto; border-radius: 5px; border: 1.5px solid rgba(255,255,255,.42); box-shadow: 0 4px 10px rgba(0,0,0,.42); }
-.pip + .pip { margin-left: -8px; }
-.is-lit .pip { border-color: rgba(255,255,255,.85); }
-.portrait-sm {
-  position: absolute; left: -9px; bottom: -2px; width: 30px; height: 30px; border-radius: 10px;
-  background-color: #0d0f1a; background-size: cover; background-position: center;
-  border: 2.5px solid #2b3454; box-shadow: 0 4px 12px rgba(0,0,0,.5);
+/* ==================================================== the card, one system
+   Every face card — hand, discard, drawn, wild preview — is scaled from its
+   own --cw against the reference md width of 96px. */
+.card, .top-card, .under-card, .drawn-card, .wild-card, .travel-card {
+  --cw: var(--card-w);
+  --cs: calc(var(--cw) / 96px);            /* length / length = <number> */
+  --m: calc(var(--cw) * .5417);            /* cream mark circle, 52 @ 96 */
+  position: relative; flex: 0 0 auto;
+  width: var(--cw); height: calc(var(--cw) * 1.4375);
+  padding: calc(10px * var(--cs));
+  display: flex; flex-direction: column; align-items: stretch; justify-content: space-between;
+  overflow: hidden;
+  border: max(2.5px, calc(4px * var(--cs))) solid var(--ink);
+  border-radius: max(10px, calc(16px * var(--cs)));
+  background: var(--suit-bg, var(--pep-bg));
+  box-shadow: 0 calc(5px * var(--cs)) 0 var(--suit-edge, var(--pep-edge)),
+              0 calc(14px * var(--cs)) calc(22px * var(--cs)) rgba(0,0,0,.45);
+}
+.card-index {
+  position: relative; z-index: 1; align-self: flex-start;
+  font-family: var(--font-display); font-weight: 800;
+  font-size: calc(22px * var(--cs)); line-height: 1; letter-spacing: -.02em; color: var(--ink);
+  /* The digit carries its own ground. Cream on the bare suit gradient measured
+     1.45:1 (cheese) to 3.82:1 (pepperoni) — the rank, the single most-read
+     thing on the card, was the least legible. See --pep-ink for why no flat
+     ink can fix a mid-tone gradient. The chip is the card's own vocabulary:
+     the same suit ink as the 3D lip, the same chunky radius, the same inset
+     lip the cream mark circle wears. */
+  background: var(--suit-ink, var(--pep-ink));
+  padding: calc(3px * var(--cs)) calc(7px * var(--cs)) calc(4px * var(--cs));
+  border-radius: max(6px, calc(9px * var(--cs)));
+  box-shadow: inset 0 calc(-2px * var(--cs)) 0 rgba(0,0,0,.22);
+}
+.card-ghost {
+  position: absolute; right: calc(-8px * var(--cs)); bottom: calc(-22px * var(--cs)); z-index: 0;
+  display: block; inset: auto calc(-8px * var(--cs)) calc(-22px * var(--cs)) auto;
+  font-family: var(--font-display); font-weight: 800;
+  font-size: calc(100px * var(--cs)); line-height: .8;
+  color: rgba(255,247,232,.16); pointer-events: none; white-space: nowrap;
+}
+/* the cream circle that holds the flat topping mark */
+.card-glyph {
+  position: relative; z-index: 1; align-self: center;
+  width: var(--m); height: var(--m); border-radius: 50%;
+  background: var(--ink); box-shadow: inset 0 calc(-3px * var(--cs)) 0 rgba(0,0,0,.12);
+  display: flex; align-items: center; justify-content: center; flex-wrap: nowrap;
+  gap: calc(var(--m) * .06); padding: calc(var(--m) * .07);
+}
+.card-suit {
+  position: relative; z-index: 1; align-self: center; text-align: center;
+  white-space: nowrap; overflow: hidden; max-width: 100%;
+  font-family: var(--font-mono); font-weight: 500;
+  /* This is the ONLY non-colour suit cue on the card, so it is the one piece
+     of type that must not scale below legibility: it was 8.09px on a phone
+     card at ~2:1 on basil. It now floors at 11px and takes the same ink chip
+     the rank does, which puts it at the same 7.7-9.4:1 as the rank on every
+     suit instead of 1.4-3.4:1. */
+  font-size: max(11px, calc(10px * var(--cs))); letter-spacing: .18em;
+  color: var(--ink);
+  background: var(--suit-ink, var(--pep-ink));
+  padding: calc(2px * var(--cs)) calc(6px * var(--cs)) calc(3px * var(--cs));
+  border-radius: 999px;
+  box-shadow: inset 0 calc(-1.5px * var(--cs)) 0 rgba(0,0,0,.22);
+}
+
+/* flat CSS topping shapes, proportioned against the mark circle */
+.mk-dot   { width: calc(var(--m) * var(--d)); height: calc(var(--m) * var(--d)); border-radius: 50%; background: var(--pep-mark); }
+.mk-leaf  { width: calc(var(--m) * .7); height: calc(var(--m) * .7); background: var(--bas-mark); border-radius: 66% 6% 66% 6%; transform: rotate(14deg); }
+.mk-wedge { width: calc(var(--m) * .74); height: calc(var(--m) * .64); background: var(--chz-mark); clip-path: polygon(50% 0,100% 100%,0 100%); }
+.mk-fish  { width: calc(var(--m) * .56); height: calc(var(--m) * .4); border-radius: 52% 42% 52% 42%; background: var(--anc-mark); }
+.mk-tail  { width: calc(var(--m) * .26); height: calc(var(--m) * .4); background: var(--anc-mark); clip-path: polygon(100% 0,100% 100%,0 50%); }
+/* special-card icons: same circle, the effect drawn in the suit's edge ink */
+.mk-skip {
+  position: relative; width: calc(var(--m) * .62); height: calc(var(--m) * .62);
+  border-radius: 50%; border: calc(var(--m) * .11) solid var(--suit-edge, var(--pep-edge));
+}
+.mk-skip::after {
+  content: ""; position: absolute; left: calc(var(--m) * -.06); top: 50%;
+  width: calc(var(--m) * .62); height: calc(var(--m) * .11);
+  margin-top: calc(var(--m) * -.055); background: var(--suit-edge, var(--pep-edge));
+  transform: rotate(-45deg);
+}
+.mk-flip { position: relative; flex: 0 0 auto; width: calc(var(--m) * .68); height: calc(var(--m) * .54); }
+.mk-flip::before, .mk-flip::after {
+  content: ""; position: absolute; left: 0; width: 100%; height: calc(var(--m) * .22);
+  background: var(--suit-edge, var(--pep-edge));
+}
+.mk-flip::before { top: 0; clip-path: polygon(0 50%, 26% 0, 26% 28%, 100% 28%, 100% 72%, 26% 72%, 26% 100%); }
+.mk-flip::after  { bottom: 0; clip-path: polygon(100% 50%, 74% 0, 74% 28%, 0 28%, 0 72%, 74% 72%, 74% 100%); }
+.mk-plus2 {
+  font-family: var(--font-display); font-weight: 800;
+  font-size: calc(var(--m) * .46); line-height: 1; color: var(--suit-edge, var(--pep-edge));
+}
+.mk-star {
+  width: calc(var(--m) * .74); height: calc(var(--m) * .74); background: var(--gold);
+  clip-path: polygon(50% 0%, 62% 36%, 100% 38%, 69% 60%, 80% 97%, 50% 75%, 20% 97%, 31% 60%, 0 38%, 38% 36%);
+}
+
+/* --- the card back ------------------------------------------------------ */
+.back-face {
+  position: relative; display: block;
+  background-color: var(--crust);
+  background-image: radial-gradient(var(--pep-mark) 26%, transparent 27%);
+  background-size: calc(16px * var(--cs)) calc(16px * var(--cs));
+  border: max(2px, calc(4px * var(--cs))) solid var(--ink);
+  border-radius: max(6px, calc(16px * var(--cs)));
+  box-shadow: 0 calc(5px * var(--cs)) 0 var(--chz-edge), 0 calc(12px * var(--cs)) calc(18px * var(--cs)) rgba(0,0,0,.42);
+}
+.back-face::after {
+  content: "T"; position: absolute; left: 50%; top: 50%;
+  width: calc(34px * var(--cs)); height: calc(34px * var(--cs));
+  margin: calc(-17px * var(--cs)) 0 0 calc(-17px * var(--cs));
+  border-radius: max(4px, calc(12px * var(--cs)));
+  background: var(--navy); border: max(1.5px, calc(3px * var(--cs))) solid var(--ink);
+  display: flex; align-items: center; justify-content: center; transform: rotate(-8deg);
+  font-family: var(--font-display); font-weight: 800; font-size: calc(16px * var(--cs)); color: var(--gold);
+}
+
+/* --------------------------------------------------------------- seats -- */
+.seat {
+  position: absolute; transform: translate(-50%,-50%); width: auto; z-index: 6;
+  transition: opacity var(--t-state) var(--e-out);
+}
+/* On the circumference, but never off the stage: narrow screens clamp the
+   side seats back inside their own half-width. */
+/* Two floors, pulling in opposite directions, and both are needed:
+   --seat-edge stops a seat leaving the stage when the table is LARGE, and
+   --min-orbit stops it landing on the MATCH plaque when the table is SMALL.
+   Only the first existed before, because the table could never get small
+   enough for the second to matter; a table that tracks the stage continuously
+   can. Read outward: take the circumference, but never nearer the centre than
+   --min-orbit, and never past the stage edge. */
+.seat-left  { left: max(min(calc(50% - var(--table-d) / 2), calc(50% - var(--min-orbit, 0px))), var(--seat-edge)); top: 50%; }
+/* The top seat's floor is half its own plate, so it scales with the seat
+   instead of being re-stepped at five breakpoints (62/42/40/34/27px before).
+   1.0 x the tile reproduces the hand-tuned 62px at the reference tile. */
+.seat-top   { left: 50%; top: max(calc(50% - var(--table-d) / 2), calc(var(--seat-tile) * 1)); }
+.seat-right { left: min(max(calc(50% + var(--table-d) / 2), calc(50% + var(--min-orbit, 0px))), calc(100% - var(--seat-edge))); top: 50%; }
+.seat.is-idle .seat-body { opacity: .72; }
+.seat.is-next .seat-body { opacity: .9; }
+/* The seat is one object at one scale, exactly like the card: --ss is a plain
+   number (length / length) against the reference tile of 62px, so a seat
+   assembled at any tile size keeps the reference sheet's proportions. Every
+   value below reproduces the hand-tuned original at --seat-tile: 62px; the
+   `max()` floors are where a piece stops being legible rather than merely
+   small, which is what the per-breakpoint step blocks used to do by hand. */
+/* --ss is set on .stage (it needs to reach --pill-max there) and inherits. */
+.plate { position: relative; display: flex; flex-direction: column; align-items: center; gap: max(3px, calc(7px * var(--ss))); }
+/* `is-acting` lives in the seats' markup, which is rewritten wholesale on any
+   change (a card count, a status word) — driving the pop from it replayed the
+   animation on unrelated snapshots. The pop is now fired from JS on the actual
+   turn change, once, and it carries the playful overshoot. */
+.plate.is-pop { animation: tondo-pop 260ms var(--e-pop) 1; }
+.plate.is-loud { animation: tondo-pop 200ms var(--e-out) 1; }
+.plate.is-loud::after { animation: tondo-ring-pulse 220ms var(--e-out) 1; }
+
+.seat-body { display: flex; align-items: flex-end; gap: max(4px, calc(9px * var(--ss))); transition: opacity var(--t-state) var(--e-out); }
+.seat-left .seat-body { flex-direction: row-reverse; }
+/* .stack is the travelling-ghost anchor: it must stay the tile's wrapper. */
+.stack { position: relative; width: var(--seat-tile); height: var(--seat-tile); flex: 0 0 auto; }
+.seat-tile {
+  position: absolute; inset: 0; border-radius: 34%;
+  background: var(--tone-bg, var(--chz-bg));
+  border: max(2px, calc(3px * var(--ss))) solid var(--ink);
+  box-shadow: 0 max(2px, calc(5px * var(--ss))) 0 var(--tone-edge, var(--chz-edge)),
+              0 calc(12px * var(--ss)) calc(20px * var(--ss)) rgba(0,0,0,.42);
+  transform: rotate(-5deg);
+  display: flex; align-items: center; justify-content: center;
+}
+.seat-initial {
+  font-family: var(--font-display); font-weight: 800;
+  font-size: calc(var(--seat-tile) * .41); line-height: 1; color: var(--ink);
+  transform: rotate(5deg);
+}
+.seat-ring {
+  position: absolute; inset: max(-7px, calc(-7px * var(--ss)));
+  border-radius: max(12px, calc(24px * var(--ss)));
+  border: max(1.5px, calc(2px * var(--ss))) dashed rgba(245,203,92,.75); transform: rotate(6deg);
 }
 .count-badge {
-  position: absolute; right: -8px; bottom: -2px; min-width: 20px; height: 20px; padding: 0 5px;
-  display: flex; align-items: center; justify-content: center; border-radius: 999px;
-  background: #0d0f1a; font-family: 'Archivo Black', system-ui, sans-serif; font-size: 11px;
-  color: #8f9bc4; border: 1.5px solid #2b3454;
+  --cb: max(17px, calc(24px * var(--ss)));
+  position: absolute; right: calc(var(--cb) * -.375); bottom: calc(var(--cb) * -.333);
+  min-width: var(--cb); height: var(--cb); padding: 0 calc(var(--cb) * .208);
+  display: flex; align-items: center; justify-content: center; border-radius: calc(var(--cb) * .5);
+  background: var(--ink); border: max(1.5px, calc(2px * var(--ss))) solid var(--tone-edge, var(--chz-edge));
+  font-family: var(--font-display); font-weight: 800; font-size: calc(var(--cb) * .5); color: var(--navy);
 }
-.seat-status { display: flex; align-items: center; gap: 6px; white-space: nowrap; border-radius: 999px; padding: 3px 10px; }
-.seat-status.is-loud { box-shadow: 0 3px 10px rgba(0,0,0,.35); animation: tondo-pop 220ms cubic-bezier(.2,.8,.3,1.2) 1; }
-.seat-status.is-soft { background: rgba(255,255,255,.07); }
-.seat-name { font-family: 'Archivo Black', system-ui, sans-serif; font-size: 13px; line-height: 1.2; }
-.seat-verb { font-size: 12px; font-weight: 700; line-height: 1.2; }
+/* the opponent's hand: a fan of small backs beside the tile */
+.fan { display: flex; align-items: flex-end; margin-bottom: calc(6px * var(--ss)); }
+.mini-back {
+  --cw: var(--seat-back);
+  --cs: calc(var(--cw) / 96px);
+  width: var(--cw); height: calc(var(--cw) * 1.4615); flex: 0 0 auto;
+}
+.mini-back + .mini-back { margin-left: calc(var(--seat-back) * -.65); }
+
+.seat-status {
+  display: flex; align-items: center; justify-content: center; gap: max(3px, calc(6px * var(--ss)));
+  max-width: var(--pill-max);
+  min-width: 0; white-space: nowrap; overflow: hidden;
+  border-radius: 999px;
+  padding: max(2px, calc(4px * var(--ss))) max(8px, calc(11px * var(--ss))) max(3px, calc(5px * var(--ss)));
+  background: rgba(7,12,22,.62); border: 1px solid rgba(255,247,232,.14);
+}
+.seat-status.is-loud { background: rgba(50,36,8,.85); border-color: rgba(245,203,92,.45); }
+.seat-name, .seat-verb { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.seat-name { flex: 0 1 auto; font-family: var(--font-body); font-weight: 700; font-size: clamp(10px, calc(13px * var(--ss)), 19px); letter-spacing: .01em; line-height: 1.2; color: rgba(255,247,232,.72); }
+.seat-verb { flex: 0 1 auto; font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: clamp(11px, calc(14px * var(--ss)), 20px); line-height: 1.2; color: var(--ink-3); }
+.seat-status.is-loud .seat-name { color: var(--gold); }
+.seat-status.is-loud .seat-verb { color: rgba(245,203,92,.8); }
+.seat-status.is-alarm { background: rgba(64,16,10,.85); border-color: rgba(217,80,58,.6); }
+.seat-status.is-alarm .seat-name { color: #F0A092; }
+.seat-status.is-alarm .seat-verb { color: #F0A092; }
+
+/* the turn passing, made spatial: one chip travels the ring */
+.turn-token {
+  position: absolute; left: 0; top: 0; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--gold);
+  border: 2px solid var(--page); box-shadow: 0 0 0 2px rgba(245,203,92,.3);
+  z-index: 7; pointer-events: none; will-change: transform;
+  /* The token slides between seats: on-screen movement takes ease-in-out.
+     Appearing and leaving is a different job and takes the ease-out entry
+     curve, plus the discrete `display` flip so it is not torn out mid-fade. */
+  opacity: 1;
+  transition: transform var(--t-travel) var(--e-in-out), background-color 180ms var(--e-out),
+              opacity var(--t-enter) var(--e-out), display var(--t-enter) allow-discrete;
+}
+/* No transform here: JS owns the token's transform (it is the seat position),
+   and an exit transform would fight the inline style. */
+.turn-token[hidden] { opacity: 0; transition-duration: var(--t-exit); }
+@starting-style { .turn-token:not([hidden]) { opacity: 0; } }
+/* The arrival ping was an animated box-shadow spread (paint on every turn);
+   it is now a pseudo-element scaling and fading — transform/opacity only. */
+.turn-token::after {
+  content: ""; position: absolute; inset: -2px; border-radius: 50%;
+  background: rgba(245,203,92,.55); opacity: 0; pointer-events: none;
+}
+.turn-token.hop::after { animation: token-hop 280ms var(--e-out) 1; }
 
 .ribbon {
-  position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); max-width: 94%; z-index: 8;
-  text-align: center; font-size: 13px; font-weight: 600; color: #93a4d4;
-  background: rgba(16,21,40,.86); border-radius: 999px; padding: 5px 14px;
+  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); max-width: 92%; z-index: 8;
+  text-align: center;
+  font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 19px;
+  color: rgba(255,247,232,.5); background: transparent; padding: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* The banner sat at 30% of the stage and covered 100% of the MATCH plaque at
+   1800x900, 1280x900 and 1024x768 (88.8% at 375x812) for the ~840ms at the
+   start of every one of your turns — i.e. the answer to "what am I allowed to
+   play?" was hidden behind the words YOUR TURN. It keeps its slam; it is
+   simply anchored clear of the plaque now.
+
+   It hangs from the TOP of the stage rather than at a fraction of it. A
+   proportional offset does not work: the clearance it needs is the plaque's
+   half-height plus the banner's own height, which are fixed px, while the
+   fraction shrinks exactly when the window gets short — a first attempt at
+   `50% - --table-fit * .34` still covered 27.8% of the plaque at 1024x768 and
+   33.7% at 1800x747. Upward, never downward: .center only ever moves DOWN from
+   50% (the short-phone bands push it to 58/60/64%), so above is the only
+   direction that is safe at every size. Measured clearance banner-bottom to
+   plaque-top: 11px at the worst size tested (320x568) and 13-115px everywhere
+   else, with 0% of the plaque covered at all of them.
+   The trade this makes: on a full table the banner covers the TOP opponent's
+   seat for its ~840ms. That is the cheaper of the two — a seat tile whose
+   information is duplicated in the header queue, against the one element that
+   answers "what am I allowed to play?". */
 .banner {
-  position: absolute; left: 50%; top: 45%; transform: translate(-50%,-50%); z-index: 12;
-  font-family: 'Archivo Black', system-ui, sans-serif; font-size: 32px;
-  color: #0d0f1a; background: var(--bone); padding: 16px 26px; border-radius: 18px;
-  box-shadow: 0 10px 30px rgba(0,0,0,.5); animation: tondo-slam 240ms cubic-bezier(.2,.8,.3,1.15) 1;
+  position: absolute; left: 50%; top: 8px; z-index: 12;
+  transform: translate(-50%, 0) rotate(-2deg);
+  font-family: var(--font-display); font-weight: 800; font-size: 30px; letter-spacing: .02em;
+  /* One line, always. The longest string this ever holds is a winner's name
+     plus " WINS", and on a 320px phone that wrapped to two lines, grew the
+     banner by 24px and put 33.7% of the plaque back under it. */
+  white-space: nowrap;
+  color: var(--navy); background: linear-gradient(var(--paper), var(--paper-2));
+  padding: 15px 26px; border-radius: 14px;
+  box-shadow: 0 4px 0 rgba(96,58,14,.5), 0 16px 30px rgba(0,0,0,.5);
+  animation: tondo-slam 240ms var(--e-pop) 1;
+  pointer-events: none; /* never a hit-target over the table */
 }
-.banner.win { background: var(--basil); }
-.banner[hidden] { display: none; }
+/* Asymmetric: the slam is the event, the exit is just tidying up. app.js
+   waits 140ms before hiding, and this is the animation it was waiting for —
+   the class had no rule at all, so the banner used to vanish on a snap. */
+.banner.is-leaving { animation: tondo-leave 140ms var(--e-out) 1 forwards; }
+.banner.win { color: #1C6B3C; }
+
+/* travelling ghosts: painted over an already-correct table, then removed */
+.travel-ghost { position: fixed; margin: 0; z-index: 30; pointer-events: none; }
+/* No border-radius override here: the ghost's corners must scale with its
+   --cw exactly as the pile card's do, or the radius pops at the hand-off. */
+.travel-back { --cw: 64px; --cs: calc(var(--cw) / 96px); }
 
 /* ------------------------------------------------------------------ tray */
-.tray { flex: 0 0 auto; padding: 10px 18px 12px; background: var(--panel-2); border-top: 1px solid var(--line); }
+.tray {
+  flex: 0 0 auto;
+  padding: 14px calc(22px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left));
+  background: var(--tray-bg); border-top: 1px solid var(--hair);
+}
+.tray > * { max-width: var(--measure); margin-inline: auto; }
 .you-strip {
-  display: flex; align-items: center; gap: 9px; padding: 6px 10px; margin-bottom: 6px;
-  border-radius: 14px; background: #131834; border: 1px solid #2b3454; transition: background 200ms ease-out;
+  display: flex; align-items: center; gap: 12px; padding: 0 0 10px;
+  border: 0; border-radius: 0; background: transparent;
 }
-.you-strip.is-acting { background: #1b2340; border-color: var(--bone); box-shadow: 0 0 0 4px rgba(244,247,255,.16), 0 8px 22px rgba(0,0,0,.45); }
-.you-ticket { width: 16px; height: 11px; flex: 0 0 auto; background: #252e4d; clip-path: polygon(0 0,100% 50%,0 100%); }
-.you-strip.is-acting .you-ticket { background: var(--bone); filter: drop-shadow(0 2px 5px rgba(0,0,0,.5)); }
+.you-ticket { display: none; }
+.you-seat { position: relative; width: var(--you-tile); height: var(--you-tile); flex: 0 0 auto; }
 .you-portrait {
-  width: 26px; height: 26px; flex: 0 0 auto; border-radius: 8px; background-size: cover; background-position: center;
-  background-color: #0d0f1a; border: 3px solid #fff; box-shadow: 0 3px 10px rgba(0,0,0,.45);
+  position: absolute; inset: 0; border-radius: 34%;
+  background: var(--tone-bg, var(--bas-bg)); background-image: none;
+  border: 3px solid var(--ink);
+  box-shadow: 0 4px 0 var(--tone-edge, var(--bas-edge)), 0 10px 16px rgba(0,0,0,.42);
+  transform: rotate(-5deg);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display); font-weight: 800;
+  font-size: calc(var(--you-tile) * .41); line-height: 1; color: var(--ink);
 }
-.you-name { font-family: 'Archivo Black', system-ui, sans-serif; font-size: 18px; color: #b8c0dd; }
-.you-strip.is-acting .you-name { color: var(--bone); }
-.you-pips { display: flex; align-items: center; }
-.you-pips .pip { width: 13px; height: 19px; border-radius: 4px; border-width: 1px; }
-.you-pips .pip + .pip { margin-left: -5px; }
-.you-count { font-size: 13px; font-weight: 600; color: #939dc0; margin-left: 9px; white-space: nowrap; flex: 1 1 auto; }
-.you-status { font-weight: 700; font-size: 13.5px; line-height: 1.25; white-space: nowrap; border-radius: 999px; padding: 4px 10px; color: #c6cee8; background: rgba(255,255,255,.07); }
-.you-status.is-acting { color: #0d0f1a; background: var(--bone); box-shadow: 0 3px 10px rgba(0,0,0,.35); }
-.you-status.is-alarm { color: #0d0f1a; background: var(--pepperoni); }
-.you-status[hidden] { display: none; }
+.you-portrait::after { content: ""; }
+.you-count {
+  position: absolute; right: -8px; bottom: -7px; min-width: 21px; height: 21px; padding: 0 5px;
+  display: flex; align-items: center; justify-content: center; border-radius: 11px;
+  background: var(--ink); border: 2px solid var(--tone-edge, var(--bas-edge));
+  font-family: var(--font-display); font-weight: 800; font-size: 11px; color: var(--navy);
+}
+.you-pill {
+  display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0;
+  padding: 4px 11px 5px; border-radius: 999px;
+  background: transparent; border: 1px solid rgba(255,247,232,.14);
+  transition: background-color var(--t-state) var(--e-out), border-color var(--t-state) var(--e-out);
+}
+.you-strip.is-acting .you-pill { background: rgba(245,203,92,.16); border-color: rgba(245,203,92,.45); }
+.you-name {
+  min-width: 0; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-body); font-weight: 700; font-size: 13px; color: rgba(255,247,232,.72);
+}
+.you-strip.is-acting .you-name { color: var(--gold); }
+/* The seat verb reserves its own width instead of resizing the pill.
+   This was the ONE real layout shift in the tray: the pill is content-sized
+   and sits before .label-row, so every "your turn" → "you" shortened it and
+   dragged the whole hand-label row sideways. Measured live at 1280x900 in
+   Instrument Serif italic 14px: the six status strings run 18.6px ("you") to
+   71.8px ("forgot TONDO!") and 1ch = 6.45px, so the widest is 11.13ch —
+   12ch reserves it with headroom, and `ch` re-derives the same reserve at the
+   smaller type sizes further down this file. The recorded shift was exactly
+   30.9px = 49.5px ("your turn") − 18.6px ("you"). */
+.you-status {
+  display: block; white-space: nowrap;
+  width: 12ch; flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 14px;
+  color: var(--ink-3); background: transparent; padding: 0; border-radius: 0;
+}
+.you-status.is-acting { color: rgba(245,203,92,.85); }
+.you-status.is-alarm { color: #F0A092; }
+.you-pips { display: none; }
 
-.label-row { display: flex; align-items: baseline; gap: 12px; justify-content: center; }
-.hand-label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
-.playable-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #5d6789; }
-.playable-label.is-live { color: var(--basil); }
-.playable-label.is-drawn { color: var(--focus); }
+.label-row { flex: 1 1 auto; display: flex; align-items: center; gap: 12px; justify-content: space-between; min-width: 0; }
+.hand-label, .playable-label {
+  font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .2em;
+  text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hand-label { color: var(--ink-2); }
+.playable-label { color: rgba(245,203,92,.7); text-align: right; }
+.playable-label.is-live { color: var(--bas-solid); }
+.playable-label.is-drawn { color: var(--crust-2); }
 
-.bar { display: flex; align-items: center; gap: 9px; padding: 10px 12px; margin-top: 8px; flex-wrap: wrap; border-radius: 16px; }
-.bar[hidden] { display: none; }
+/* --------------------------------------------------------- context bars */
+.bar { display: flex; align-items: center; gap: 10px; padding: 11px 13px; margin-top: 10px; flex-wrap: wrap; border-radius: 14px; }
 .bar-text { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.bar-head { font-family: 'Archivo Black', system-ui, sans-serif; font-size: 13px; line-height: 1.4; }
-.bar-sub { font-size: 13px; line-height: 1.35; }
+.bar-head { font-family: var(--font-body); font-weight: 700; font-size: 13px; line-height: 1.4; color: var(--ink); }
+.bar-sub { font-family: var(--font-body); font-size: 13px; line-height: 1.35; color: rgba(255,247,232,.55); }
 .bar-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-.bar-tondo { background: #1a1206; border: 3px solid var(--accent); }
-.bar-tondo .bar-head { color: var(--accent); }
-.bar-tondo .bar-sub { color: #c9a94a; }
-.bar-callout { background: #2a0a16; border: 3px solid var(--pepperoni); }
-.bar-callout .bar-head { color: var(--pepperoni); }
-.bar-callout .bar-sub { color: #c98a9c; }
-.bar-drawn { background: #151b30; border: 2px solid var(--focus); }
-.drawn-msg { font-size: 14px; font-weight: 600; line-height: 1.35; color: var(--basil); }
-.drawn-msg.bad { color: #ff6f9a; }
-.bar-wild { background: #151b30; border: 3px solid var(--bone); }
-.wild-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.wild-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-.wild-grid .btn { color: #0d0f1a; border-color: transparent; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
-.wild-card {
-  position: relative; flex: 0 0 auto; width: 50px; height: 70px; padding: 4px;
-  display: flex; flex-direction: column; align-items: center; justify-content: space-between;
-  background: #171d34; border: 5px solid var(--bone); border-radius: 13px;
-  box-shadow: 0 0 0 3px rgba(244,247,255,.3), 0 4px 18px rgba(0,0,0,.5);
+.bar-tondo { background: rgba(245,203,92,.1); border: 1px solid rgba(245,203,92,.45); }
+.bar-tondo .bar-head { color: var(--gold); }
+.bar-tondo .bar-sub { color: rgba(245,203,92,.65); }
+.bar-callout { background: rgba(217,80,58,.14); border: 1px solid rgba(217,80,58,.5); }
+.bar-callout .bar-head { color: #F0A092; }
+.bar-callout .bar-sub { color: rgba(240,160,146,.72); }
+.bar-drawn { background: rgba(255,247,232,.05); border: 1px solid var(--hair-2); }
+.drawn-msg { font-family: var(--font-body); font-size: 14px; font-weight: 500; line-height: 1.35; color: var(--ink); margin-bottom: 8px; }
+.drawn-msg.bad { color: #F0A092; }
+.bar-wild { background: rgba(255,247,232,.05); border: 1px solid var(--hair-2); }
+.wild-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.wild-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.drawn-card { --cw: var(--card-w); }
+.wild-card { --cw: var(--wild-card-w); }
+
+/* game-screen buttons speak the tray's language */
+#screen-game .btn, .help-dialog .btn {
+  font-family: var(--font-body); font-weight: 700; font-size: 14px;
+  color: rgba(255,247,232,.7); background: rgba(255,247,232,.06);
+  border: 1px solid var(--hair-2); border-radius: 14px;
 }
-.wild-card .card-suit { color: #e8ecff; font-size: 12px; }
-.drawn-card {
-  position: relative; flex: 0 0 auto; width: var(--card-w); height: var(--card-h); padding: 4px;
-  display: flex; flex-direction: column; align-items: center; justify-content: space-between;
-  border: 6px solid #fff; border-radius: 15px;
-  box-shadow: 0 0 0 3px rgba(125,226,255,.45), 0 4px 0 rgba(10,12,20,.3), 0 9px 14px rgba(0,0,0,.42);
+@media (hover: hover) and (pointer: fine) {
+  #screen-game .btn:hover:not(:disabled), .help-dialog .btn:hover:not(:disabled) {
+    border-color: rgba(255,247,232,.34); color: var(--ink); filter: none; transform: translateY(-1px);
+  }
 }
+#screen-game .btn-primary, .help-dialog .btn-primary {
+  color: var(--navy); background: var(--gold); border-color: transparent; box-shadow: 0 3px 0 rgba(96,58,14,.55);
+}
+#screen-game .btn-primary:disabled { color: var(--ink-1); background: rgba(255,247,232,.08); box-shadow: none; }
+#screen-game .btn-tondo { color: var(--navy); background: var(--gold); border-color: transparent; box-shadow: 0 3px 0 rgba(96,58,14,.55); flex: 0 0 auto; }
+#screen-game .btn-cta { color: var(--ink); background: linear-gradient(160deg,#D9503A,#B33421); border-color: transparent; box-shadow: 0 3px 0 var(--pep-edge); flex: 0 0 auto; }
+#screen-game .btn-play { color: var(--ink); background: linear-gradient(160deg,#4ECB78,#2FA25B); border-color: transparent; box-shadow: 0 3px 0 var(--bas-edge); }
+#screen-game .btn-tiny { font-size: 11px; letter-spacing: .06em; border-radius: 999px; color: var(--ink-2); background: transparent; }
+#screen-game .wild-grid .btn[data-suit] { color: var(--ink); border-color: transparent; box-shadow: 0 3px 0 var(--suit-edge, var(--pep-edge)); }
+#screen-game .wild-grid .btn[data-suit="pepperoni"] { background: var(--pep-bg); --suit-edge: var(--pep-edge); }
+#screen-game .wild-grid .btn[data-suit="basil"]     { background: var(--bas-bg); --suit-edge: var(--bas-edge); }
+#screen-game .wild-grid .btn[data-suit="cheese"]    { background: var(--chz-bg); --suit-edge: var(--chz-edge); color: var(--navy); }
+#screen-game .wild-grid .btn[data-suit="anchovy"]   { background: var(--anc-bg); --suit-edge: var(--anc-edge); }
 
 /* ------------------------------------------------------------------ hand */
 .hand-wrap { position: relative; }
-.hand-wrap[hidden] { display: none; }
 .hand-row {
-  display: flex; flex-wrap: nowrap; gap: 10px; align-items: flex-end; justify-content: center;
-  padding-top: 18px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  display: flex; flex-wrap: nowrap; gap: 6px; align-items: flex-end; justify-content: center;
+  /* Inline padding must be >= the fan's rotation overhang, or the end cards'
+     swung corners are clipped and permanently unreachable at the scroll
+     extremes. That overhang is a fixed FRACTION of the card, not a constant:
+     JS clamps --off at 3, so the lean saturates at 3 x 4deg plus jitter and the
+     overhang settles at 0.371 x --card-w (measured across 5-16 card hands at
+     --card-w 132: 48.97px, identical from 10 cards up). .43 adds margin — the
+     per-card jitter makes the worst case depend on which ids are in hand, and
+     .40 left only 0.99px at a 10-card hand.
+     The old flat 20px was only ever enough for small cards — at 132px cards a
+     10-card hand clipped the first card by 27.2px. */
+  padding: 26px calc(var(--card-w) * .43) 18px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  overscroll-behavior-x: contain; /* the end of the hand is not the back button */
+  touch-action: pan-x pan-y;
 }
 .hand-row::-webkit-scrollbar { display: none; }
 .hand-row.is-overflowing { justify-content: flex-start; }
-.hand-row.is-locked { pointer-events: none; }
 .fade { position: absolute; top: 0; bottom: 0; width: 28px; pointer-events: none; }
-.fade[hidden] { display: none; }
-.fade-left { left: 0; background: linear-gradient(270deg, rgba(8,10,18,0), #080a12); }
-.fade-right { right: 0; background: linear-gradient(90deg, rgba(8,10,18,0), #080a12); }
+.fade-left { left: 0; background: linear-gradient(270deg, rgba(10,17,32,0), var(--tray-bg)); }
+.fade-right { right: 0; background: linear-gradient(90deg, rgba(10,17,32,0), var(--tray-bg)); }
 
+/* The fan: every card leans with its distance from the middle (--off, set per
+   card in JS) plus a small per-card jitter, so the hand looks dealt by hand.
+   Playable cards rise out of it; unplayable ones go grey. */
 .card {
-  position: relative; flex: 0 0 auto; width: var(--card-w); height: var(--card-h); padding: 4px;
-  display: flex; flex-direction: column; align-items: center; justify-content: space-between;
-  border: 6px solid #fff; border-radius: 16px; cursor: default;
-  transform-origin: 50% 120%; opacity: .42; filter: saturate(.3);
-  box-shadow: 0 3px 0 rgba(10,12,20,.4);
-  transition: transform 110ms cubic-bezier(.18,.89,.32,1.15), opacity 110ms cubic-bezier(.22,.61,.36,1);
+  cursor: default; appearance: none;
+  transform-origin: 50% 120%;
+  --card-lift: 0px;
+  --card-scale: 1;
+  transform:
+    translateX(var(--shake-x, 0px))
+    rotate(calc(var(--off, 0) * 4deg + var(--jit, 0deg)))
+    translateY(calc(var(--card-lift) + var(--abs-off, 0) * 3.2px - 4px))
+    scale(var(--card-scale));
+  filter: grayscale(.5) brightness(.7);
+  /* The hand is touched dozens of times a round: the raise stays fast and
+     restrained, and it is a transition (not a keyframe) so hovering along the
+     fan retargets mid-flight instead of restarting. */
+  transition: transform 150ms var(--e-out), filter 180ms var(--e-out), opacity 180ms var(--e-out);
 }
-.card.is-playable {
-  cursor: pointer; opacity: 1; filter: none;
-  box-shadow: 0 4px 0 rgba(10,12,20,.3), 0 9px 14px rgba(0,0,0,.42);
+.card.is-playable { --card-lift: -12px; cursor: pointer; filter: none; }
+.card.is-dimmed { filter: grayscale(.7) brightness(.55); }
+@media (hover: hover) and (pointer: fine) {
+  .card:hover { filter: grayscale(.42) brightness(.78); }
+  .card.is-playable:hover { --card-lift: -18px; filter: brightness(1.05); }
 }
-.card.is-dimmed { opacity: .22; }
-.card:hover { filter: brightness(1.07); }
-.card.refuse { animation: tondo-refuse 161ms 1; }
-.card-index { position: relative; z-index: 1; align-self: flex-start; font-family: 'Archivo Black', system-ui, sans-serif; font-size: 13px; color: rgba(255,255,255,.94); }
-.card-glyph { position: relative; z-index: 1; font-family: 'Archivo Black', system-ui, sans-serif; font-size: 24px; line-height: 1; color: #fff; }
-.card-suit { position: relative; z-index: 1; white-space: nowrap; overflow: hidden; max-width: 100%; font-size: 15px; line-height: 1; font-weight: 700; color: rgba(255,255,255,.9); }
-.card-ghost {
-  position: absolute; inset: 0; z-index: 0; display: flex; align-items: center; justify-content: center;
-  font-family: 'Archivo Black', system-ui, sans-serif; font-size: 84px; line-height: 1;
-  color: rgba(255,255,255,.17); pointer-events: none; overflow: hidden;
+/* Press is the card being pushed, not the card being chosen: only :active
+   scales. `is-armed` is a held selection and keeps full size. */
+.card.is-playable:active { --card-scale: .97; }
+.card.is-playable:active,
+.card.is-armed {
+  --card-lift: -22px;
+  box-shadow: 0 0 0 3px var(--gold), 0 calc(5px * var(--cs)) 0 var(--suit-edge), 0 12px 18px rgba(0,0,0,.5);
+  z-index: 2;
 }
-.card-tick { position: absolute; top: 4px; right: 5px; font-size: 13px; color: #fff; text-shadow: 0 1px 0 rgba(10,12,20,.5); }
+.card.refuse { animation: tondo-refuse 161ms var(--e-out) 1; }
+.card-tick {
+  position: absolute; top: calc(6px * var(--cs)); right: calc(7px * var(--cs)); z-index: 1;
+  font-size: calc(13px * var(--cs)); color: var(--gold); display: none;
+}
+.card.is-playable .card-tick { display: block; }
 
-.action-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; justify-content: center; }
-.action-row[hidden] { display: none; }
-.btn-draw { color: #5d6789; background: #101426; border: 2px solid #2a3355; }
-.btn-draw:not(:disabled) { color: #0d0f1a; background: var(--focus); border-color: transparent; box-shadow: 0 3px 16px rgba(0,0,0,.5); }
-.message { flex: 0 1 auto; max-width: 560px; min-width: 0; font-size: 14px; font-weight: 600; color: var(--dim-2); }
-.message.bad { color: #ff6f9a; }
-.message.good { color: var(--basil); }
-.foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #212841; flex-wrap: wrap; }
-.hint { flex: 1 1 auto; font-size: 12px; color: #4e5878; }
+.action-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
+.btn-draw {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 18px; border-radius: 14px;
+  background: rgba(255,247,232,.06); border: 1px solid var(--hair-2);
+  font-family: var(--font-body); font-weight: 700; font-size: 14px; color: rgba(255,247,232,.7);
+}
+.btn-draw[hidden] { display: none; }
+#screen-game .btn-draw:not(:disabled):hover { border-color: rgba(255,247,232,.36); color: var(--ink); }
+.draw-chip-back {
+  --cw: 64px; --cs: calc(var(--cw) / 96px);
+  width: 24px; height: 34px; flex: 0 0 auto; border-radius: 6px;
+  background-size: 9px 9px; border-width: 2px; box-shadow: none; transform: rotate(-7deg);
+}
+.draw-chip-back::after { display: none; }
+.message { flex: 0 1 auto; max-width: 560px; min-width: 0; font-family: var(--font-body); font-size: 13px; font-weight: 500; color: rgba(255,247,232,.6); }
+.message.bad { color: #F0A092; }
+.message.good { color: var(--bas-solid); }
+.foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hair); flex-wrap: wrap; }
+.hint { flex: 1 1 auto; font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 15px; color: var(--ink-3); }
 
 .net-banner {
-  position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 40;
-  font-size: 13px; font-weight: 700; color: #0d0f1a; background: var(--accent);
-  padding: 8px 16px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  position: fixed; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 40;
+  font-family: var(--font-body); font-size: 13px; font-weight: 700; color: var(--navy); background: var(--gold);
+  padding: 8px 16px; border-radius: 999px; box-shadow: 0 6px 16px rgba(0,0,0,.5);
 }
-.net-banner[hidden] { display: none; }
+
+/* ------------------------------------------------------------ how to play */
+.help-dialog {
+  width: min(92vw, 440px); max-height: min(82dvh, 620px); overflow-y: auto;
+  border: 1px solid var(--hair-2); border-radius: 18px;
+  background: var(--shell); color: var(--ink); padding: 22px;
+  box-shadow: 0 30px 70px rgba(0,0,0,.55);
+}
+/* A modal is not anchored to a trigger, so it keeps transform-origin: center
+   and enters from scale(.97) — never from scale(0). */
+.help-dialog[open] { animation: tondo-appear 200ms var(--e-out) 1; }
+.help-dialog::backdrop { background: rgba(7,12,22,.8); }
+.help-title { margin: 0 0 12px; font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: .04em; color: var(--gold); }
+.help-list { margin: 0 0 16px; padding-left: 18px; display: flex; flex-direction: column; gap: 9px; }
+.help-list li { font-family: var(--font-body); font-size: 13.5px; line-height: 1.5; color: rgba(255,247,232,.7); }
+.help-list b { color: var(--ink); }
 
 /* --------------------------------------------------------------- compact */
-@media (max-width: 719px), (max-height: 700px) {
-  :root { --card-w: 70px; --card-h: 98px; }
-  .tray { padding: 8px 10px 10px; }
-  .deck { display: none; }
-  .top-card { width: 68px; height: 95px; }
-  .seat { width: 88px; }
-  .seat-left { left: 20%; }
-  .seat-right { left: 80%; }
-  .pip { width: 17px; height: 24px; }
-  .pip + .pip { margin-left: -6px; }
-  .fan { min-height: 24px; }
-  .portrait-sm { width: 24px; height: 24px; left: -7px; }
-  .card-ghost { font-size: 64px; }
-  .card-glyph { font-size: 18px; }
-  .card-suit { font-size: 12px; }
-  .card-index { font-size: 10px; }
-  .banner { font-size: 18px; padding: 12px 18px; }
-  .match-suit, .match-value { font-size: 15px; }
-  .match-glyph { font-size: 14px; }
-  .dir { display: none; }
-  .label-row, .action-row { justify-content: space-between; }
-  .hand-row { justify-content: flex-start; padding-top: 14px; }
-  .wild-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
-  .bar-wild { flex-direction: column; align-items: stretch; }
-  .strip-code { display: none; }
-  .wordmark { font-size: 44px; }
-  .drawn-card { width: 50px; height: 70px; }
+@media (min-width: 720px) and (min-height: 701px) {
+  .btn-draw { display: none; }
+  /* The single-column desktop band takes a bigger share of the stage than the
+     .88 the base rule allows. The 12% the base reserves was drawn for the top
+     seat's plate to sit ABOVE the circumference — but on any window this shape
+     the seat's own clamp (`top: max(50% - d/2, --seat-tile)`) is already the
+     binding term, so the reserve was buying the seat nothing and costing the
+     table 6% of its diameter. Measured at 1800x900: the clamp resolves to the
+     62px tile floor either way, so the seat does not move at all between .88
+     and .94 — only the pie grows (445.68px -> 476.9px). The single-column
+     layout is unchanged; this is the vertical tuning the truncated comment at
+     the end of this file was reaching for. */
+  .stage { --table-fit: min(92vw, calc(var(--stage-h) * .94), 960px); }
 }
 
+/* (Removed: five blocks that re-declared --card-w / --top-card-w / --deck-w /
+   --seat-tile / --seat-back / --seat-edge / --you-tile and a fresh --table-d
+   at 820px, 900px, 989px, 720px and 641px cut-offs. Every one of those values
+   is now a continuous function of --table-fit or of --card-w, so the steps
+   are not just redundant — they were the bug: the furniture jumped at a
+   viewport boundary instead of following the space. What survives below is
+   only what is genuinely STRUCTURAL: a piece that disappears, a stacking
+   direction that changes, a region that starts scrolling.) */
+
+/* Context panels are intentionally allowed to take priority on shorter
+   laptops: while a decision bar is open the table gives up the height the bar
+   took (see --bar-h) and the direction legend steps aside. */
+@media (min-width: 720px) and (min-height: 641px) and (max-height: 900px) {
+  .stage.is-compressed .dir { display: none; }
+}
+@media (min-width: 720px) and (min-height: 641px) and (max-height: 820px) {
+  .stage.is-compressed .oven-mark { opacity: 0; }
+}
+
+@media (max-width: 719px), (max-height: 700px) {
+  /* Phones show the draw button and a taller tray, so the constant in
+     --chrome-h is re-measured for this band: strip 47px (not 53) and 24px more
+     tray furniture = +18px net. Verified at 375x812, where 277 + 1.4375 x 74
+     = 383.4px reproduces the measured strip+tray exactly. */
+  :root { --chrome-h: calc(277px + var(--card-w) * 1.4375); }
+
+  /* A phone is not a small desktop: the reference sheet's proportions
+     (.219 / .135 / .08) are tuned for a table that is a fraction of a wide
+     stage, and applying them to a 345px table gives a 37px avatar — smaller
+     than today's, which is the opposite of the point. The board keeps its
+     RELATIVE hierarchy here but at a heavier ratio, because legibility and
+     touch targets do not scale with the pizza. These reproduce today's
+     46px tile / 34px back / 92px discard at the table size this band
+     produces, and they still slide continuously instead of stepping. */
+  .stage {
+    min-height: 180px;
+    --top-card-w: clamp(58px, calc(var(--table-fit) * .27), 110px);
+    --seat-tile:  clamp(36px, calc(var(--table-fit) * .135), 52px);
+    --seat-back:  clamp(20px, calc(var(--table-fit) * .1),    40px);
+  }
+  /* The callout bar wraps two buttons on a phone: measured 143.8px, not the
+     78.5px a desktop bar costs. */
+  .stage.is-compressed { --bar-h: 150px; }
+  .strip { padding-block: calc(8px + env(safe-area-inset-top)) 8px; padding-inline: calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-left)); }
+  .strip-inner { gap: 9px; }
+  .strip-mark { font-size: 15px; letter-spacing: .1em; }
+  .chip { padding: 4px 10px; }
+  .chip .txt { font-size: 12px; }
+  .chip-next { display: none; }
+  .tray { padding: 10px calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+  .deck { display: none; }
+  /* Fluid rather than flat 20px: with `white-space: nowrap` above, the type is
+     what has to give on the narrowest phones so a long winner's name still
+     fits the viewport. */
+  .banner { font-size: clamp(15px, 5.4vw, 20px); padding: 12px 18px; }
+  .match-suit, .match-value { font-size: 14px; }
+  .plaque { gap: 7px; padding: 6px 12px 7px; }
+  .plaque-row, .plaque-pair { gap: 6px; }
+  .plaque-row { --gap-eat: 6px; }
+  .match-glyph { width: 13px; height: 13px; }
+  .plaque-label { font-size: 8px; letter-spacing: .16em; }
+  .dir { display: none; }
+  .ribbon { font-size: 15px; }
+  .oven-mark { display: none; }
+  /* Only the width cap is a phone fact; the pill's padding, type and badge all
+     follow --ss now. */
+  /* --min-orbit: the centre column's own half-width, so a side seat can never
+     be pulled in on top of it. Measured on a phone: the MATCH plaque renders
+     165.2px wide (82.6 half) plus a 19.5px half-tile plus ~8px of air. */
+  .stage { --pill-max: 128px; --min-orbit: 110px; }
+  /* The fan leans 2.6deg per step here rather than 4deg, so the overhang ratio
+     is smaller, but not as small as the old flat 18px: measured worst case is
+     20.74px at --card-w 74 (a 10-card hand overshot by 1.5px at .26), so the
+     ratio is .31. */
+  .hand-row { justify-content: flex-start; gap: 5px; padding: 20px calc(var(--card-w) * .31) 14px; }
+  .card { transform: translateX(var(--shake-x, 0px)) rotate(calc(var(--off, 0) * 2.6deg + var(--jit, 0deg))) translateY(calc(var(--card-lift) + var(--abs-off, 0) * 2px - 3px)) scale(var(--card-scale)); }
+  .card.is-playable, .card.is-playable:hover { --card-lift: -11px; }
+  .card.is-playable:active, .card.is-armed { --card-lift: -18px; }
+  .wild-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+  .bar-wild { flex-direction: column; align-items: stretch; }
+  .wild-grid [data-wild-cancel] { grid-column: 1 / -1; }
+  .strip-code { display: none; }
+  .wordmark { font-size: 44px; }
+  .drawn-card { --cw: calc(var(--card-w) + 8px); }
+  .you-name { max-width: 96px; font-size: 12px; }
+  .you-status { font-size: 12.5px; }
+  .hand-label, .playable-label { font-size: 9px; letter-spacing: .16em; }
+  .you-strip { gap: 9px; padding-bottom: 8px; }
+  .help-dialog { padding: 18px; }
+  .foot { margin-top: 8px; padding-top: 8px; }
+  .hint { font-size: 13px; }
+}
+
+/* A decision bar shortens the stage below the table's own height, so the top
+   seat's clamp drags it down off the circumference and into the MATCH plaque's
+   band. The plaque cannot move (the side seats own the band below it), so the
+   seats give way instead — the same "context bars take priority" trade the
+   table already makes. Measured at 375x812: pill bottom 67px vs plaque top
+   68.5px, stage-relative. */
 @media (max-width: 719px) {
-  .ring { height: min(92%, 86vw, 42vh); }
-  .seat-status { padding: 2px 8px; gap: 4px; }
-  .seat-name { font-size: 11.5px; }
-  .seat-verb { font-size: 11px; }
+  .stage.is-compressed { --pill-max: 118px; }
+  /* the top seat has the whole width above the plaque, so it keeps its words */
+  .stage.is-compressed .seat-top .seat-status { max-width: 170px; }
+}
+
+/* A side seat's card fan sits BESIDE its tile, so the plate's centre is the
+   pair's centre and the tile itself is carried ~22px toward the middle of the
+   table (measured at 360x700: tile at 241.9-280.9 for a seat point of 281.2).
+   On a phone whose stage a decision bar has already shortened, that 22px is
+   the whole margin between the tile and the MATCH plaque. The fan goes; the
+   count badge still carries the number — the same trade this file already
+   makes on the shortest phones. */
+@media (max-width: 719px) and (max-height: 780px) {
+  .stage.is-compressed .fan { display: none; }
+}
+
+/* On short portrait/tablet screens, contextual trays scroll internally rather
+   than pushing the table or the primary controls out of the viewport. */
+/* (band raised from 700px to 780px: a 360x740 phone has the same problem the
+   700px cut-off was drawn for — the callout bar pushed the tray to 480px, the
+   stage down to 212px, and the top seat's clamp put its status pill 20.4px
+   into the MATCH plaque. Capping the tray and letting it scroll puts that
+   viewport back in the regime the rules below already solve.) */
+@media (max-width: 719px) and (min-height: 541px) and (max-height: 780px) {
+  .stage.is-compressed + .tray {
+    min-height: 0;
+    max-height: calc(100dvh - 277px - env(safe-area-inset-top));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* The tray scrolls internally here, so it stops growing past the cap above —
+     which means the table must stop paying for the bar at that point too.
+     Once the cap binds, the stage is exactly 100dvh - 47px strip - (100dvh -
+     277px) = 230px whatever the bar contains, so that is the floor. Without it
+     the model kept subtracting a bar the tray had already absorbed and the
+     table shrank to 176px, which pulled both side seats off the circumference
+     and onto the MATCH plaque (14.1px overlap, measured at 360x640). */
+  .stage.is-compressed {
+    min-height: 220px;
+    --bar-h: 96px;
+    --stage-h: max(230px, calc(100dvh - var(--chrome-h) - var(--bar-h)));
+  }
+  .stage.is-compressed .center { top: 58%; }
+}
+
+/* Very short portrait phones trade one size step back instead of clipping the
+   tray. */
+@media (max-width: 559px) and (max-height: 640px) {
+  /* The tray gives up padding here, so the constant drops again: measured
+     265 + 1.4375 x 66 = 359.9 against an observed strip+tray of 357.9. */
+  :root {
+    --card-w: clamp(66px, min(13vw, 10.4dvh), 132px);
+    --chrome-h: calc(265px + var(--card-w) * 1.4375);
+  }
+  .tray { padding-block: 8px; }
+  .hand-row { padding-top: 16px; }
+  /* Here the stage is shorter than the table itself, so the seats are clamped
+     off their circumference and land on the MATCH plaque. They give up their
+     card fans — the count badge still carries the number — which shrinks each
+     seat to its tile and lifts it clear. */
+  .fan { display: none; }
+  .stage, .stage.is-compressed { --pill-max: 98px; }
+  /* On a stage this short the top seat is clamped hard against the stage top
+     and its status pill reaches down into the band the MATCH plaque wants.
+     Nothing can be made smaller here that is still readable, so the centre
+     column moves down out of the way instead — the same trade the compressed
+     rule below already makes. Measured at 320x568: pill 46-66px, plaque
+     71.5-100.3px stage-relative, and the column still ends 13px clear of the
+     ribbon. */
+  .center { top: 64%; }
+  .stage.is-compressed .center { top: 60%; }
+
+  /* Keep every Wild choice in the first view on the shortest phones. */
+  .bar-wild {
+    display: grid;
+    grid-template-columns: var(--wild-card-w) minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: start;
+    column-gap: 10px;
+    row-gap: 6px;
+  }
+  .bar-wild .wild-row { display: contents; }
+  .bar-wild .wild-card { grid-column: 1; grid-row: 1 / span 2; }
+  .bar-wild .wild-row .bar-head { grid-column: 2; grid-row: 1; align-self: center; }
+  .bar-wild .wild-grid { grid-column: 2; grid-row: 2; gap: 6px; }
+}
+
+/* Short landscape phones, split-screen windows AND ordinary wide desktop
+   windows need a structural change, not smaller type. The table and hand sit
+   side-by-side, each with its own stable region; decision bars may scroll
+   inside the hand region when needed.
+
+   The third clause is the important one. The portrait stack gives the stage
+   `100dvh - chrome`, and the chrome is ~390px of strip + tray, so on a WIDE,
+   SHORT window the table is height-bound long before it is width-bound: at
+   1800x876 the ring measured 428px = 23.8% of the stage width and 87.7% of its
+   height. The board was already using all the height it had; the space being
+   wasted was horizontal, and no amount of tuning the portrait model can reach
+   it. Only moving the tray out of the vertical budget can.
+
+   Why aspect-ratio 3/2 rather than a width or a height cut-off: the condition
+   has to describe the SHAPE that wastes width, not the size of the screen.
+   Measured ratios in the sweep — 1800x876 = 2.05, 1920x900 = 2.13,
+   1366x768 = 1.78, 2560x1440 = 1.78, 1680x1050 and 1440x900 = 1.60 — all want
+   the split; 1280x900 = 1.42, 1024x768 = 1.33 and every portrait shape do not,
+   and they keep the single-column layout. 3/2 sits in the gap between 1.42 and
+   1.60 with headroom on both sides, so no common laptop shape lands on the
+   boundary (16:10 at exactly 1.60 would). min-width 1100px is the second half
+   of the test: below it the two columns are not both viable, and a small
+   landscape window is already served by the first two clauses. */
+/* Two columns are for windows with no vertical room — landscape phones and
+   short laptops. Wide-but-tall desktops deliberately KEEP the single column
+   (table above, hand below): the user wants that layout everywhere it fits. */
+@media (max-height: 540px) and (min-width: 560px),
+       (max-height: 720px) and (min-width: 720px) {
+  /* The tray is a scrolling side column here, so it no longer competes with
+     the stage for height and --chrome-h stops applying: the stage is simply
+     the viewport minus the strip. */
+  :root { --card-w: clamp(68px, min(9vw, 16dvh), 96px); }
+
+  body[data-screen="game"] #screen-game {
+    display: grid;
+    grid-template-columns: minmax(272px, 46vw) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .strip { grid-column: 1 / -1; padding-block: 5px; }
+
+  /* The tray is its own scrolling column here, so the stage never shrinks and
+     the table has no reason to contract — this must also outrank the
+     portrait `is-compressed` steps above. */
+  .stage, .stage.is-compressed {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
+    /* The stage is one grid column of 46vw and everything below the 5px-padded
+       strip (measured 41px tall), so both terms are re-derived rather than
+       inherited from the portrait model. --bar-h is neutralised: a bar scrolls
+       inside the tray column and never takes stage height. */
+    --bar-h: 0px;
+    --stage-h: calc(100dvh - 41px);
+    --table-fit: min(43vw, calc(var(--stage-h) * .86), 960px);
+  }
+  .stage.is-compressed .center { top: 50%; }
+  .stage.is-compressed .dir { display: none; }
+
+  .tray {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-top: 0;
+    border-left: 1px solid var(--hair);
+    padding: 8px 12px 10px;
+  }
+  .tray > * { max-width: none; }
+  .you-strip { padding-bottom: 6px; }
+  .label-row { justify-content: space-between; }
+  .hand-row { gap: 5px; padding: 16px calc(var(--card-w) * .31) 12px; }
+  .oven-mark { display: none; }
+  .ribbon { font-size: 14px; }
+  .action-row { margin-top: 6px; justify-content: flex-start; }
+  .btn-draw { display: none; }
+  .deck { display: block; left: 12px; bottom: 12px; }
+  /* The table fills this column almost edge to edge, so the seats keep their
+     tiles and give up their card fans — the count badge carries the number. */
+  .fan { display: none; }
+  /* the deck owns the bottom-left corner here, so the table's line moves off
+     centre rather than running underneath it */
+  .ribbon { left: auto; right: 10px; transform: none; text-align: right; max-width: calc(100% - 92px); }
+  .foot { margin-top: 6px; padding-top: 6px; }
+  .bar { margin-top: 6px; padding: 8px 10px; }
+  .bar-tondo .bar-sub, .bar-callout .bar-sub { display: none; }
+  /* (the drawn card and the Wild preview follow --card-w / --wild-card-w here;
+     at this band's 68px hand card those land on 68 and 50, the values this
+     block used to hard-code) */
+  .wild-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .wild-grid .btn { min-width: 0; padding-inline: 2px; font-size: 11px; }
+}
+
+@media (max-height: 540px) and (min-width: 560px) and (max-width: 599px) {
+  .center { top: 58%; }
 }

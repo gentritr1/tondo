@@ -6,18 +6,10 @@
 <title>TONDO</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wght@500;600;700&family=VT323&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=DM+Mono:wght@500&family=DM+Sans:wght@400;500;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body data-screen="home">
-
-<!-- preloaded so a portrait never pops in a frame late -->
-<div class="art-preload" aria-hidden="true">
-  <img alt="" src="./assets/avatar-chef-bot.png">
-  <img alt="" src="./assets/carmela.png">
-  <img alt="" src="./assets/dominic.png">
-  <img alt="" src="./assets/pina.png">
-</div>
 
 <!-- ------------------------------------------------------------------ HOME -->
 <section id="screen-home" class="screen home">
@@ -43,6 +35,7 @@
     </div>
 
     <p id="home-msg" class="msg" role="status" aria-live="polite"></p>
+    <button type="button" class="btn btn-tiny" data-help-open>How to play</button>
   </div>
 </section>
 
@@ -50,6 +43,7 @@
 <section id="screen-lobby" class="screen lobby">
   <div class="lobby-card">
     <div class="lobby-head">
+      <div class="lobby-mark">TONDO</div>
       <div class="field-label">Table code</div>
       <div class="code-row">
         <span id="room-code" class="code">&mdash;</span>
@@ -59,11 +53,12 @@
 
     <ul id="seat-list" class="seat-list"></ul>
 
-    <div id="host-controls" class="lobby-actions">
+    <p id="lobby-hint" class="msg"></p>
+    <div id="host-controls" class="lobby-actions fx-panel">
       <button id="addbot-btn" type="button" class="btn">Add bot</button>
       <button id="start-btn" type="button" class="btn btn-primary">Start game</button>
     </div>
-    <p id="lobby-wait" class="msg">Waiting for the host to start&hellip;</p>
+    <p id="lobby-wait" class="msg fx-panel">Waiting for the host to start&hellip;</p>
 
     <p id="lobby-msg" class="msg" role="status" aria-live="polite"></p>
     <button id="leave-btn" type="button" class="btn btn-ghost btn-block">Leave table</button>
@@ -74,13 +69,36 @@
 <section id="screen-game" class="screen game">
 
   <div class="strip">
-    <div class="strip-mark">TONDO</div>
-    <div id="queue" class="queue"></div>
-    <div id="strip-code" class="strip-code"></div>
+    <div class="strip-inner">
+      <div class="strip-mark">TONDO</div>
+      <div id="queue" class="queue"></div>
+      <div id="strip-code" class="strip-code"></div>
+      <button type="button" class="btn btn-tiny strip-help" data-help-open aria-label="How to play">?</button>
+    </div>
   </div>
 
   <div id="stage" class="stage">
-    <div id="ring" class="ring"></div>
+    <!-- The Slice Ledger board: stone rim → cartoon crust → sauce, with one
+         wedge per player. Every layer is CSS so it can squash, ripple and
+         scale with --table-d. Purely decorative; #ring keeps its id and its
+         pointer-events:none. -->
+    <div id="ring" class="ring" aria-hidden="true">
+      <div class="ring-gold"></div>
+      <div class="crust">
+        <div class="crust-char"></div>
+        <div class="crust-flour"></div>
+        <div class="sauce">
+          <div class="sauce-cheese"></div>
+          <div id="wedge-tones" class="wedge-tones"></div>
+          <div class="sauce-slices"></div>
+          <div id="wedge-glow" class="wedge-glow"><span class="wedge-edge"></span></div>
+          <div class="sauce-tint"></div>
+          <div id="ledger" class="ledger"></div>
+          <div class="sauce-vignette"></div>
+          <div class="oven-mark">TONDO</div>
+        </div>
+      </div>
+    </div>
 
     <div class="center">
       <div id="plaque" class="plaque">
@@ -93,7 +111,7 @@
             <span id="match-glyph" class="match-glyph"></span>
             <span id="match-suit" class="match-suit"></span>
           </div>
-          <div id="match-or-wrap" class="plaque-pair">
+          <div id="match-or-wrap" class="plaque-pair fx-tight">
             <span class="match-or">or</span>
             <span id="match-value" class="match-value"></span>
           </div>
@@ -101,11 +119,24 @@
       </div>
 
       <div class="pile">
-        <div id="deck" class="deck"><span class="deck-text">Deck<br><b id="deck-count">0</b></span></div>
+        <!-- the two cards already buried under the top one -->
+        <div id="under-2" class="under-card" aria-hidden="true" hidden>
+          <div class="card-index"></div>
+          <div class="card-glyph"></div>
+          <div class="card-suit"></div>
+          <div class="card-ghost"></div>
+        </div>
+        <div id="under-1" class="under-card" aria-hidden="true" hidden>
+          <div class="card-index"></div>
+          <div class="card-glyph"></div>
+          <div class="card-suit"></div>
+          <div class="card-ghost"></div>
+        </div>
         <div id="top-card" class="top-card">
           <div id="top-index" class="card-index"></div>
           <div id="top-glyph" class="card-glyph"></div>
           <div id="top-suit" class="card-suit"></div>
+          <div id="top-ghost" class="card-ghost"></div>
         </div>
       </div>
 
@@ -115,31 +146,45 @@
       </div>
     </div>
 
+    <!-- the draw pile stands beside the oven, clear of the seats' orbit -->
+    <button id="deck" type="button" class="deck" aria-label="Draw a card">
+      <span class="deck-face back-face" aria-hidden="true"></span>
+      <span class="deck-text"><b id="deck-count">0</b></span>
+    </button>
+
     <div id="seats"></div>
-    <div id="event-ribbon" class="ribbon"></div>
+    <div id="turn-token" class="turn-token" aria-hidden="true" hidden></div>
+    <div id="event-ribbon" class="ribbon fx-fade"></div>
     <div id="banner" class="banner" hidden></div>
   </div>
 
   <div class="tray">
     <p id="live-polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
     <p id="live-alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></p>
+    <!-- event-time announcements (your turn, rejections); never rewritten by repaints -->
+    <p id="live-now" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></p>
 
     <div id="you-strip" class="you-strip">
-      <span id="you-ticket" class="you-ticket"></span>
-      <span id="you-portrait" class="you-portrait"></span>
-      <span id="you-name" class="you-name">You</span>
-      <span id="you-pips" class="you-pips"></span>
-      <span id="you-count" class="you-count"></span>
-      <span id="you-status" class="you-status"></span>
-    </div>
+      <span id="you-ticket" class="you-ticket" aria-hidden="true"></span>
+      <span class="you-seat">
+        <span id="you-portrait" class="you-portrait" aria-hidden="true"></span>
+        <span id="you-count" class="you-count" aria-hidden="true"></span>
+      </span>
+      <span id="you-count-text" class="sr-only"></span>
+      <span class="you-pill">
+        <span id="you-name" class="you-name">You</span>
+        <span id="you-status" class="you-status fx-fade"></span>
+      </span>
+      <span id="you-pips" class="you-pips" aria-hidden="true"></span>
 
-    <div class="label-row">
-      <div id="hand-label" class="hand-label">Your hand</div>
-      <div id="playable-label" class="playable-label"></div>
+      <div class="label-row">
+        <div id="hand-label" class="hand-label txt-fade">Your hand</div>
+        <div id="playable-label" class="playable-label txt-fade"></div>
+      </div>
     </div>
 
     <!-- contextual bars -->
-    <div id="tondo-bar" class="bar bar-tondo" hidden>
+    <div id="tondo-bar" class="bar bar-tondo fx-panel" hidden>
       <div class="bar-text">
         <div class="bar-head">Call TONDO before you play</div>
         <div class="bar-sub">Two cards left. Forget it and anyone can catch you for +2.</div>
@@ -147,7 +192,7 @@
       <button id="tondo-btn" type="button" class="btn btn-tondo">Call TONDO</button>
     </div>
 
-    <div id="callout-bar" class="bar bar-callout" hidden>
+    <div id="callout-bar" class="bar bar-callout fx-panel" hidden>
       <div class="bar-text">
         <div id="callout-head" class="bar-head">Forgot TONDO &mdash; call them out</div>
         <div id="callout-sub" class="bar-sub">On one card, never said it.</div>
@@ -155,11 +200,12 @@
       <div id="callout-buttons" class="bar-buttons"></div>
     </div>
 
-    <div id="drawn-bar" class="bar bar-drawn" hidden>
+    <div id="drawn-bar" class="bar bar-drawn fx-panel" hidden>
       <div id="drawn-card" class="drawn-card">
         <div id="drawn-index" class="card-index"></div>
         <div id="drawn-glyph" class="card-glyph"></div>
         <div id="drawn-suit" class="card-suit"></div>
+        <div id="drawn-ghost" class="card-ghost"></div>
       </div>
       <div class="bar-text">
         <div id="drawn-msg" class="drawn-msg"></div>
@@ -170,38 +216,54 @@
       </div>
     </div>
 
-    <div id="wild-bar" class="bar bar-wild" hidden>
+    <div id="wild-bar" class="bar bar-wild fx-panel" hidden>
       <div class="wild-row">
         <div class="wild-card">
           <div class="card-index" id="wild-corner"></div>
           <div class="card-glyph" id="wild-centre"></div>
           <div class="card-suit">WILD</div>
+          <div class="card-ghost" id="wild-ghost"></div>
         </div>
         <div id="wild-title" class="bar-head">Pick the next topping</div>
       </div>
       <div id="wild-grid" class="wild-grid" role="group" aria-labelledby="wild-title"></div>
     </div>
 
-    <div id="hand-wrap" class="hand-wrap">
+    <div id="hand-wrap" class="hand-wrap fx-panel">
       <div id="hand-row" class="hand-row"></div>
-      <div id="fade-left" class="fade fade-left" hidden></div>
-      <div id="fade-right" class="fade fade-right" hidden></div>
+      <div id="fade-left" class="fade fade-left fx-fade" hidden></div>
+      <div id="fade-right" class="fade fade-right fx-fade" hidden></div>
     </div>
 
-    <div id="action-row" class="action-row">
-      <button id="draw-btn" type="button" class="btn btn-draw">Draw a card</button>
-      <button id="newround-btn" type="button" class="btn btn-primary" hidden>New round</button>
-      <div id="message" class="message"></div>
+    <div id="action-row" class="action-row fx-panel">
+      <button id="draw-btn" type="button" class="btn btn-draw fx-fade">
+        <span class="draw-chip-back back-face" aria-hidden="true"></span>
+        <span>Draw a card</span>
+      </button>
+      <button id="newround-btn" type="button" class="btn btn-primary fx-fade" hidden>New round</button>
+      <div id="message" class="message txt-fade"></div>
     </div>
 
     <div class="foot">
-      <div id="hint" class="hint"></div>
+      <div id="hint" class="hint txt-fade"></div>
       <button id="game-leave" type="button" class="btn btn-tiny">Leave</button>
     </div>
   </div>
 </section>
 
-<div id="net-banner" class="net-banner" hidden></div>
+<div id="net-banner" class="net-banner fx-fade" role="status" aria-live="polite" hidden></div>
+
+<dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title">
+  <h2 id="help-title" class="help-title">How to play</h2>
+  <ul class="help-list">
+    <li><b>Match the top card</b> by topping (colour) or by number — or play a Wild and pick the next topping.</li>
+    <li>Nothing to play? <b>Draw one card.</b> If it fits you may play it at once; otherwise keep it and pass.</li>
+    <li><b>⊘ Skip</b> makes the next player lose their turn. <b>+2</b> makes them draw two and lose their turn. <b>↻ Reverse</b> flips the play order.</li>
+    <li>Down to <b>two cards</b>? Call <b>TONDO</b> before playing one of them. Forget, and anyone who catches you makes you draw two.</li>
+    <li><b>First to zero cards wins</b> the round.</li>
+  </ul>
+  <button id="help-close" type="button" class="btn btn-primary btn-block">Got it</button>
+</dialog>
 
 <script type="module">
   const params = new URLSearchParams(location.search);

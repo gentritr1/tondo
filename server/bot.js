@@ -15,9 +15,11 @@ const BOT_NAMES = ['Carmela', 'Dominic', 'Pina', 'Chef Bot'];
 /** How often a bot notices a missed TONDO. Rolled once per open window. */
 const CALLOUT_CHANCE = 0.35;
 
-/** Bots pause this long before moving, so the table stays readable. */
-const THINK_MIN_MS = 600;
-const THINK_MAX_MS = 1200;
+/** Bots pause this long before moving, so the table stays readable. A human
+ * casual play lands around 1.5-3s; instant bot moves read as a glitch, not a
+ * turn, so the pause has to be long enough to SEE whose turn it was. */
+const THINK_MIN_MS = 1400;
+const THINK_MAX_MS = 2600;
 
 function pickBotName(usedNames) {
   const taken = new Set(usedNames.map((n) => String(n).toLowerCase()));

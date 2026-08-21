@@ -101,7 +101,7 @@ function buildDeck() {
 /**
  * Starts a round.
  * @param {Array<{id:string,name:string,isBot?:boolean}>} seats 2-4 seats
- * @param {{seed?:number}} options
+ * @param {{seed?:number, startIndex?:number}} options
  */
 function createGame(seats, options = {}) {
   if (seats.length < MIN_PLAYERS) throw new Error('Not enough players.');
@@ -123,7 +123,7 @@ function createGame(seats, options = {}) {
     drawPile: shuffle(buildDeck(), rng),
     discardPile: [],
     activeSuit: null,
-    turnIndex: 0,
+    turnIndex: (Number(options.startIndex) || 0) % seats.length,
     direction: 1,
     drawnCard: null, // { playerId, cardId } while a drawn card may still be played
     status: 'playing', // 'playing' | 'roundOver'
@@ -469,14 +469,20 @@ function removePlayer(state, playerId) {
 function viewFor(state, playerId) {
   const me = findPlayer(state, playerId);
   const seated = activePlayers(state);
+  // The winner stays visible after the round even if they then left, and a
+  // finished round names no turn player: both keep every published id
+  // resolvable against `players`.
+  const visible = state.winnerId && !seated.some((p) => p.id === state.winnerId)
+    ? seated.concat(state.players.filter((p) => p.id === state.winnerId))
+    : seated;
   return {
     direction: state.direction,
     activeSuit: state.activeSuit,
     topCard: topCard(state),
     drawPileCount: state.drawPile.length,
-    turnPlayerId: currentPlayer(state) ? currentPlayer(state).id : null,
+    turnPlayerId: state.status === 'playing' && currentPlayer(state) ? currentPlayer(state).id : null,
     winnerId: state.winnerId,
-    players: seated.map((p) => ({
+    players: visible.map((p) => ({
       id: p.id,
       name: p.name,
       isBot: p.isBot,

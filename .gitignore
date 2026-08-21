@@ -1,2 +1,4 @@
 node_modules/
 .DS_Store
+public/_ref.html
+public/_concept/
