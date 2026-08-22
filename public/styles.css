@@ -140,6 +140,16 @@
   --card-w: clamp(74px, min(13vw, 10.4dvh), 132px);
   --you-tile: clamp(36px, calc(var(--card-w) * .48), 56px);
   --wild-card-w: clamp(50px, calc(var(--card-w) * .646), 84px);
+  /* The deck sits in the tray beside the hand now, so it is sized from the hand
+     card rather than from the table it used to stand on. .7 is the ratio the
+     old `.122 x --table-fit` already worked out to on most desktop bands, so
+     the deck keeps its size to within a few percent — measured, not assumed:
+     1280x720 67.1 -> 67.2, 1920x1080 75.6 -> 78.6, 2000x1290 96.5 -> 92.4,
+     1800x700 69.1 -> 67.2. The outlier is 1440x900 (58.1 -> 65.5, +12.8%),
+     where the old table term was height-starved and made the deck smaller than
+     the hand it belongs to. Tap target: --card-w's 74px floor keeps this at
+     51.8px wide and 74.4px tall, both over 44. */
+  --deck-w: calc(var(--card-w) * .7);
 
   /* How much vertical room the stage does NOT get: the strip plus the tray.
      Measured, not guessed — at --card-w 96px the strip is 53px and the tray
@@ -325,6 +335,12 @@
    supplies the opacity channel for elements that have no other transition;
    elements that are ALSO .fx-fade already have one and just reuse it. */
 .txt-fade { transition: opacity var(--t-text-in) var(--e-out); }
+/* No words IS the resting state, and it is a state the element can transition
+   out of: setText() writes arriving words immediately, the node stops matching
+   :empty, and this opacity is what fades them in. (The reverse — clearing —
+   cannot be left to CSS: the words have to still be in the DOM while they fade,
+   so setText() runs .is-swapping first and clears after --t-text-out.) */
+.txt-fade:empty { opacity: 0; }
 /* Set by setText() in app.js for exactly --t-text-out before the swap. Last in
    the block so it outranks the `opacity: 1` of every rule above. */
 .fx-panel.is-swapping, .fx-fade.is-swapping, .txt-fade.is-swapping {
@@ -457,6 +473,9 @@ body { height: 100dvh; }
     transition-behavior: allow-discrete !important;
   }
   .fx-panel[hidden], .fx-fade[hidden], .btn.fx-fade[hidden] { transform: none !important; }
+  /* The rule above drops `transform` from the .txt-fade transition list, so the
+     reason line's 3px settle would arrive as a step instead of not at all. */
+  .message, .hint { transform: none !important; }
   /* The height still snaps to 0 (that is the point), so the clip has to let go
      or the fade would be invisible behind it. */
   .fx-panel { overflow: visible !important; }
@@ -836,7 +855,8 @@ body[data-screen="game"] { background: var(--page); }
   --seat-floor: clamp(46px, min(4.9vw, 6.9dvh), 62px);
   --seat-tile:  clamp(28px,  max(calc(var(--table-fit) * .108), var(--seat-floor)), 104px);
   --seat-back:  clamp(20px,  calc(var(--table-fit) * .08),   78px);
-  --deck-w:     clamp(44px,  calc(var(--table-fit) * .122), 118px);
+  /* (--deck-w moved to :root: the deck no longer stands on the table, so it can
+     no longer be derived from a variable that only exists inside .stage.) */
   /* Toppings are furniture too: derived from --table-fit, so they snap with
      the rest of the board while the table itself eases. The floor keeps a
      pepperoni at 16px (still a legible disc) on the smallest phone table. */
@@ -1012,31 +1032,46 @@ body[data-screen="game"] { background: var(--page); }
    every sauce stop, while the fill inside stays a .13 wash the sauce is still
    visible through. Three lit sides against a two-sided cut is also the larger
    shape, so it wins the glance as well as the measurement. */
+/* ONE shape, not three layers. The outline used to be built from conic hard
+   stops (the two radial edges) plus a masked radial-gradient ring (the arc),
+   and the three sides could not agree:
+     - a conic edge is ANGULAR, so its width grew with the radius — measured
+       2.57px at half the sauce radius and 5.01px at the rim — while the arc
+       was a 13.6px-wide blurry band. Three sides, three weights.
+     - the conic edge occupied 0deg..1.3deg INSIDE the wedge, so its centre sat
+       .65deg off the boundary the cut is centred on: 1.35px adrift at half
+       radius, 2.53px at the rim, and the two strokes read as a doubled edge.
+     - the edges ran to the sauce rim while the arc stopped 6.5px short of it,
+       so each edge crossed its own arc and stuck out past the corner.
+     - conic hard stops alias: the edge wandered 1.45-1.80px off straight.
+   A stroked SVG sector fixes all four by construction. The stroke is centred
+   ON the path, so each radius lands centred on its boundary; one stroke-width
+   gives all three sides the same weight at every radius; `Z` closes both
+   corners with a real join; and the whole thing is resolution-independent.
+   The rotation, the transition and --glow-rot are untouched — the SVG is a
+   child of the same div, so it sweeps exactly as before. */
 .wedge-glow {
   position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
-  background:
-    conic-gradient(from 0deg,
-      #FFE796 0deg 1.3deg,
-      transparent 1.3deg calc(var(--wedge-span, 90deg) - 1.3deg),
-      #FFE796 calc(var(--wedge-span, 90deg) - 1.3deg) var(--wedge-span, 90deg),
-      transparent var(--wedge-span, 90deg) 360deg),
-    conic-gradient(from 0deg,
-      rgba(245,203,92,.13) 0deg var(--wedge-span, 90deg),
-      transparent var(--wedge-span, 90deg) 360deg);
+  /* viewBox units, where 50 = the sauce radius: 1.26% of it, i.e. 2.75 CSS px
+     on the 437px sauce at 1280x720, and it scales with the pie for free
+     because the viewBox does. */
+  --wedge-stroke: .63;
   transform: rotate(var(--glow-rot, 0deg));
   transition: transform var(--glow-t, 420ms) cubic-bezier(.16, 1, .3, 1),
               opacity var(--t-state) var(--e-out);
 }
-/* The third side of the outline: the arc where the lit slice meets the crust.
-   Masked to the same sector, so it sweeps with the glow and needs no geometry
-   of its own. `closest-side` is load-bearing — the default farthest-corner
-   would put the ring outside the pie. */
-.wedge-glow::before {
-  content: ""; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(circle closest-side,
-    transparent 0 90%, #FFE796 92%, #FFE796 96%, transparent 98%);
-  -webkit-mask-image: conic-gradient(from 0deg, #000 0deg var(--wedge-span, 90deg), transparent var(--wedge-span, 90deg) 360deg);
-          mask-image: conic-gradient(from 0deg, #000 0deg var(--wedge-span, 90deg), transparent var(--wedge-span, 90deg) 360deg);
+.wedge-sector { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+/* The path radius is 49.535 = 49.85 - half the stroke, so the stroke's OUTER
+   edge lands at 49.85 of 50 — .65px inside the sauce rim on a 437px pie, just
+   inside the crust, and nothing gold ever crosses into the bake. app.js writes
+   `d` from the player count (sectorPath); the fill is the same .13 wash the
+   conic carried. */
+.wedge-sector path {
+  fill: rgba(245,203,92,.13);
+  stroke: #FFE796;
+  stroke-width: var(--wedge-stroke);
+  stroke-linejoin: round;
+  stroke-linecap: butt;
 }
 .wedge-glow[data-lit="0"] { opacity: 0; }
 /* The marker on the lit wedge's centre line, out at the rim. It rides inside
@@ -1047,8 +1082,16 @@ body[data-screen="game"] { background: var(--page); }
   position: absolute; left: 50%; top: 0; width: 0; height: 50%;
   transform-origin: 50% 100%; transform: rotate(calc(var(--wedge-span, 90deg) / 2));
 }
+/* `top` is the ONE dimension here that may be a percentage, and now has to be:
+   it resolves against the rail's HEIGHT (50% of the glow = the sauce radius),
+   not its zero width, and the arc it has to clear is also a fraction of that
+   radius. 2.6% puts the bar 1.04% of the radius inside the arc's inner edge
+   (2.3px on the 437px pie) at every pie size; 2 * --tp-u used to put it 0.8px
+   outside an arc that stopped 6.5px short of the rim, and the arc has moved
+   out to the rim. Width and height stay in --tp-u — a percentage width of a
+   zero-width rail is what made the first marker invisible. */
 .wedge-edge::after {
-  content: ""; position: absolute; top: calc(var(--tp-u) * 2);
+  content: ""; position: absolute; top: 2.6%;
   left: calc(var(--tp-u) * -19); width: calc(var(--tp-u) * 38);
   height: calc(var(--tp-u) * 1.6); border-radius: 999px;
   background: var(--gold); box-shadow: 0 0 calc(var(--tp-u) * 8) rgba(245,203,92,.9);
@@ -1180,10 +1223,13 @@ body[data-screen="game"] { background: var(--page); }
    cover — otherwise the ghost flies toward a card that already arrived. */
 .top-card.is-inflight { opacity: 0; }
 
-/* The oven fills the middle of the stage, so the draw pile lives in the
-   bottom-left corner where nothing else ever lands. */
+/* The draw pile is a control, so it lives with the hand rather than on the
+   board. In the stage's bottom-left corner it was ~370-540px from the nearest
+   card of a centred hand on a single-column desktop and ~690-890px in the
+   two-column layout — a reach that reads as "scenery you may click", which is
+   exactly what was reported. See .hand-dock for the placement rules. */
 .deck {
-  position: absolute; left: 26px; bottom: 20px; z-index: 5;
+  position: relative; flex: 0 0 auto; z-index: 5;
   --cw: var(--deck-w);
   --cs: calc(var(--cw) / 96px);
   width: var(--cw); height: calc(var(--cw) * 1.4375);
@@ -1275,7 +1321,19 @@ body[data-screen="game"] { background: var(--page); }
 /* flat CSS topping shapes, proportioned against the mark circle */
 .mk-dot   { width: calc(var(--m) * var(--d)); height: calc(var(--m) * var(--d)); border-radius: 50%; background: var(--pep-mark); }
 .mk-leaf  { width: calc(var(--m) * .7); height: calc(var(--m) * .7); background: var(--bas-mark); border-radius: 66% 6% 66% 6%; transform: rotate(14deg); }
-.mk-wedge { width: calc(var(--m) * .74); height: calc(var(--m) * .64); background: var(--chz-mark); clip-path: polygon(50% 0,100% 100%,0 100%); }
+/* Flex centres the BOX; a triangle's mass is not in the middle of its box. Its
+   centroid sits 2/3 of the way down, i.e. h/6 = .64/6 = 10.67% of the disc
+   below the disc's own centre — it measured 5.5px low on a 56.7px hand card
+   and read as a mark that had slipped. The transform pulls the centroid back
+   onto the centre and then .8% of the disc further up, the usual optical lift
+   an upward point wants; layout is untouched, so nothing else in the disc
+   moves. Only the CARD mark: .tp-shape--cheese on the pie is a separate rule
+   and the ledger places it by its own centre already. */
+.mk-wedge {
+  width: calc(var(--m) * .74); height: calc(var(--m) * .64);
+  background: var(--chz-mark); clip-path: polygon(50% 0,100% 100%,0 100%);
+  transform: translateY(calc(var(--m) * -.115));
+}
 .mk-fish  { width: calc(var(--m) * .56); height: calc(var(--m) * .4); border-radius: 52% 42% 52% 42%; background: var(--anc-mark); }
 .mk-tail  { width: calc(var(--m) * .26); height: calc(var(--m) * .4); background: var(--anc-mark); clip-path: polygon(100% 0,100% 100%,0 50%); }
 /* special-card icons: same circle, the effect drawn in the suit's edge ink */
@@ -1633,7 +1691,27 @@ body[data-screen="game"] { background: var(--page); }
 #screen-game .wild-grid .btn[data-suit="anchovy"]   { background: var(--anc-bg); --suit-edge: var(--anc-edge); }
 
 /* ------------------------------------------------------------------ hand */
-.hand-wrap { position: relative; }
+/* The hand and its draw pile are one group, centred together. The fan keeps its
+   natural width (flex-basis auto) so the deck ends up TOUCHING it rather than
+   parked at the tray's edge — with a six-card hand the nearest card is ~40px
+   away instead of ~500. `flex-wrap` is the fallback for a tray column too
+   narrow to hold both: the deck takes the line below the fan instead of
+   squeezing it, which is what the two-column band uses. --dock-deck is the room
+   the deck needs; the bands that hide it set it to 0 so the fan gets it back. */
+.hand-dock {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 10px;
+  --dock-deck: calc(var(--deck-w) + 10px);
+}
+/* Capped so the pair always fits one line here: without the cap a 16-card fan
+   reaches the cap of --measure, pushes the deck onto a second line and takes
+   another ~90px of tray — which in the single-column bands comes straight out
+   of the stage the oven is sized against. */
+.hand-wrap { position: relative; flex: 0 1 auto; min-width: 0; max-width: calc(100% - var(--dock-deck)); }
+/* While the hand is swapped out for the drawn-card or Wild bar there is nothing
+   to draw into, and a deck left behind would hold ~90px of tray open on its
+   own. (Sibling selector, so it follows #hand-wrap's own `hidden`.) */
+.hand-wrap[hidden] + .deck { display: none; }
 .hand-row {
   display: flex; flex-wrap: nowrap; gap: 6px; align-items: flex-end; justify-content: center;
   /* Inline padding must be >= the fan's rotation overhang, or the end cards'
@@ -1712,11 +1790,32 @@ body[data-screen="game"] { background: var(--page); }
   background-size: 9px 9px; border-width: 2px; box-shadow: none; transform: rotate(-7deg);
 }
 .draw-chip-back::after { display: none; }
-.message { flex: 0 1 auto; max-width: 560px; min-width: 0; font-family: var(--font-body); font-size: 13px; font-weight: 500; color: rgba(255,247,232,.6); }
+.message {
+  flex: 0 1 auto; max-width: 560px; min-width: 0;
+  /* The reason line is a line the layout owns whether or not there are words
+     in it. Without this the row is 0 tall while the message is empty, so every
+     hover that explains a card shoved the hint, the Leave button and (in the
+     bottom-anchored tray) the hand itself by a line height, and pulled them
+     back the moment the pointer left. 1lh is the message's OWN line box, so it
+     tracks the font-size overrides in the bands below. */
+  min-height: 1lh;
+  font-family: var(--font-body); font-size: 13px; font-weight: 500; color: rgba(255,247,232,.6);
+  /* transform is the ≤4px settle on arrival/departure; the colour channel is
+     what makes a tone change (info -> bad) read as the same word going red
+     rather than as a new sentence. Both damped by the reduced-motion block. */
+  transition: opacity var(--t-text-in) var(--e-out),
+              transform var(--t-text-in) var(--e-out),
+              color var(--t-micro) var(--e-out);
+}
 .message.bad { color: #F0A092; }
 .message.good { color: var(--bas-solid); }
 .foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hair); flex-wrap: wrap; }
 .hint { flex: 1 1 auto; font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 15px; color: var(--ink-3); }
+.hint { transition: opacity var(--t-text-in) var(--e-out), transform var(--t-text-in) var(--e-out); }
+/* The settle: words arrive from 3px down and leave the same way. Paired with
+   the opacity above and with .txt-fade:empty, so the resting (wordless) state
+   is also the state the transform starts from — no first-appearance snap. */
+.message:empty, .message.is-swapping, .hint:empty, .hint.is-swapping { transform: translateY(3px); }
 
 .net-banner {
   position: fixed; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 40;
@@ -1806,7 +1905,17 @@ body[data-screen="game"] { background: var(--page); }
   .chip .txt { font-size: 12px; }
   .chip-next { display: none; }
   .tray { padding: 10px calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+  /* The tray's own Draw button is the draw affordance here, so the deck steps
+     out — and the fan takes back the width the dock was reserving for it. */
   .deck { display: none; }
+  .hand-dock { --dock-deck: 0px; }
+  /* Here the draw button shares the action row, so a reason line long enough
+     to need its own line was WRAPPING onto one — 29px of row that appeared and
+     vanished with the pointer, and because this tray is bottom-anchored the
+     whole hand rode up and down with it. The line is reserved instead: the
+     message always has the second row, empty or not. (Whether it would have
+     wrapped depends on the sentence, so the fix cannot be a width tweak.) */
+  .message { flex: 0 0 100%; text-align: center; }
   /* Fluid rather than flat 20px: with `white-space: nowrap` above, the type is
      what has to give on the narrowest phones so a long winner's name still
      fits the viewport. */
@@ -2020,13 +2129,28 @@ body[data-screen="game"] { background: var(--page); }
   .oven-mark { display: none; }
   .ribbon { font-size: 14px; }
   .action-row { margin-top: 6px; justify-content: flex-start; }
+  /* This band overlaps the phone band (a 1800x700 window matches both) but has
+     no draw button in the row, so the message goes back to sharing the line —
+     it is the only thing in it. */
+  .message { flex: 0 1 auto; text-align: left; }
   .btn-draw { display: none; }
-  .deck { display: block; left: 12px; bottom: 12px; }
+  /* The hand already fills this column's width, so the deck takes the line
+     below the fan (--dock-deck: 0 stops the dock reserving width for it) and
+     the tray column — which scrolls and does not compete with the stage for
+     height — pays for it. Distance to the nearest card: ~65px. */
+  .deck { display: block; }
+  /* flex-basis, not just the 0 reservation: whether a fan of N cards happens to
+     leave room for the deck must not decide the layout, or the deck hops
+     between "beside" and "below" — and the whole tray column with it — as the
+     hand shrinks. The fan owns the line here, always. */
+  .hand-dock { --dock-deck: 0px; }
+  .hand-wrap { flex-basis: 100%; }
   /* The table fills this column almost edge to edge, so the seats keep their
      tiles and give up their card fans — the count badge carries the number. */
   .fan { display: none; }
-  /* the deck owns the bottom-left corner here, so the table's line moves off
-     centre rather than running underneath it */
+  /* The bottom-left corner is free now that the deck has moved to the tray, but
+     the line stays off centre: it is the only thing in that corner and it reads
+     better against the rim than across it. */
   .ribbon { left: auto; right: 10px; transform: none; text-align: right; max-width: calc(100% - 92px); }
   .foot { margin-top: 6px; padding-top: 6px; }
   .bar { margin-top: 6px; padding: 8px 10px; }

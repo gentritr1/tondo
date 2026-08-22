@@ -100,7 +100,7 @@
           <div class="sauce-cheese"></div>
           <div id="wedge-tones" class="wedge-tones"></div>
           <div class="sauce-slices"></div>
-          <div id="wedge-glow" class="wedge-glow"><span class="wedge-edge"></span></div>
+          <div id="wedge-glow" class="wedge-glow"><svg class="wedge-sector" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" focusable="false"><path id="wedge-sector" d="M50 50L50 .465A49.535 49.535 0 0 1 99.535 50Z"></path></svg><span class="wedge-edge"></span></div>
           <div class="sauce-tint"></div>
           <div id="ledger" class="ledger"></div>
           <div class="sauce-vignette"></div>
@@ -154,12 +154,6 @@
         <span id="dir-label" class="dir-label">Clockwise</span>
       </div>
     </div>
-
-    <!-- the draw pile stands beside the oven, clear of the seats' orbit -->
-    <button id="deck" type="button" class="deck" aria-label="Draw a card">
-      <span class="deck-face back-face" aria-hidden="true"></span>
-      <span class="deck-text"><b id="deck-count">0</b></span>
-    </button>
 
     <div id="seats"></div>
     <div id="turn-token" class="turn-token" aria-hidden="true" hidden></div>
@@ -240,10 +234,21 @@
       <div id="wild-grid" class="wild-grid" role="group" aria-labelledby="wild-title"></div>
     </div>
 
-    <div id="hand-wrap" class="hand-wrap fx-panel">
-      <div id="hand-row" class="hand-row"></div>
-      <div id="fade-left" class="fade fade-left fx-fade" hidden></div>
-      <div id="fade-right" class="fade fade-right fx-fade" hidden></div>
+    <!-- The draw pile rides with the hand, not with the oven: it is the second
+         thing a player reaches for on their turn, and in the stage's corner it
+         was up to 900px from the nearest card on a wide screen. It follows the
+         fan (or drops to the line below it when the fan needs the width), and
+         the phone band swaps it for the tray's own Draw button. -->
+    <div class="hand-dock">
+      <div id="hand-wrap" class="hand-wrap fx-panel">
+        <div id="hand-row" class="hand-row"></div>
+        <div id="fade-left" class="fade fade-left fx-fade" hidden></div>
+        <div id="fade-right" class="fade fade-right fx-fade" hidden></div>
+      </div>
+      <button id="deck" type="button" class="deck" aria-label="Draw a card">
+        <span class="deck-face back-face" aria-hidden="true"></span>
+        <span class="deck-text"><b id="deck-count">0</b></span>
+      </button>
     </div>
 
     <div id="action-row" class="action-row fx-panel">

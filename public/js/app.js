@@ -165,7 +165,7 @@ const nodes = {};
  'lobby-wait', 'lobby-hint', 'lobby-msg', 'leave-btn',
  'queue', 'strip-code', 'stage', 'ring', 'plaque', 'match-label', 'dir-badge',
  'match-glyph', 'match-suit', 'match-or-wrap', 'match-value', 'deck-count',
- 'ledger', 'wedge-glow', 'wedge-tones',
+ 'ledger', 'wedge-glow', 'wedge-sector', 'wedge-tones',
  'top-card', 'top-index', 'top-glyph', 'top-suit', 'top-ghost',
  'under-1', 'under-2', 'dir-glyph', 'dir-label',
  'seats', 'event-ribbon', 'banner', 'live-polite', 'live-alert', 'live-now',
@@ -226,6 +226,7 @@ const app = {
   flight: null,          // the in-flight played-card ghost animation
   offline: true,         // stale snapshots stay visible, but never actionable
   celebratedWinner: '', // one confetti beat per completed round
+  confettiTimer: 0,     // celebrate()'s own cleanup, so a second burst owns it
 };
 
 const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus });
@@ -242,6 +243,16 @@ function setScreen(name) { document.body.dataset.screen = name; }
  * pending text and leaves the running fade alone, so a burst of snapshots
  * produces ONE crossfade ending on the newest words rather than a stutter.
  * The `is-swapping` class and --t-text-out are the contract with styles.css.
+ *
+ * `instant` is a rule about text -> TEXT only. It exists because hover fires
+ * on every card the pointer crosses and crossfading the reason line at that
+ * speed reads as flicker — but it was also flattening the two changes that
+ * are genuinely an arrival and a departure: empty -> text and text -> empty.
+ * Those keep their fade on every path:
+ *   empty -> text : the words are written NOW (no out-phase to wait for) and
+ *                   the `.txt-fade:empty` rule in styles.css fades them in.
+ *   text  -> empty: the out-fade below runs first, so the words leave before
+ *                   the node is cleared — clearing first would fade nothing.
  */
 const textPending = new WeakMap();
 const textTimers = new WeakMap();
@@ -249,7 +260,14 @@ function setText(node, text, instant) {
   const str = text == null ? '' : String(text);
   const current = textPending.has(node) ? textPending.get(node) : node.textContent;
   if (current === str) return;
-  if (instant) {
+  if (current === '') {                     // arriving: write now, CSS fades in
+    clearTimeout(textTimers.get(node));
+    textPending.delete(node);
+    node.classList.remove('is-swapping');
+    node.textContent = str;
+    return;
+  }
+  if (instant && str !== '') {              // text -> text at hover speed
     clearTimeout(textTimers.get(node));
     textPending.delete(node);
     node.classList.remove('is-swapping');
@@ -285,18 +303,30 @@ function setMessage(text, tone, instant) {
 function showBanner(text, tone, ms) {
   clearTimeout(app.bannerTimer);
   clearTimeout(app.bannerExitTimer);
+  const wasShowing = !nodes.banner.hidden;
   nodes.banner.textContent = text;
   nodes.banner.className = 'banner' + (tone === 'win' ? ' win' : '');
   nodes.banner.hidden = false;
-  // restart the slam
-  nodes.banner.style.animation = 'none';
-  void nodes.banner.offsetWidth;
-  nodes.banner.style.animation = '';
+  /* Restarting the slam costs a forced synchronous layout (7.1ms of the first
+     game render, instrumented at 1280x720) — and buys nothing unless the banner
+     was ALREADY on screen. Coming out of `hidden` it goes display:none -> block,
+     which starts the animation from 0 by itself; the none/reflow/restore dance
+     was only ever for a second banner replacing a first one mid-flight. */
+  if (wasShowing) {
+    nodes.banner.style.animation = 'none';
+    void nodes.banner.offsetWidth;
+    nodes.banner.style.animation = '';
+  }
   if (ms) app.bannerTimer = setTimeout(() => hideBanner(true), ms);
 }
 
 function celebrate() {
   if (!nodes.celebration || RM.matches) return;
+  /* The 1.5s cleanup below belongs to THIS burst. Unstored, an earlier one was
+     still armed when a second round ended inside its window and swept the new
+     confetti off the screen mid-flight — the same reason every other timer in
+     this file (bannerTimer, the flight guard) is held and cleared. */
+  clearTimeout(app.confettiTimer);
   const colors = ['var(--gold)', 'var(--pep-solid)', 'var(--bas-solid)', 'var(--anc-solid)', 'var(--ink)'];
   const count = 24;
   nodes.celebration.replaceChildren();
@@ -313,7 +343,7 @@ function celebrate() {
   nodes.celebration.classList.remove('is-live');
   void nodes.celebration.offsetWidth;
   nodes.celebration.classList.add('is-live');
-  setTimeout(() => {
+  app.confettiTimer = setTimeout(() => {
     nodes.celebration.classList.remove('is-live');
     nodes.celebration.replaceChildren();
   }, 1500);
@@ -597,11 +627,21 @@ function runTravel(plan, snap) {
   }
 }
 
-/** The pile's on-screen source: the deck, or the top card where the deck hides. */
+/** The pile's on-screen source: the deck, or the top card where the deck hides.
+ *  The deck steps out of the tray for as long as the hand is swapped for a
+ *  decision bar — and a DRAWN card arrives in exactly that snapshot, so asking
+ *  where the deck is at that moment answers "nowhere" and the card would fly
+ *  out of the discard instead of out of the pile it actually came from. Its
+ *  last on-screen box is the honest source; a layout where the deck is never
+ *  shown at all (the phone band) still falls through to the discard. */
+let lastDeckRect = null;
 function pileRect() {
   const deck = document.getElementById('deck');
-  const visible = deck && deck.offsetParent !== null;
-  return (visible ? deck : nodes['top-card']).getBoundingClientRect();
+  if (deck && deck.offsetParent !== null) {
+    const r = deck.getBoundingClientRect();
+    if (r.width) { lastDeckRect = r; return r; }
+  }
+  return lastDeckRect || nodes['top-card'].getBoundingClientRect();
 }
 
 /** A card-proportioned rect (the 96×138 ratio) centred on `node`. */
@@ -696,12 +736,22 @@ function dealGhosts(target, count, wave) {
     ghost.classList.add('travel-back', 'back-face');
     ghost.style.setProperty('--cw', Math.round(src.width) + 'px');
     document.body.appendChild(ghost);
+    const delay = wave * 120 + k * MS.dealStep;
+    /* `finished` is the only thing holding these ghosts' leashes, and it does
+       not always settle: on a hidden or unfocused page the animation never
+       advances, so the promise never resolves and the ghost stays in <body>
+       forever, one per dealt card. flyToPile has carried a guard timeout for
+       exactly this since it was written; a deal throws up to three at a time
+       and had none. `done` keeps the two paths from double-removing. */
+    let done = false, guard = 0;
+    const drop = () => { if (done) return; done = true; clearTimeout(guard); ghost.remove(); };
     ghost.animate([
       { transform: 'translate(0,0) scale(1) rotate(0deg)', opacity: 1 },
       { transform: `translate(${dx}px,${dy}px) scale(.55) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: .85, offset: .8 },
       { transform: `translate(${dx}px,${dy}px) scale(.5) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: 0 },
-    ], { duration: MS.deal, delay: wave * 120 + k * MS.dealStep, easing: EASE_OUT, fill: 'forwards' })
-      .finished.catch(() => {}).finally(() => ghost.remove());
+    ], { duration: MS.deal, delay, easing: EASE_OUT, fill: 'forwards' })
+      .finished.then(drop, drop);
+    guard = setTimeout(drop, MS.deal + delay + 400);
   }
 }
 
@@ -1189,6 +1239,21 @@ function ledgerCap(n) { return Math.max(5, Math.round(LEDGER_BUDGET / Math.max(n
      top. That is the concept's own three-player layout. */
 function wedgeAngle(offset, n) { return 90 + offset * (360 / n); }
 
+/* The lit slice as ONE closed path: centre → 12 o'clock → arc → back. The
+ *  stylesheet strokes it, so the two radii and the arc are the same weight and
+ *  the corners are real joins rather than three layers ending near each other.
+ *  viewBox units, 50 = the sauce radius. The path radius is pulled in by half
+ *  the stroke (--wedge-stroke: .63) so the stroke's outer edge lands at 49.85
+ *  — just inside the crust, never across it. */
+const SECTOR_R = +(49.85 - 0.63 / 2).toFixed(3);
+function sectorPath(spanDeg) {
+  const a = spanDeg * Math.PI / 180;
+  const x1 = (50 + SECTOR_R * Math.sin(a)).toFixed(3);
+  const y1 = (50 - SECTOR_R * Math.cos(a)).toFixed(3);
+  const large = spanDeg > 180 ? 1 : 0;
+  return `M50 50L50 ${(50 - SECTOR_R).toFixed(3)}A${SECTOR_R} ${SECTOR_R} 0 ${large} 1 ${x1} ${y1}Z`;
+}
+
 /** playerId → seats from you, 0 being you, counting in play order. */
 function seatOffsets(g, youId) {
   const ps = g.players;
@@ -1608,6 +1673,9 @@ function renderCenter(snap, g, over) {
   if (nodes.sauce && nodes.sauce.style.getPropertyValue('--wedge-span') !== span) {
     nodes.sauce.style.setProperty('--wedge-span', span);
     nodes.sauce.style.setProperty('--wedge-from', `${(180 - 360 / Math.max(g.players.length, 1) / 2).toFixed(4)}deg`);
+    // The lit slice is a stroked path, not a gradient, so its geometry is
+    // written here from the same number — one place, three sides, no drift.
+    if (nodes['wedge-sector']) nodes['wedge-sector'].setAttribute('d', sectorPath(360 / Math.max(g.players.length, 1)));
   }
   renderWedgeTones(snap, g);
   moveGlow(g, over);
@@ -1834,7 +1902,16 @@ function renderHand(g, yourTurn, playable, drawnId) {
     const fallback = row.children[Math.min(Math.max(focusedIndex, 0), row.children.length - 1)];
     (again || fallback).focus({ preventScroll: true });
   }
-  updateFades();
+  /* Measured, not deferred on principle: reading the row here — straight after
+     rebuilding the hand, the seats and the centre — was the single forced
+     synchronous layout in the first render of a game, 18.9ms of the 26.4ms that
+     task spent inside layout reads (instrumented at 1280x720, `scrollWidth @
+     updateFades`). One rAF later the browser has laid the page out on its own
+     schedule and the same read is free. The fades and the swipe hint are a
+     frame behind the cards they describe, which is what they were anyway: the
+     hint is corrected inside updateFades precisely because the row cannot be
+     measured while it is still being written. */
+  scheduleFades();
 }
 
 function previewCardId(id) {
@@ -1935,10 +2012,16 @@ document.addEventListener('keydown', (e) => {
 
 function updateFades() {
   const row = nodes['hand-row'];
-  const over = row.scrollWidth - row.clientWidth > 4;
+  // Every read first: `is-overflowing` changes justify-content, so measuring
+  // scrollLeft after writing it is a forced synchronous layout in the middle of
+  // a scroll.
+  const scrollWidth = row.scrollWidth;
+  const clientWidth = row.clientWidth;
+  const scrollLeft = row.scrollLeft;
+  const over = scrollWidth - clientWidth > 4;
   row.classList.toggle('is-overflowing', over);
-  nodes['fade-left'].hidden = !(over && row.scrollLeft > 4);
-  nodes['fade-right'].hidden = !(over && row.scrollLeft < row.scrollWidth - row.clientWidth - 4);
+  nodes['fade-left'].hidden = !(over && scrollLeft > 4);
+  nodes['fade-right'].hidden = !(over && scrollLeft < scrollWidth - clientWidth - 4);
   // The hint is written before the row can be measured, so it is corrected here
   // rather than costing a second render pass.
   const wasOver = app.handOverflows;
@@ -1950,7 +2033,19 @@ function updateFades() {
   }
 }
 
-nodes['hand-row'].addEventListener('scroll', () => { app.handMoved = true; updateFades(); });
+/* One fades pass per frame, at a moment when the layout is clean. Scroll fires
+   faster than frames on a trackpad or a flung touch, and a render writes the
+   whole hand immediately before asking how wide it is — both cases measure a
+   row that something else has just dirtied. */
+let fadesRaf = 0;
+function scheduleFades() {
+  if (fadesRaf) return;
+  fadesRaf = requestAnimationFrame(() => { fadesRaf = 0; updateFades(); });
+}
+nodes['hand-row'].addEventListener('scroll', () => {
+  app.handMoved = true;                 // gates the hint; must not wait a frame
+  scheduleFades();
+});
 // Coalesced: an orientation change or a collapsing URL bar fires resize in
 // bursts, and each pass forces a layout read.
 let resizeRaf = 0;
