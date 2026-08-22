@@ -12,10 +12,19 @@
 <body data-screen="home">
 
 <!-- ------------------------------------------------------------------ HOME -->
-<section id="screen-home" class="screen home">
+<section id="screen-home" class="screen home" role="main" aria-labelledby="home-title">
   <div class="home-card">
-    <h1 class="wordmark">TONDO</h1>
+    <div class="home-deal" aria-hidden="true">
+      <span class="home-mini-card back-face"></span>
+      <span class="home-mini-card back-face"></span>
+      <span class="home-mini-card back-face"></span>
+    </div>
+    <h1 id="home-title" class="wordmark">TONDO</h1>
     <p class="tagline">A pizza card game for 2&ndash;4 players.</p>
+    <p class="home-hook">Match toppings, flip the order, and catch your friends forgetting TONDO.</p>
+    <div class="home-facts" role="group" aria-label="Two to four players. Quick rounds. No account needed.">
+      <span>2&ndash;4 players</span><span>Quick rounds</span><span>No account</span>
+    </div>
 
     <label class="field" for="name-input">
       <span class="field-label">Your name</span>
@@ -40,14 +49,14 @@
 </section>
 
 <!-- ----------------------------------------------------------------- LOBBY -->
-<section id="screen-lobby" class="screen lobby">
+<section id="screen-lobby" class="screen lobby" role="main" aria-labelledby="lobby-title">
   <div class="lobby-card">
     <div class="lobby-head">
-      <div class="lobby-mark">TONDO</div>
+      <h1 id="lobby-title" class="lobby-mark">TONDO</h1>
       <div class="field-label">Table code</div>
       <div class="code-row">
         <span id="room-code" class="code">&mdash;</span>
-        <button id="copy-btn" type="button" class="btn btn-ghost">Copy</button>
+        <button id="copy-btn" type="button" class="btn btn-ghost" aria-label="Copy invite link">Copy</button>
       </div>
     </div>
 
@@ -56,7 +65,7 @@
     <p id="lobby-hint" class="msg"></p>
     <div id="host-controls" class="lobby-actions fx-panel">
       <button id="addbot-btn" type="button" class="btn">Add bot</button>
-      <button id="start-btn" type="button" class="btn btn-primary">Start game</button>
+      <button id="start-btn" type="button" class="btn btn-primary">Deal the cards</button>
     </div>
     <p id="lobby-wait" class="msg fx-panel">Waiting for the host to start&hellip;</p>
 
@@ -66,11 +75,11 @@
 </section>
 
 <!-- ------------------------------------------------------------------ GAME -->
-<section id="screen-game" class="screen game">
+<section id="screen-game" class="screen game" role="main" aria-labelledby="game-title">
 
   <div class="strip">
     <div class="strip-inner">
-      <div class="strip-mark">TONDO</div>
+      <h1 id="game-title" class="strip-mark">TONDO</h1>
       <div id="queue" class="queue"></div>
       <div id="strip-code" class="strip-code"></div>
       <button type="button" class="btn btn-tiny strip-help" data-help-open aria-label="How to play">?</button>
@@ -132,7 +141,7 @@
           <div class="card-suit"></div>
           <div class="card-ghost"></div>
         </div>
-        <div id="top-card" class="top-card">
+        <div id="top-card" class="top-card" role="img" aria-label="Top card">
           <div id="top-index" class="card-index"></div>
           <div id="top-glyph" class="card-glyph"></div>
           <div id="top-suit" class="card-suit"></div>
@@ -157,6 +166,8 @@
     <div id="event-ribbon" class="ribbon fx-fade"></div>
     <div id="banner" class="banner" hidden></div>
   </div>
+
+  <div id="celebration" class="celebration" aria-hidden="true"></div>
 
   <div class="tray">
     <p id="live-polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>

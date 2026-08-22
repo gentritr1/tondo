@@ -44,10 +44,13 @@ const SLOTS = { 1: ['top'], 2: ['left', 'right'], 3: ['left', 'top', 'right'] };
    flights below cannot read a CSS custom property, so the one strong ease-out
    curve is written once here rather than inline at each call site. */
 const EASE_OUT = 'cubic-bezier(.23, 1, .32, 1)';
-/* The height the pile card falls through as it settles. Must stay in step with
-   `@keyframes top-card-land` in styles.css: the flight ghost lands on exactly
-   that first frame, and any drift shows up as a jump at the hand-off. */
+/* The height the pile card falls through as it settles, and how oversized it
+   is on that first frame. `@keyframes top-card-land` in styles.css reads both
+   back as --land-rise / --land-scale (set on .top-card below), so the flight
+   ghost lands on exactly that first frame: one value, two consumers, no drift
+   to show up as a jump at the hand-off. */
 const LAND_RISE = 10;
+const LAND_SCALE = 1.04;
 const MS = {
   land: 260,        // .top-card.is-landing
   flight: 260,      // played card → pile (220 on compact)
@@ -174,7 +177,10 @@ const nodes = {};
  'wild-bar', 'wild-corner', 'wild-centre', 'wild-ghost', 'wild-grid',
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
  'action-row', 'draw-btn', 'newround-btn', 'message', 'hint', 'game-leave', 'net-banner',
+ 'celebration',
 ].forEach((id) => { nodes[id] = el(id); });
+nodes['top-card'].style.setProperty('--land-rise', LAND_RISE + 'px');
+nodes['top-card'].style.setProperty('--land-scale', String(LAND_SCALE));
 /* The three pieces of centre furniture the ledger has to keep its toppings off,
    plus the sauce disc they are positioned inside. Class-based, so they are
    resolved once here rather than re-queried on every repaint. */
@@ -219,6 +225,7 @@ const app = {
   glowDir: null,         //   sweep the long way round instead of the short one
   flight: null,          // the in-flight played-card ghost animation
   offline: true,         // stale snapshots stay visible, but never actionable
+  celebratedWinner: '', // one confetti beat per completed round
 };
 
 const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus });
@@ -286,6 +293,30 @@ function showBanner(text, tone, ms) {
   void nodes.banner.offsetWidth;
   nodes.banner.style.animation = '';
   if (ms) app.bannerTimer = setTimeout(() => hideBanner(true), ms);
+}
+
+function celebrate() {
+  if (!nodes.celebration || RM.matches) return;
+  const colors = ['var(--gold)', 'var(--pep-solid)', 'var(--bas-solid)', 'var(--anc-solid)', 'var(--ink)'];
+  const count = 24;
+  nodes.celebration.replaceChildren();
+  for (let i = 0; i < count; i++) {
+    const piece = document.createElement('span');
+    piece.className = 'confetti';
+    piece.style.setProperty('--x', `${3 + ((i * 37) % 94)}%`);
+    piece.style.setProperty('--drift', `${-54 + ((i * 29) % 108)}px`);
+    piece.style.setProperty('--turn', `${180 + ((i * 83) % 420)}deg`);
+    piece.style.setProperty('--delay', `${(i % 8) * 28}ms`);
+    piece.style.setProperty('--c', colors[i % colors.length]);
+    nodes.celebration.appendChild(piece);
+  }
+  nodes.celebration.classList.remove('is-live');
+  void nodes.celebration.offsetWidth;
+  nodes.celebration.classList.add('is-live');
+  setTimeout(() => {
+    nodes.celebration.classList.remove('is-live');
+    nodes.celebration.replaceChildren();
+  }, 1500);
 }
 function hideBanner(soft) {
   clearTimeout(app.bannerTimer);
@@ -401,12 +432,14 @@ function applySnapshot(snap) {
     ledgerClear();
     app.glowRot = null;
     app.glowDir = null;
+    app.celebratedWinner = '';
     setScreen('lobby');
     renderLobby(snap);
     return;
   }
 
   setScreen('game');
+  if (snap.phase !== 'roundOver') app.celebratedWinner = '';
   if (!prev || prev.phase === 'lobby') { setMessage('', 'info'); app.handMoved = false; }
 
   const yourTurnNow = g && snap.phase === 'playing' && g.turnPlayerId === snap.youId;
@@ -415,6 +448,10 @@ function applySnapshot(snap) {
   if (snap.phase === 'roundOver' && g) {
     const winner = playerName(g.winnerId);
     showBanner(g.winnerId === snap.youId ? 'YOU WIN' : (nicely(winner) + ' WINS').toUpperCase(), 'win', 0);
+    if (app.celebratedWinner !== g.winnerId) {
+      app.celebratedWinner = g.winnerId;
+      celebrate();
+    }
     app.lastTurn = undefined;
   } else if (yourTurnNow && app.lastTurn !== g.turnPlayerId) {
     showBanner('YOUR TURN', 'you', 700);
@@ -627,7 +664,7 @@ function flyToPile(from, card) {
     // Lands oversized, 10px high and fully opaque — exactly the first frame of
     // `top-card-land`. The ghost is then swapped for the real pile card, so the
     // hand-off is one continuous card being slapped down, not a crossfade.
-    { transform: `translate(${dx}px,${dy - LAND_RISE}px) scale(${s * 1.07}) rotate(-3deg)`, opacity: 1 },
+    { transform: `translate(${dx}px,${dy - LAND_RISE}px) scale(${s * LAND_SCALE}) rotate(-3deg)`, opacity: 1 },
   ], { duration: ms, easing: EASE_OUT, fill: 'forwards' });
 
   const flight = { ghost, anim, cancelled: false, guard: 0 };
@@ -726,7 +763,7 @@ function renderLobby(snap) {
     if (seat.isBot) tags.push('<span class="tag tag-bot">Bot</span>');
     if (!seat.connected) tags.push('<span class="tag tag-away">Away</span>');
     const remove = (snap.isHost && seat.isBot)
-      ? `<button type="button" class="btn btn-tiny" data-remove="${esc(seat.id)}"${app.offline ? ' disabled' : ''}>Remove</button>` : '';
+      ? `<button type="button" class="btn btn-tiny" data-remove="${esc(seat.id)}" aria-label="Remove ${esc(name)}"${app.offline ? ' disabled' : ''}>Remove</button>` : '';
     return `<li class="seat-row">
       <span class="seat-chip" style="--tone-bg:${tone.bg};--tone-edge:${tone.edge}" aria-hidden="true"><span class="initial">${esc(initial)}</span></span>
       <span class="who">${esc(name)}</span>
@@ -750,7 +787,7 @@ function renderLobby(snap) {
   nodes['lobby-hint'].textContent = !snap.isHost ? ''
     : (snap.seats.length < 2
       ? 'Two players minimum — add a bot, or send someone the invite link.'
-      : 'Ready when you are.');
+      : 'The table is set — deal when everyone is ready.');
 }
 
 nodes['copy-btn'].addEventListener('click', async () => {
@@ -1597,6 +1634,7 @@ function renderCenter(snap, g, over) {
   paintUnder(nodes['under-2'], app.pile[2]);
 
   paintStock(nodes['top-card'], top);
+  nodes['top-card'].setAttribute('aria-label', `Top card: ${prettyCard(top)}`);
   paintFace(top, {
     index: nodes['top-index'], glyph: nodes['top-glyph'],
     suit: nodes['top-suit'], ghost: nodes['top-ghost'],
@@ -1643,7 +1681,9 @@ function renderSeats(snap, g, over) {
     else status = 'waiting';
 
     const toneVars = `--tone-bg:${tone.bg};--tone-edge:${tone.edge}`;
-    return `<div class="seat seat-${slot} ${acting ? '' : (isNext ? 'is-next' : 'is-idle')}" data-player="${esc(p.id)}">
+    const cardWord = p.cardCount === 1 ? 'card' : 'cards';
+    const seatLabel = `${name}, ${p.cardCount} ${cardWord}, ${status}`;
+    return `<div class="seat seat-${slot} ${acting ? '' : (isNext ? 'is-next' : 'is-idle')}" data-player="${esc(p.id)}" role="img" aria-label="${esc(seatLabel)}">
       <div class="plate ${acting ? 'is-acting' : ''} ${(loud || alarm) && !acting ? 'is-loud' : ''}">
         <div class="seat-body">
           <div class="stack" style="${toneVars}">

@@ -154,11 +154,11 @@
   /* ---- motion tokens --------------------------------------------------
      Strong custom curves only: the built-in CSS easings are too weak to read
      as intentional, and `ease-in` is banned outright (it delays the exact
-     moment the eye is on the element). --e-pop carries this game's playful
-     personality: a ~0.2 overshoot reserved for landings, pops and wins. */
+     moment the eye is on the element). --e-pop is the quickest ease-out,
+     reserved for landings, pops and wins without an elastic overshoot. */
   --e-out: cubic-bezier(.23, 1, .32, 1);        /* entries, exits, feedback */
   --e-in-out: cubic-bezier(.77, 0, .175, 1);    /* on-screen movement */
-  --e-pop: cubic-bezier(.34, 1.45, .5, 1);      /* playful settle, ~.2 bounce */
+  --e-pop: cubic-bezier(.16, 1, .3, 1);         /* crisp, playful settle */
   --t-press: 140ms;   /* button/card press feedback */
   --t-micro: 120ms;
   --t-state: 200ms;
@@ -375,13 +375,14 @@ body { height: 100dvh; }
 /* was: box-shadow spread (paint on every turn) — now a scaling ring */
 @keyframes token-hop { 0%{opacity:.65;transform:scale(1)} 100%{opacity:0;transform:scale(2.6)} }
 /* The slap. The first frame is exactly where the flight ghost stops (10px
-   high, 7% oversized — see LAND_RISE in app.js), so the ghost can be swapped
-   for the real card without a jump; then the card drops through itself and
-   settles. */
+   high and oversized by --land-scale, both written onto .top-card from
+   LAND_RISE / LAND_SCALE in app.js so the two sides cannot drift), so the
+   ghost can be swapped for the real card without a jump; then the card
+   settles into place. The fallbacks only matter before app.js has run. */
 @keyframes top-card-land {
-  0%   { transform:rotate(-3deg) translateY(-10px) scale(1.07); opacity:1;
+  0%   { transform:rotate(-3deg) translateY(calc(var(--land-rise, 10px) * -1)) scale(var(--land-scale, 1.04)); opacity:1;
          animation-timing-function: cubic-bezier(.3,0,.2,1) }
-  58%  { transform:rotate(-3deg) translateY(2px) scale(.982); opacity:1;
+  72%  { transform:rotate(-3deg) translateY(1px) scale(.995); opacity:1;
          animation-timing-function: cubic-bezier(.33,1,.68,1) }
   100% { transform:rotate(-3deg) translateY(0) scale(1); opacity:1 }
 }
@@ -390,15 +391,14 @@ body { height: 100dvh; }
 /* MATCH plaque acknowledging a new topping — squash, then settle. */
 @keyframes plaque-pop {
   0%   { transform:rotate(-2deg) scale(.972) }
-  58%  { transform:rotate(-2deg) scale(1.028) }
   100% { transform:rotate(-2deg) scale(1) }
 }
 /* A picked Wild washes its colour outward across the sauce. */
 @keyframes sauce-sweep { 0%{opacity:0;transform:scale(.5)} 45%{opacity:1} 100%{opacity:1;transform:scale(1)} }
-/* A topping landing in its owner's wedge. Squash-and-stretch, from the
-   concept's `tondoDrop`: it falls in oversized, flattens on impact, then
-   springs back. The fall height is written in --tp-u so it scales with the
-   pie exactly as the topping does. */
+/* A topping landing in its owner's wedge. From the concept's `tondoDrop`: it
+   falls in oversized, flattens on impact, then settles into shape. The fall
+   height is written in --tp-u so it scales with the pie exactly as the topping
+   does. */
 @keyframes tondoDrop {
   /* Each segment carries its own curve. A single rule-level bouncy curve put the
      whole fall in the first 78ms of 520 and left 440ms of wobble. The fall itself
@@ -407,11 +407,17 @@ body { height: 100dvh; }
      falling in, so the entry starts nearer its landed size. */
   0%   { transform: translateY(calc(var(--tp-u) * -54)) scale(1.35); opacity: 0;
          animation-timing-function: cubic-bezier(.55, .06, .68, .19) }
-  55%  { transform: translateY(0) scale(.86); opacity: 1;
-         animation-timing-function: cubic-bezier(.34, 1.4, .5, 1) }
-  78%  { transform: translateY(0) scale(1.08); opacity: 1;
+  55%  { transform: translateY(0) scale(.9); opacity: 1;
+         animation-timing-function: cubic-bezier(.16, 1, .3, 1) }
+  78%  { transform: translateY(0) scale(.98); opacity: 1;
          animation-timing-function: var(--e-out) }
   100% { transform: translateY(0) scale(1); opacity: 1 }
+}
+@keyframes tondo-confetti {
+  0%   { opacity: 0; transform: translate3d(0,-4vh,0) rotate(0deg); }
+  10%  { opacity: 1; }
+  82%  { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(var(--drift),105vh,0) rotate(var(--turn)); }
 }
 /* the grease ring the impact throws out */
 @keyframes tondoRipple {
@@ -467,6 +473,7 @@ body { height: 100dvh; }
   .tp-ripple { display: none !important; }
   .tp { transition: opacity 160ms linear !important; transform: none !important; }
   .wedge-glow { transition: opacity 160ms linear !important; }
+  .celebration { display: none !important; }
   /* Ownership changing hands is a comprehension-carrying colour change, so it
      keeps its cross-dissolve like every other fade in this block — it was
      missing here and fell to the 1ms blanket damper, which hard-cut it.
@@ -575,11 +582,30 @@ body[data-screen="lobby"] #screen-lobby {
   width: 100%; max-width: 420px;
   display: flex; flex-direction: column; gap: 14px;
   --row-gap-eat: 14px;   /* must match the gap above: see .fx-panel[hidden] */
+  /* Auto margins, not align-items:center, do the vertical centring: when the
+     card is taller than a short viewport (320x568 with the welcome fan), flex
+     centring pushes the overflow above scrollTop 0 where it can never be
+     scrolled to. Auto margins collapse to 0 first, so the top stays reachable. */
+  margin: auto;
   background: var(--shell);
-  border: 1px solid var(--hair-2); border-radius: 22px;
+  border: 1px solid var(--hair-2); border-radius: 16px;
   padding: 28px 22px 24px;
-  box-shadow: 0 26px 60px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,247,232,.06);
+  box-shadow: inset 0 1px 0 rgba(255,247,232,.06);
 }
+.home-card { border-color: rgba(245,203,92,.22); }
+
+.home-deal {
+  position: relative; width: 112px; height: 58px; margin: -7px auto -2px;
+}
+.home-deal .home-mini-card {
+  --cs: .42;
+  position: absolute; left: 50%; bottom: 0;
+  width: 40px; height: 58px;
+  transform-origin: 50% 92%;
+}
+.home-deal .home-mini-card:nth-child(1) { transform: translateX(-50%) rotate(-14deg) translateX(-24px); }
+.home-deal .home-mini-card:nth-child(2) { transform: translateX(-50%) rotate(-2deg); z-index: 1; }
+.home-deal .home-mini-card:nth-child(3) { transform: translateX(-50%) rotate(11deg) translateX(24px); }
 
 /* The header treatment from the game strip, blown up: letter-spaced gold.
    The text-indent gives back the trailing letter-space so it centres true. */
@@ -594,6 +620,19 @@ body[data-screen="lobby"] #screen-lobby {
   font-family: var(--font-voice); font-style: italic; font-weight: 400;
   font-size: 18px; line-height: 1.3; color: rgba(255,247,232,.5);
 }
+.home-hook {
+  max-width: 31ch; margin: -1px auto 0; text-align: center;
+  font-size: 14px; line-height: 1.45; color: var(--ink-3);
+  text-wrap: pretty;
+}
+.home-facts {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+  gap: 6px 14px; margin: -1px 0 3px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.home-facts span { display: inline-flex; align-items: center; gap: 8px; }
+.home-facts span + span::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--gold); }
 .home-card > [data-help-open] { align-self: center; border-color: transparent; color: var(--gold); }
 .home-card > [data-help-open]:hover { color: var(--gold); border-color: rgba(245,203,92,.4); }
 .rule {
@@ -609,7 +648,7 @@ body[data-screen="lobby"] #screen-lobby {
 .lobby-head { display: flex; flex-direction: column; gap: 7px; }
 .lobby-mark {
   font-family: var(--font-display); font-weight: 800; font-size: 17px;
-  letter-spacing: .14em; color: var(--gold); margin-bottom: 4px;
+  letter-spacing: .14em; color: var(--gold); margin: 0 0 4px;
 }
 .code-row { display: flex; align-items: center; gap: 12px; }
 .code {
@@ -675,8 +714,11 @@ body[data-screen="lobby"] #screen-lobby {
 .tag-bot { color: rgba(255,247,232,.72); background: rgba(255,247,232,.12); }
 .tag-away { color: var(--ink); background: var(--pep-bg); }
 
-.lobby-actions { display: flex; gap: 10px; }
-.lobby-actions .btn { flex: 1 1 auto; }
+.lobby-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.lobby-actions .btn { flex: 1 1 auto; white-space: nowrap; }
+/* Below 360px the two labels cannot share one row without wrapping to two
+   lines each ("Deal the cards" + "Add bot" at 320px), so they stack instead. */
+@media (max-width: 360px) { .lobby-actions .btn { flex-basis: 100%; } }
 
 /* ==========================================================================
    GAME SCREEN — Stone Oven
@@ -692,7 +734,7 @@ body[data-screen="game"] { background: var(--page); }
   background: transparent; border-bottom: 1px solid var(--hair);
 }
 .strip-inner { display: flex; align-items: center; gap: 13px; width: 100%; max-width: var(--measure); min-width: 0; margin-inline: auto; }
-.strip-mark { font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: .14em; color: var(--gold); flex: 0 0 auto; }
+.strip-mark { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: .14em; color: var(--gold); flex: 0 0 auto; }
 .strip-code { font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .18em; color: var(--ink-2); flex: 0 0 auto; }
 /* The 30px circle is the VISUAL; the target is 44x44. Growing the circle
    itself would put a fat button next to a 15px wordmark, so the hit area is a
@@ -959,7 +1001,7 @@ body[data-screen="game"] { background: var(--page); }
     transparent 2.2deg var(--wedge-span, 90deg));
 }
 /* The lit wedge: whose turn it is, as a sector of the pie. It sweeps to the
-   new wedge with a slight overshoot; a Flip sends it the long way round (see
+   new wedge with a quick ease-out; a Flip sends it the long way round (see
    moveGlow in app.js), and --glow-t carries the longer duration that needs. */
 /* The lit wedge has to stay the LOUDEST thing on the pie, now that the cuts
    read at 3.27-5.52:1. Alpha alone could not do it: gold over this sauce only
@@ -982,7 +1024,7 @@ body[data-screen="game"] { background: var(--page); }
       rgba(245,203,92,.13) 0deg var(--wedge-span, 90deg),
       transparent var(--wedge-span, 90deg) 360deg);
   transform: rotate(var(--glow-rot, 0deg));
-  transition: transform var(--glow-t, 420ms) cubic-bezier(.34, 1.15, .5, 1),
+  transition: transform var(--glow-t, 420ms) cubic-bezier(.16, 1, .3, 1),
               opacity var(--t-state) var(--e-out);
 }
 /* The third side of the outline: the arc where the lit slice meets the crust.
@@ -1450,6 +1492,21 @@ body[data-screen="game"] { background: var(--page); }
    the class had no rule at all, so the banner used to vanish on a snap. */
 .banner.is-leaving { animation: tondo-leave 140ms var(--e-out) 1 forwards; }
 .banner.win { color: #1C6B3C; }
+
+/* A win gets one shared-table celebration, not ambient confetti. The pieces
+   are created only for the event, use transform/opacity, and disappear when
+   the short fall completes. */
+.celebration {
+  position: fixed; inset: 0; overflow: hidden; pointer-events: none; z-index: 30;
+}
+.confetti {
+  position: absolute; left: var(--x); top: -18px;
+  width: 8px; height: 14px; border-radius: 2px;
+  background: var(--c); opacity: 0;
+}
+.celebration.is-live .confetti {
+  animation: tondo-confetti 1200ms cubic-bezier(.2,.72,.25,1) var(--delay) both;
+}
 
 /* travelling ghosts: painted over an already-correct table, then removed */
 .travel-ghost { position: fixed; margin: 0; z-index: 30; pointer-events: none; }
