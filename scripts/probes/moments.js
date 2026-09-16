@@ -61,6 +61,7 @@
     const ghosts = [];
     let lungeFrames = 0, lungeElsewhereFrames = 0, lungePeakPx = 0, lungeCos = null;
     let ringOpacityMax = null;                    // declarer ::after while .is-tondo is on
+    let tondoClassFrames = 0;                     // frames the declarer carried .is-tondo
     const settle = () => {
       if (!sawBefore && /Basil 7$/.test(label())) sawBefore = true;
       if (sawBefore && deliveredAt === null && w.delivered()) {
@@ -136,6 +137,7 @@
         if (verbOf(w.who) === 'TONDO!') notes.add(`${w.who}:TONDO!`);
         const box = seatBox(w.who);
         if (box.classList.contains('is-tondo')) {
+          tondoClassFrames++;
           const o = Number(getComputedStyle(box, '::after').opacity);
           ringOpacityMax = ringOpacityMax === null ? o : Math.max(ringOpacityMax, o);
         }
@@ -174,6 +176,7 @@
       const box = seatBox(w.who);
       out.stampStarts = on('tondo-stamp', box).length;
       out.ringStarts = on('tondo-ring-shout', box, '::after').length;
+      out.tondoClassFrames = tondoClassFrames;
       out.ringOpacityMaxWhileOn = ringOpacityMax;
       out.notes = [...notes];
     }
@@ -204,8 +207,10 @@
     if (r.kind === 'tondo') {
       c.stamp = { want: !rm, got: r.stampStarts > 0 };
       c.ring = { want: !rm, got: r.ringStarts > 0 };
-      // Under reduced motion the ring must not sit there static while the class is on.
-      if (rm) c.ringHiddenWhileStatic = { want: true, got: r.ringOpacityMaxWhileOn === null || r.ringOpacityMaxWhileOn === 0 };
+      // Under reduced motion the ring must not sit there static while the class is
+      // on. That is only evidence if the class WAS seen on: a run where fx never
+      // added `is-tondo` has nothing to measure, and must fail, not pass.
+      if (rm) c.ringHiddenWhileStatic = { want: true, got: r.tondoClassFrames > 0 && r.ringOpacityMaxWhileOn === 0 };
       c.verb = { want: true, got: r.notes.includes(`${w.who}:TONDO!`) };
       c.announcedByName = { want: w.who !== 'p1', got: r.announced.some((t) => /^Carmela called TONDO\./.test(t)) };
     }

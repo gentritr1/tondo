@@ -56,6 +56,13 @@ const byId = (players, id) => (players || []).find((p) => p.id === id) || null;
  *   "<CALLER> CALLED OUT <TARGET> - DRAW <n>"   (names upper-cased)
  * test/events.test.mjs drives the real engine, so a wording change there fails
  * a test instead of silently dropping the effect. Unmatched -> null.
+ *
+ * A name is only an id when exactly one seat (other than the target, who is
+ * known from state) wears it. The server does not make names unique — rooms.js
+ * only trims them — and the log upper-cases them, so "SAM CALLED OUT GENT" at
+ * a table with a "sam" and a "Sam" cannot say which one; taking the first match
+ * put "caught them!", the lunge and the thrown cards on a seat that made no
+ * call. Ambiguous -> null.
  */
 function calloutCaller(g, targetId) {
   const target = byId(g.players, targetId);
@@ -63,8 +70,8 @@ function calloutCaller(g, targetId) {
   if (!target || !line) return null;
   const m = line.match(/^(.+) CALLED OUT (.+) - DRAW \d+$/);
   if (!m || m[2] !== String(target.name).toUpperCase()) return null;
-  const caller = (g.players || []).find((p) => String(p.name).toUpperCase() === m[1] && p.id !== targetId);
-  return caller ? caller.id : null;
+  const callers = (g.players || []).filter((p) => String(p.name).toUpperCase() === m[1] && p.id !== targetId);
+  return callers.length === 1 ? callers[0].id : null;
 }
 
 /**

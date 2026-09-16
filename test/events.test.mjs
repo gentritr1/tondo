@@ -379,6 +379,44 @@ test('a callout whose log line cannot be matched reports a null caller, not a wr
   eq(c.callerId, null, 'no guess');
 });
 
+/** A real engine game with these seat names, and `targetId` left catchable. */
+function catchableGame(names, targetId) {
+  const seats = names.map((name, i) => ({ id: `p${i + 1}`, name, isBot: i > 0 }));
+  const state = game.createGame(seats, { seed: 7, startIndex: 0 });
+  const victim = game.findPlayer(state, targetId);
+  victim.hand = victim.hand.slice(0, 1);
+  victim.declaredTondo = false;
+  victim.vulnerable = true;
+  return state;
+}
+
+test('a callout by one of two same-named players reports a null caller, not the other one', () => {
+  // The server does not make human names unique (rooms.js cleanName only
+  // trims), and the log upper-cases them, so "SAM CALLED OUT GENT" cannot say
+  // which Sam. Naming the first match would put "caught them!", the lunge and
+  // the thrown cards on a seat that made no call.
+  const state = catchableGame(['Gent', 'sam', 'Sam'], 'p1');
+  const before = snapOf(state, 'p1');
+  assert(game.callOut(state, 'p3', 'p1').ok, 'the second Sam calls out Gent');
+  eq(state.log[state.log.length - 1], 'SAM CALLED OUT GENT - DRAW 2', 'the engine\'s own line');
+  const c = pick(deriveEvents(before, snapOf(state, 'p1')), 'callout');
+  assert(c, 'a callout event');
+  eq(c.targetId, 'p1', 'target');
+  eq(c.callerId, null, 'two players are called SAM, so no guess');
+});
+
+test('a caller who shares only the target\'s name is still named', () => {
+  // The target is known from state, so it is never a candidate: one Sam
+  // catching the other is not ambiguous.
+  const state = catchableGame(['Sam', 'Sam', 'Dominic'], 'p1');
+  const before = snapOf(state, 'p3');
+  assert(game.callOut(state, 'p2', 'p1').ok, 'Sam calls out Sam');
+  const c = pick(deriveEvents(before, snapOf(state, 'p3')), 'callout');
+  assert(c, 'a callout event');
+  eq(c.targetId, 'p1', 'target');
+  eq(c.callerId, 'p2', 'the only other Sam');
+});
+
 // ---------------------------------------------------------------------------
 
 if (failures.length) {
