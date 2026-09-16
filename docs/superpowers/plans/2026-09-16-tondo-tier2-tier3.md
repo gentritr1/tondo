@@ -161,7 +161,8 @@ test('pickStartCard returns a number and cycles actions to the bottom', () => {
   ];
   const first = game.pickStartCard(pile);
   assert(first.id === 'n1', `picked ${first.id}`);
-  assert(pile.length === 2 && pile[0].id === 'w1' && pile[1].id === 's1', `non-numbers went to the bottom: ${pile.map((c) => c.id)}`);
+  // pop() takes from the end: w1 goes to the bottom, then s1 goes under it.
+  assert(pile.length === 2 && pile[0].id === 's1' && pile[1].id === 'w1', `non-numbers went to the bottom: ${pile.map((c) => c.id)}`);
 });
 
 test('pickStartCard throws instead of spinning on a deck with no number', () => {
@@ -1425,7 +1426,7 @@ Expected RED: `screen: "home"`. Record it. Re-run the host script whenever a che
   2. The same path with no `--storage-json` → `screen: "home"` and `codeInput` equals the code.
   3. Quick pie: `--scene none` then a probe that fills `#name-input` with `Gent`, clicks the `One quick pie` button, records `performance.now()`, and polls until `document.body.dataset.screen === 'game'` and `document.querySelectorAll('#seats .seat').length === 3`; report the elapsed ms. Required: under 2000ms.
   4. Forget: a probe that sets `tondo.name`, `tondo.lastTable` and `sessionStorage['tondo.room']`, clicks `Forget this device`, and returns `localKeys` and `sessionKeys`. Required: both empty.
-  Capture the home screen at 390×844 with a stored last table — `--scene home --storage-json '{"tondo.name":"Gent","tondo.lastTable":"{\"code\":\"BASIL-4821\",\"roster\":[\"Carmela\",\"Dominic\",\"Pina\"],\"at\":9999999999999}"}'` — into `.superpowers/sdd/frames/` and list it.
+  Capture the home screen at 390×844 with a stored last table — `--scene none --storage-json '{"tondo.name":"Gent","tondo.lastTable":"{\"code\":\"BASIL-4821\",\"roster\":[\"Carmela\",\"Dominic\",\"Pina\"],\"at\":9999999999999}"}'` — into `.superpowers/sdd/frames/` and list it.
 
 - [ ] **Step 6: Checks and commit** — `npm test`, `node scripts/check-contrast.js`, `PORT=4707 npm run smoke`.
 
