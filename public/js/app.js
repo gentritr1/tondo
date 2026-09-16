@@ -14,6 +14,7 @@
 import { Connection } from './net.js';
 import { deriveEvents } from './events.js';
 import * as sound from './sound.js';
+import * as fx from './fx.js';
 
 /* ------------------------------------------------------------- constants */
 
@@ -190,6 +191,14 @@ nodes['top-card'].style.setProperty('--land-scale', String(LAND_SCALE));
 nodes.sauce = document.querySelector('.sauce');
 nodes.pile = document.querySelector('.center .pile');
 nodes.dir = document.querySelector('.center .dir');
+/* The one-shot effects for what just happened (fx.js). Handed the helpers
+   rather than importing this file, so the dependency only points one way. */
+fx.init({
+  nodes, pulse, popSeat, MS, RM, seatPlate,
+  seatNode: (id) => nodes.seats.querySelector(`.seat[data-player="${CSS.escape(id)}"]`),
+  youId: () => app.youId,
+  setSeatNote, announce,
+});
 
 /* ----------------------------------------------------------------- state */
 
@@ -231,6 +240,8 @@ const app = {
   nextTicker: 0,        // the 1s interval that rewrites the countdown line
   celebratedWinner: '', // one confetti beat per completed round
   confettiTimer: 0,     // celebrate()'s own cleanup, so a second burst owns it
+  seatNotes: {},       // id -> {text, until}: a transient seat verb
+  seatNoteTimer: 0,
 };
 
 const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus });
@@ -549,20 +560,26 @@ function applySnapshot(snap) {
   const events = deriveEvents(prev, snap);
 
   renderGame(snap);
-  runTravel(travel, snap);
+  runTravel(travel, snap, events);
   // Scheduled against the frame the card actually lands on, not the frame the
   // snapshot arrived — the same delay ledgerAdd above already uses. A sound
   // that beats its own card to the pile is heard as being out of sync.
+  const impactAt = (travel && travel.flight) ? MS.flight / 1000 : 0;
   if (events.length) {
-    sound.playForEvents(events, {
-      impactAt: (travel && travel.flight) ? MS.flight / 1000 : 0,
-    });
+    sound.playForEvents(events, { impactAt });
   }
+  // The table's half of the same moment: a skipped seat ducks, a reversal
+  // sweeps the sauce, and the victim's seat says what happened in words that
+  // survive reduced motion. Fired after the repaint, at nodes that exist now.
+  fx.playForEvents(events, { impactAt });
 
   const pg = pgame;
   const turnChanged = !!(g && pg && prev.phase === 'playing' && snap.phase === 'playing'
     && g.turnPlayerId !== pg.turnPlayerId);
-  if (turnChanged) {
+  // The consequence ladder: when a card did something TO somebody, that owns
+  // the frame. A generic turn pop on top of a skip's duck or a +2's throw reads
+  // as two things happening, and at two players the "turn" often never moved.
+  if (turnChanged && !events.some((e) => fx.CONSEQUENCES.has(e.type))) {
     pulse(nodes.stage, 'is-turn-change', 220);
     // Whoever just took the turn: their tile pops once, so a bot's move has a
     // visible beginning as well as an end.
@@ -596,6 +613,30 @@ function popSeat(playerId) {
   plate.classList.add('is-pop');
   setTimeout(() => plate.classList.remove('is-pop'), MS.seatPop);
 }
+
+/** The seat plate for a player, as it exists right now (seats are keyed). */
+function seatPlate(playerId) {
+  const seat = nodes.seats.querySelector(`.seat[data-player="${CSS.escape(playerId)}"]`);
+  return seat ? seat.querySelector('.plate') : null;
+}
+
+/** A seat says something for a moment — "skipped", "+2" — then goes back. */
+function setSeatNote(playerId, text, ms) {
+  if (!playerId) return;
+  app.seatNotes[playerId] = { text, until: Date.now() + ms };
+  clearTimeout(app.seatNoteTimer);
+  app.seatNoteTimer = setTimeout(() => { if (app.snap) renderGame(app.snap); }, ms + 20);
+  if (app.snap) renderGame(app.snap);
+}
+
+function liveSeatNote(playerId) {
+  const note = app.seatNotes[playerId];
+  if (!note) return null;
+  if (note.until <= Date.now()) { delete app.seatNotes[playerId]; return null; }
+  return note.text;
+}
+
+function announce(text) { nodes['live-now'].textContent = text; }
 
 /** Re-triggerable one-shot animation class; a second pulse restarts cleanly. */
 const pulseTimers = new WeakMap();
@@ -655,7 +696,7 @@ function planTravel(prev, snap) {
   return (plan.flight || plan.deals.length) ? plan : null;
 }
 
-function runTravel(plan, snap) {
+function runTravel(plan, snap, events) {
   if (!plan) return;
   if (plan.flight) flyToPile(plan.flight.from, plan.flight.card);
   let wave = 0;
@@ -663,7 +704,10 @@ function runTravel(plan, snap) {
     const target = deal.playerId === snap.youId
       ? nodes['hand-row']
       : nodes.seats.querySelector(`.seat[data-player="${CSS.escape(deal.playerId)}"] .stack`);
-    if (target) dealGhosts(target.getBoundingClientRect(), deal.count, wave++);
+    // Cards a +2 forced on somebody are thrown off the card that did it, not
+    // dealt off the deck like an ordinary draw.
+    const hit = (events || []).find((e) => e.type === 'plus2' && e.victimId === deal.playerId);
+    if (target) dealGhosts(target.getBoundingClientRect(), deal.count, wave++, hit ? { lob: true, playerId: deal.playerId } : null);
   }
 }
 
@@ -765,18 +809,28 @@ function flyToPile(from, card) {
   flight.guard = setTimeout(settle, ms + 400);
 }
 
-function dealGhosts(target, count, wave) {
-  const src = pileRect();
+/**
+ * Card backs travelling to a hand. `opts.lob` is a +2: the cards leave the top
+ * card that forced them, after a 90ms hold past the impact frame (the stillness
+ * is the weight), arc up by 0.4 of a card on the way, and the victim's count
+ * badge takes the punch when the last one arrives.
+ */
+function dealGhosts(target, count, wave, opts) {
+  const lob = !!(opts && opts.lob);
+  const src = lob ? nodes['top-card'].getBoundingClientRect() : pileRect();
   if (!src.width || !target.width) return;
   const shown = Math.min(count, 3); // a +2 reads at two; never flood the DOM
   const dx = (target.left + target.width / 2) - (src.left + src.width / 2);
   const dy = (target.top + target.height / 2) - (src.top + src.height / 2);
+  const lift = 0.4 * src.height;
+  const LOB_MS = 300;
+  let lastAnim = null;
   for (let k = 0; k < shown; k++) {
     const ghost = ghostShell(src);
     ghost.classList.add('travel-back', 'back-face');
     ghost.style.setProperty('--cw', Math.round(src.width) + 'px');
     document.body.appendChild(ghost);
-    const delay = wave * 120 + k * MS.dealStep;
+    const delay = lob ? MS.flight + 90 + k * 90 : wave * 120 + k * MS.dealStep;
     /* `finished` is the only thing holding these ghosts' leashes, and it does
        not always settle: on a hidden or unfocused page the animation never
        advances, so the promise never resolves and the ghost stays in <body>
@@ -785,13 +839,41 @@ function dealGhosts(target, count, wave) {
        and had none. `done` keeps the two paths from double-removing. */
     let done = false, guard = 0;
     const drop = () => { if (done) return; done = true; clearTimeout(guard); ghost.remove(); };
-    ghost.animate([
-      { transform: 'translate(0,0) scale(1) rotate(0deg)', opacity: 1 },
-      { transform: `translate(${dx}px,${dy}px) scale(.55) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: .85, offset: .8 },
-      { transform: `translate(${dx}px,${dy}px) scale(.5) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: 0 },
-    ], { duration: MS.deal, delay, easing: EASE_OUT, fill: 'forwards' })
-      .finished.then(drop, drop);
-    guard = setTimeout(drop, MS.deal + delay + 400);
+    const frames = lob
+      ? [
+        { transform: 'translate(0,0) scale(1)', opacity: 1 },
+        { transform: `translate(${dx * .5}px, ${dy * .5 - lift}px) scale(.8)`, opacity: 1, offset: .5 },
+        { transform: `translate(${dx}px, ${dy}px) scale(.5)`, opacity: 0 },
+      ]
+      : [
+        { transform: 'translate(0,0) scale(1) rotate(0deg)', opacity: 1 },
+        { transform: `translate(${dx}px,${dy}px) scale(.55) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: .85, offset: .8 },
+        { transform: `translate(${dx}px,${dy}px) scale(.5) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: 0 },
+      ];
+    const duration = lob ? LOB_MS : MS.deal;
+    lastAnim = ghost.animate(frames, { duration, delay, easing: EASE_OUT, fill: 'forwards' });
+    lastAnim.finished.then(drop, drop);
+    guard = setTimeout(drop, duration + delay + 400);
+  }
+  if (lob && lastAnim) {
+    // The punch rides the LAST card's own `finished`, not a timer started here.
+    // A WAAPI delay counts from the frame the animation becomes ready, which is
+    // after this whole snapshot task (two renders, with the seat note); a timer
+    // counts from now. With a 200ms stall injected at the end of the task, a
+    // timer punched the badge exactly 200ms before the card got there. The
+    // guard is the same leash the ghosts wear, for a surface that never ticks.
+    let punched = false, punchGuard = 0;
+    const punch = () => {
+      if (punched) return;
+      punched = true;
+      clearTimeout(punchGuard);
+      const badge = opts.playerId === app.youId
+        ? nodes['you-count']
+        : nodes.seats.querySelector(`.seat[data-player="${CSS.escape(opts.playerId)}"] .count-badge`);
+      if (badge) pulse(badge, 'is-punched', 260);
+    };
+    lastAnim.finished.then(punch, punch);
+    punchGuard = setTimeout(punch, MS.flight + 90 + (shown - 1) * 90 + LOB_MS + 400);
   }
 }
 
@@ -997,6 +1079,8 @@ function renderGame(snap) {
   else if (!over && nextPlayerId(g) === snap.youId) youStatus = 'you’re next';
   else if (g.hand.length === 1) youStatus = 'one card!';
   else youStatus = 'you';
+  const youNote = youStatus === 'winner!' ? null : liveSeatNote(snap.youId);
+  if (youNote) { youStatus = youNote; youAlarm = false; }
   setText(nodes['you-status'], youStatus);
   nodes['you-status'].hidden = !youStatus;
   nodes['you-status'].classList.toggle('is-acting', yourTurn);
@@ -1937,6 +2021,9 @@ function buildSeat(playerId) {
   return seat;
 }
 
+/** One-shot classes fired at a seat plate from outside the render (see renderSeats). */
+const PLATE_ONE_SHOTS = ['is-pop', 'is-skipped'];
+
 /** Adds or removes fanned card backs so the stack matches the hand size. */
 function syncFan(fan, shown) {
   while (fan.children.length > shown) fan.lastElementChild.remove();
@@ -1990,6 +2077,11 @@ function renderSeats(snap, g, over) {
     else if (p.cardCount === 1) { status = 'one card!'; }
     else if (p.declaredTondo) { status = 'TONDO!'; }
     else status = 'waiting';
+    // A transient verb ("skipped", "+2") outranks everything but a win and an
+    // absence: it is the words half of a consequence, and it has to be there
+    // under reduced motion, where the duck and the throw are not.
+    const note = (status === 'wins!' || status === 'away — reconnecting') ? null : liveSeatNote(p.id);
+    if (note) { status = note; loud = true; alarm = false; }
 
     let seat = live.get(p.id);
     if (!seat) seat = buildSeat(p.id);
@@ -2006,11 +2098,20 @@ function renderSeats(snap, g, over) {
     if (seat.getAttribute('aria-label') !== label) seat.setAttribute('aria-label', label);
 
     const plate = seat.firstElementChild;
-    const plateClass = `plate${acting ? ' is-acting' : ''}${(loud || alarm) && !acting ? ' is-loud' : ''}`;
-    // `is-pop` is a transient class popSeat() owns; preserve it across updates.
-    const popped = plate.classList.contains('is-pop');
-    if (plate.className.replace(' is-pop', '') !== plateClass) {
-      plate.className = plateClass + (popped ? ' is-pop' : '');
+    // A seat note makes the PILL loud, never the plate. `.plate.is-loud` is a pop,
+    // and the note arrives with the snapshot: on the plate it fired before the
+    // card's impact frame, and when the duck's `is-skipped` came off, the plate's
+    // animation-name fell back to `tondo-pop` and replayed it — a 0.4-opacity
+    // flash straight after the duck (measured at 406ms). The consequence effect
+    // (duck, throw, punch) is the only motion the victim's plate gets.
+    const plateClass = `plate${acting ? ' is-acting' : ''}${(loud || alarm) && !acting && !note ? ' is-loud' : ''}`;
+    // `is-pop` (popSeat) and `is-skipped` (fx.js's duck) are transient one-shot
+    // classes owned by their callers; preserve them across updates, or a repaint
+    // landing mid-animation would strip the class and cut the motion short.
+    const transient = PLATE_ONE_SHOTS.filter((c) => plate.classList.contains(c));
+    const bare = transient.reduce((cls, c) => cls.replace(' ' + c, ''), plate.className);
+    if (bare !== plateClass) {
+      plate.className = plateClass + transient.map((c) => ' ' + c).join('');
     }
 
     const stack = plate.querySelector('.stack');

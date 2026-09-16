@@ -453,6 +453,23 @@ body { height: 100dvh; }
   0%   { transform: scale(.3); opacity: .85 }
   100% { transform: scale(2.4); opacity: 0 }
 }
+/* A skipped seat ducks: a small lift, then it sinks and greys out for a beat
+   before it comes back. Percentages of the plate's own box, not pixels — 11.4%
+   is the measured 9px on a 78.7px plate, so the duck reads the same at every
+   table size. */
+@keyframes seat-skipped {
+  0%   { transform: translateY(0) scale(1); filter: saturate(1); }
+  18%  { transform: translateY(-5.1%) scale(1.02); animation-timing-function: cubic-bezier(.33,0,.67,1); }
+  55%  { transform: translateY(11.4%) scale(.90); filter: saturate(.45); animation-timing-function: cubic-bezier(.34,1.56,.64,1); }
+  100% { transform: translateY(0) scale(1); filter: saturate(1); }
+}
+/* The count badge taking a +2. `scale` (the property) composes with any
+   transform the badge already has, so it never replaces one. */
+@keyframes badge-punch { 0% { scale: 1; } 40% { scale: 1.34; } 100% { scale: 1; } }
+/* A reversal: one bright band sweeps the sauce once, in the NEW play order's
+   direction (`is-cw` for direction 1, which #dir-label calls "Clockwise"). */
+@keyframes dir-sweep-cw  { 0% { transform: rotate(0deg); opacity: 0; } 12% { opacity: .22; } 100% { transform: rotate(360deg); opacity: 0; } }
+@keyframes dir-sweep-ccw { 0% { transform: rotate(0deg); opacity: 0; } 12% { opacity: .22; } 100% { transform: rotate(-360deg); opacity: 0; } }
 /* Reduced motion keeps the fade that explains the change, drops the travel. */
 @keyframes rm-fade { 0%{opacity:0} 100%{opacity:1} }
 
@@ -499,6 +516,11 @@ body { height: 100dvh; }
   .card.refuse, .turn-token.hop::after, .stage.is-turn-change .ring::after,
   .plaque.is-pop, .plaque.flash::after, .plate.is-loud::after,
   .sauce-tint.is-sweeping { animation: none !important; }
+  /* The consequence effects move; their meaning rides the seat verb ("skipped",
+     "+2") and the live region instead, which fx.js writes under every
+     preference. */
+  .plate.is-skipped, .you-seat.is-skipped, .count-badge.is-punched, .you-count.is-punched,
+  .dir-sweep { animation: none !important; }
   /* A topping still has to APPEAR — that is the state change. It just does not
      fall, squash or throw a ripple; the grease ring is pure decoration. */
   .tp-drop { animation: rm-fade 160ms linear both !important; }
@@ -1156,6 +1178,14 @@ body[data-screen="game"] { background: var(--page); }
    outward across the sauce instead of swapping in place. Transform + opacity
    only — the gradient colour itself is set once, before the sweep starts. */
 .sauce-tint.is-sweeping { animation: sauce-sweep 280ms var(--e-out) 1; }
+/* The reversal sweep (fx.js). Inside .sauce, like every centre layer that
+   moves, so the plaque, the pile and the direction label never animate. */
+.dir-sweep {
+  position: absolute; inset: 0; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: conic-gradient(from -20deg, transparent 0deg, rgb(245 203 92) 20deg, transparent 40deg, transparent 360deg);
+}
+.dir-sweep.is-cw  { animation: dir-sweep-cw 620ms cubic-bezier(.16,1,.3,1) 1; }
+.dir-sweep.is-ccw { animation: dir-sweep-ccw 620ms cubic-bezier(.16,1,.3,1) 1; }
 
 /* --- the ledger: one topping per card played, in its owner's wedge ------- */
 /* `overflow: visible` is deliberate and is half of the annulus floor (the
@@ -1474,6 +1504,10 @@ body[data-screen="game"] { background: var(--page); }
 .plate.is-pop { animation: tondo-pop 260ms var(--e-pop) 1; }
 .plate.is-loud { animation: tondo-pop 200ms var(--e-out) 1; }
 .plate.is-loud::after { animation: tondo-ring-pulse 220ms var(--e-out) 1; }
+/* The skip duck (fx.js). Declared AFTER .plate.is-loud on purpose: a plate can
+   still be loud for its own reasons (a win) when a duck is fired at it, and the
+   rule written later is the one whose `animation` applies when both are on. */
+.plate.is-skipped, .you-seat.is-skipped { animation: seat-skipped 380ms linear 1; }
 
 .seat-body { display: flex; align-items: flex-end; gap: max(4px, calc(9px * var(--ss))); transition: opacity var(--t-state) var(--e-out); }
 .seat-left .seat-body { flex-direction: row-reverse; }
@@ -1656,6 +1690,8 @@ body[data-screen="game"] { background: var(--page); }
   background: var(--ink); border: 2px solid var(--tone-edge, var(--bas-edge));
   font-family: var(--font-display); font-weight: 800; font-size: 11px; color: var(--navy);
 }
+/* A +2 landing: the victim's count takes the punch as the last card arrives. */
+.count-badge.is-punched, .you-count.is-punched { animation: badge-punch 260ms cubic-bezier(.34,1.56,.64,1) 1; }
 .you-pill {
   display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0;
   padding: 4px 11px 5px; border-radius: 999px;

@@ -289,6 +289,99 @@ function next() {
   go(i < 0 || i === ORDER.length - 1 ? ORDER[0] : ORDER[i + 1]);
 }
 
+/**
+ * Emits one scripted BEFORE/AFTER pair so a check can watch exactly one event
+ * land. `seats` picks the table size (2-4). `victim: 'you'` makes a skip, +2 or
+ * callout land on you (p1); otherwise it lands on a bot.
+ * Resolves just after the AFTER snapshot is delivered.
+ */
+function transition(kind, { seats = 4, victim = 'bot' } = {}) {
+  table.seats = seatsWithYou().slice(0, 1).concat(BOTS.slice(0, seats - 1).map((b) => Object.assign({}, b)));
+  table.phase = 'playing';
+  const ids = table.seats.map((s) => s.id);
+  const hitsYou = victim === 'you';
+  const actor = hitsYou ? ids[ids.length - 1] : 'p1';
+  const target = hitsYou ? 'p1' : ids[1];
+  const hand = [c('h1', 'basil', '4'), c('h2', 'cheese', '2'), c('h3', 'anchovy', '9'), c('h4', 'basil', '6'), c('h5', 'pepperoni', '1')];
+  const counts = ids.map((id) => (id === 'p1' ? hand.length : 5));
+  const base = (over) => Object.assign({
+    direction: 1,
+    activeSuit: 'basil',
+    topCard: c('t-before', 'basil', '7'),
+    drawPileCount: 30,
+    turnPlayerId: actor,
+    winnerId: null,
+    players: playersFrom(counts),
+    hand: hand.slice(),
+    playableCardIds: actor === 'p1' ? ['h1', 'h4'] : [],
+    drawnDecisionCardId: null,
+    canDeclareTondo: false,
+    calloutTargets: [],
+    log: ['SCRIPTED BEFORE'],
+  }, over || {});
+  const after = (card, extra) => {
+    const players = playersFrom(counts.map((n, i) => (ids[i] === actor ? n - 1 : n)), extra && extra.players);
+    const handAfter = actor === 'p1' ? hand.slice(1) : hand.slice();
+    return base(Object.assign({ topCard: card, players, hand: handAfter, log: ['SCRIPTED AFTER'] }, extra && extra.game));
+  };
+  const next = (steps) => ids[((ids.indexOf(actor) + steps) % ids.length + ids.length) % ids.length];
+
+  let before = base();
+  let afterGame;
+  switch (kind) {
+    case 'number':
+      afterGame = after(c('t-num', 'basil', '3'), { game: { turnPlayerId: next(1) } });
+      break;
+    case 'skip':
+      afterGame = after(c('t-skip', 'basil', 'SKIP'), { game: { turnPlayerId: next(2) } });
+      break;
+    case 'plus2': {
+      const bumped = {};
+      bumped[target] = { cardCount: counts[ids.indexOf(target)] + 2 };
+      afterGame = after(c('t-plus2', 'basil', 'PLUS2'), { players: bumped, game: { turnPlayerId: next(2) } });
+      if (target === 'p1') afterGame.hand = afterGame.hand.concat([c('d1', 'cheese', '5'), c('d2', 'anchovy', '8')]);
+      break;
+    }
+    case 'reverse':
+      // At two seats the server treats REVERSE as a skip and leaves direction alone.
+      afterGame = seats === 2
+        ? after(c('t-rev', 'basil', 'REVERSE'), { game: { turnPlayerId: actor } })
+        : after(c('t-rev', 'basil', 'REVERSE'), { game: { direction: -1, turnPlayerId: ids[(ids.indexOf(actor) - 1 + ids.length) % ids.length] } });
+      break;
+    case 'wild':
+      afterGame = after(c('t-wild', null, 'WILD'), { game: { activeSuit: 'anchovy', turnPlayerId: next(1) } });
+      break;
+    case 'tondo': {
+      const declarer = hitsYou ? 'p1' : ids[1];
+      before = base({ players: playersFrom(counts.map((n, i) => (ids[i] === declarer ? 2 : n))) });
+      afterGame = base({ players: playersFrom(counts.map((n, i) => (ids[i] === declarer ? 2 : n)), { [declarer]: { declaredTondo: true } }), log: ['SCRIPTED AFTER'] });
+      break;
+    }
+    case 'callout': {
+      const caller = hitsYou ? ids[1] : 'p1';
+      const vuln = {};
+      vuln[target] = { cardCount: 1, vulnerable: true };
+      before = base({ players: playersFrom(counts, vuln), calloutTargets: target === 'p1' ? [] : [target] });
+      const caught = {};
+      caught[target] = { cardCount: 3, vulnerable: false };
+      // Upper-cased exactly as server/game.js writes it (`up(name)`), so the
+      // caller can be read back from this line. nameOf('p1') is "You".
+      const up = (id) => String(nameOf(id)).toUpperCase();
+      afterGame = base({ players: playersFrom(counts, caught), log: ['SCRIPTED BEFORE', `${up(caller)} CALLED OUT ${up(target)} - DRAW 2`] });
+      break;
+    }
+    default:
+      return Promise.reject(new Error('unknown transition: ' + kind));
+  }
+  table.game = before;
+  emit(snapshot());
+  return new Promise((resolve) => setTimeout(() => {
+    table.game = afterGame;
+    emit(snapshot());
+    setTimeout(resolve, 20);
+  }, 120));
+}
+
 /* --------------------------------------------------------------- routing */
 
 function emit(message) {
@@ -479,4 +572,4 @@ MockSocket.CLOSED = 3;
 window.WebSocket = MockSocket;
 // `emit` is exposed so a check can push a hand-written snapshot (a two- or
 // three-seat table, say) through the same path the server would use.
-window.__mock = { goto: go, next, scenes: Object.keys(SCENES), table, emit, snapshot };
+window.__mock = { goto: go, next, scenes: Object.keys(SCENES), table, emit, snapshot, transition };

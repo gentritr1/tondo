@@ -14,6 +14,7 @@
  *   node scripts/shoot.js --out /tmp/shots --scene game --w 390 --h 844 --tag mobile
  *   node scripts/shoot.js --out /tmp/shots --scene game --reduced
  *   node scripts/shoot.js --probe "document.getAnimations().length"
+ *   node scripts/shoot.js --out /tmp/shots --scene mock:yourTurn --probe "…" --no-settle --wait 480
  *
  * Scenes: home, lobby, game, roundOver.
  * The server must already be running (npm start on :4600).
@@ -37,7 +38,7 @@ const ORIGIN = process.env.TONDO_URL || 'http://localhost:4600';
 
 // --------------------------------------------------------------------- args
 function parseArgs(argv) {
-  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false };
+  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0 };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--out') a.out = argv[++i];
@@ -50,6 +51,10 @@ function parseArgs(argv) {
     else if (k === '--reduced') a.reduced = true;
     else if (k === '--keep') a.keep = true;
     else if (k === '--probe') a.probe = argv[++i];
+    // A mid-animation frame: skip the finish-every-animation settle, and hold
+    // for a fixed time after the probe so the capture lands at a known moment.
+    else if (k === '--no-settle') a.settle = false;
+    else if (k === '--wait') a.wait = Number(argv[++i]);
   }
   return a;
 }
@@ -360,9 +365,10 @@ async function main() {
       const v = await cdp.eval(a.probe);
       console.log(JSON.stringify(v, null, 2));
     }
+    if (a.wait) await sleep(a.wait);
     if (a.out) {
       const tag = [a.scene.replace(':', '-'), a.tag, `${a.w}x${a.h}`, a.reduced ? 'reduced' : ''].filter(Boolean).join('-');
-      console.log('wrote ' + await shoot(cdp, path.join(a.out, `${tag}.png`)));
+      console.log('wrote ' + await shoot(cdp, path.join(a.out, `${tag}.png`), { settle: a.settle }));
     }
     // A screenshot of a page that threw is not evidence of anything. Errors
     // are reported after the capture so the image is still written, but they
