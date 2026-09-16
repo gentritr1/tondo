@@ -422,8 +422,22 @@ body { height: 100dvh; }
   0%   { transform:rotate(-2deg) scale(.972) }
   100% { transform:rotate(-2deg) scale(1) }
 }
-/* A picked Wild washes its colour outward across the sauce. */
-@keyframes sauce-sweep { 0%{opacity:0;transform:scale(.5)} 45%{opacity:1} 100%{opacity:1;transform:scale(1)} }
+/* A Wild washes its chosen colour outward across the sauce (fx.js), on its own
+   .sauce-wash layer: from a small bright pool to past the rim, gone by the end. */
+@keyframes sauce-wash { 0% { opacity: 0; transform: scale(.42); } 30% { opacity: 1; } 100% { opacity: 0; transform: scale(1.08); } }
+/* The TONDO stamp (fx.js): a wind-up — squash and a counter-lean — then the
+   seat slams big and settles. The wind-up (0-22%) runs on the rule's `linear`;
+   the slam and the overshooting settle carry their own curves, set on the
+   keyframe each segment starts from. */
+@keyframes tondo-stamp {
+  0%   { transform: scale(1) rotate(0deg); }
+  22%  { transform: scale(.92) rotate(-3deg); animation-timing-function: cubic-bezier(.33,0,.67,1); }
+  52%  { transform: scale(1.14) rotate(2deg); animation-timing-function: cubic-bezier(.34,1.56,.64,1); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+/* The stamp's ring shouting outward once. Its own keyframe, deliberately not
+   tondo-ring-pulse: that one is shared by the plaque flash and the alarm. */
+@keyframes tondo-ring-shout { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.34); } }
 /* A topping landing in its owner's wedge. From the concept's `tondoDrop`: it
    falls in oversized, flattens on impact, then settles into shape. The fall
    height is written in --tp-u so it scales with the pie exactly as the topping
@@ -506,14 +520,19 @@ body { height: 100dvh; }
   .banner.is-leaving { animation: rm-fade 140ms linear 1 reverse !important; }
   /* Pure attention-getters carry no information a fade can't: silence them. */
   .card.refuse, .turn-token.hop::after, .stage.is-turn-change .ring::after,
-  .plaque.is-pop, .plaque.flash::after, .plate.is-loud::after,
-  .sauce-tint.is-sweeping { animation: none !important; }
+  .plaque.is-pop, .plaque.flash::after, .plate.is-loud::after { animation: none !important; }
   /* The consequence effects move; their meaning rides the seat verb ("skipped",
      "+2") and the live region instead, which fx.js writes under every
      preference. (fx.js does not start the WAAPI skip duck at all under reduced
      motion, so it has no entry here.) */
   .count-badge.is-punched, .you-count.is-punched,
   .dir-sweep { animation: none !important; }
+  /* The Wild wash and the TONDO stamp move; the plaque names the new topping,
+     and the seat's "TONDO!" and the live region carry the declaration. (fx.js
+     does not start the WAAPI callout lunge under reduced motion; the seat notes
+     and "Caught!" carry the callout.) */
+  .sauce-wash, .plate.is-tondo, .you-seat.is-tondo,
+  .plate.is-tondo::after, .you-seat.is-tondo::after { animation: none !important; }
   /* A topping still has to APPEAR — that is the state change. It just does not
      fall, squash or throw a ripple; the grease ring is pure decoration. */
   .tp-drop { animation: rm-fade 160ms linear both !important; }
@@ -1167,10 +1186,16 @@ body[data-screen="game"] { background: var(--page); }
 }
 /* the one layer that still answers to the active topping */
 .sauce-tint { background: radial-gradient(circle at 50% 46%, var(--ring-fill, transparent) 0%, transparent 74%); }
-/* Picking a Wild's topping is rare and consequential: the new colour washes
-   outward across the sauce instead of swapping in place. Transform + opacity
-   only — the gradient colour itself is set once, before the sweep starts. */
-.sauce-tint.is-sweeping { animation: sauce-sweep 280ms var(--e-out) 1; }
+/* Picking a Wild's topping is rare and consequential: the chosen colour washes
+   outward across the sauce (fx.js). Its own layer at its own alpha (--wash-fill,
+   34%), because the resting tint above is 10% on purpose and a flourish on
+   that layer was invisible. Transform + opacity only — the colour is set
+   before each wash starts. Inside .sauce, like every centre layer that moves. */
+.sauce-wash {
+  position: absolute; inset: 0; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle closest-side, var(--wash-fill, transparent) 0%, var(--wash-fill, transparent) 55%, transparent 100%);
+}
+.sauce-wash.is-washing { animation: sauce-wash 520ms cubic-bezier(.16,1,.3,1) 1; }
 /* The reversal sweep (fx.js). Inside .sauce, like every centre layer that
    moves, so the plaque, the pile and the direction label never animate. */
 .dir-sweep {
@@ -1497,6 +1522,19 @@ body[data-screen="game"] { background: var(--page); }
 .plate.is-pop { animation: tondo-pop 260ms var(--e-pop) 1; }
 .plate.is-loud { animation: tondo-pop 200ms var(--e-out) 1; }
 .plate.is-loud::after { animation: tondo-ring-pulse 220ms var(--e-out) 1; }
+/* The TONDO stamp and its ring (fx.js), for a seat plate and for your tile.
+   After the is-pop / is-loud rules on purpose: same specificity, so source order
+   gives the stamp `animation` while both are on (a turn pop landing mid-stamp
+   is swallowed, not stacked). The ring's resting `opacity: 0` is not
+   decoration: .you-seat has no ::after of its own to inherit it from, so under
+   reduced motion (animation silenced) the ring would sit there at full
+   strength for as long as the class is on. */
+.plate.is-tondo, .you-seat.is-tondo { animation: tondo-stamp 440ms linear 1; }
+.plate.is-tondo::after, .you-seat.is-tondo::after {
+  content: ""; position: absolute; inset: -6px; border-radius: 22px;
+  border: 2px solid var(--gold); pointer-events: none; opacity: 0;
+  animation: tondo-ring-shout 420ms cubic-bezier(.16,1,.3,1) 1 forwards;
+}
 
 .seat-body { display: flex; align-items: flex-end; gap: max(4px, calc(9px * var(--ss))); transition: opacity var(--t-state) var(--e-out); }
 .seat-left .seat-body { flex-direction: row-reverse; }

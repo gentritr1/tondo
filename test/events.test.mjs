@@ -351,6 +351,34 @@ test('a full seeded round derives events on every step without throwing', () => 
   assert(seen.has('win'), `saw the win (types seen: ${[...seen].join(',')})`);
 });
 
+test('a callout names its caller, read from the real engine\'s log line', () => {
+  const state = newState();
+  const victim = game.findPlayer(state, 'p2');
+  victim.hand = victim.hand.slice(0, 1);
+  victim.declaredTondo = false;
+  victim.vulnerable = true;
+  const before = snapOf(state);
+  assert(game.callOut(state, 'p3', 'p2').ok, 'Dominic calls out Carmela');
+  const evs = deriveEvents(before, snapOf(state));
+  const c = pick(evs, 'callout');
+  assert(c, 'a callout event');
+  eq(c.targetId, 'p2', 'target');
+  eq(c.callerId, 'p3', 'caller parsed from the log');
+});
+
+test('a callout whose log line cannot be matched reports a null caller, not a wrong one', () => {
+  const state = newState();
+  const victim = game.findPlayer(state, 'p2');
+  victim.hand = victim.hand.slice(0, 1);
+  victim.vulnerable = true;
+  const before = snapOf(state);
+  game.callOut(state, 'p3', 'p2');
+  const after = snapOf(state);
+  after.game.log = after.game.log.slice(0, -1).concat(['SOMETHING ELSE ENTIRELY']);
+  const c = pick(deriveEvents(before, after), 'callout');
+  eq(c.callerId, null, 'no guess');
+});
+
 // ---------------------------------------------------------------------------
 
 if (failures.length) {

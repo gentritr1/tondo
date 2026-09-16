@@ -13,6 +13,10 @@
  * (rather than parsing `game.log`, which is human-readable prose that will
  * change wording) keeps the wire contract untouched.
  *
+ * One fact is not in state at all: WHO made a callout. That one is read from
+ * the server's log line (see calloutCaller), pinned by a test that drives the
+ * real engine, and reported as null rather than guessed when it cannot be read.
+ *
  * This module is deliberately pure: two snapshots in, a list of events out, no
  * DOM and no side effects, so it can be unit-tested off a browser. It is also
  * deliberately NOT reduced-motion aware — a player who has asked for less
@@ -45,6 +49,23 @@ function seatAfter(players, fromId, direction, steps = 1) {
 }
 
 const byId = (players, id) => (players || []).find((p) => p.id === id) || null;
+
+/**
+ * Who made a callout. State does not carry it; the server's log line does, in
+ * a fixed format written by server/game.js callOut():
+ *   "<CALLER> CALLED OUT <TARGET> - DRAW <n>"   (names upper-cased)
+ * test/events.test.mjs drives the real engine, so a wording change there fails
+ * a test instead of silently dropping the effect. Unmatched -> null.
+ */
+function calloutCaller(g, targetId) {
+  const target = byId(g.players, targetId);
+  const line = [...(g.log || [])].reverse().find((l) => / CALLED OUT /.test(l));
+  if (!target || !line) return null;
+  const m = line.match(/^(.+) CALLED OUT (.+) - DRAW \d+$/);
+  if (!m || m[2] !== String(target.name).toUpperCase()) return null;
+  const caller = (g.players || []).find((p) => String(p.name).toUpperCase() === m[1] && p.id !== targetId);
+  return caller ? caller.id : null;
+}
 
 /**
  * @param {object|null} prev the snapshot the screen currently shows
@@ -168,7 +189,7 @@ export function deriveEvents(prev, snap) {
     // also ends quietly when the hand grows for any other reason, so the
     // +2-with-no-play test is what separates a punishment from a reprieve.
     if (before.vulnerable && !p.vulnerable && !played && p.cardCount - before.cardCount === 2) {
-      out.push({ type: 'callout', targetId: p.id, youCaught: p.id === snap.youId });
+      out.push({ type: 'callout', targetId: p.id, youCaught: p.id === snap.youId, callerId: calloutCaller(g, p.id) });
     }
   }
 

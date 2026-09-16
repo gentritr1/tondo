@@ -62,7 +62,6 @@ const MS = {
   handIn: 190,      // a card arriving in your hand
   seatPop: 260,     // .plate.is-pop
   plaquePop: 200,   // .plaque.is-pop
-  sweep: 280,       // .sauce-tint.is-sweeping
   flash: 220,       // .plaque.flash
   refuse: 161,      // .card.refuse
   bannerOut: 140,   // .banner.is-leaving
@@ -198,6 +197,11 @@ fx.init({
   seatNode: (id) => nodes.seats.querySelector(`.seat[data-player="${CSS.escape(id)}"]`),
   youId: () => app.youId,
   setSeatNote, announce,
+  // A seat's display name, as the table shows it ("Carmela", not "CARMELA").
+  playerName: (id) => nicely(playerName(id)),
+  // The Wild wash's colour: the chosen topping's light stop at 34%. Its own
+  // layer and alpha, so the resting .sauce-tint (10%) stays subtle.
+  washColor: (suit) => (SUITS[suit] ? tint(SUITS[suit].c, .34) : ''),
 });
 
 /* ----------------------------------------------------------------- state */
@@ -570,8 +574,10 @@ function applySnapshot(snap) {
     sound.playForEvents(events, { impactAt });
   }
   // The table's half of the same moment: a skipped seat ducks, a reversal
-  // sweeps the sauce, and the victim's seat says what happened in words that
-  // survive reduced motion. Fired after the repaint, at nodes that exist now.
+  // sweeps the sauce, a Wild washes it, a TONDO stamps the declaring seat, a
+  // callout lunges the caller at the caught seat — and the seats say what
+  // happened in words that survive reduced motion. Fired after the repaint, at
+  // nodes that exist now.
   fx.playForEvents(events, { impactAt });
 
   const pg = pgame;
@@ -588,14 +594,10 @@ function applySnapshot(snap) {
   }
   // The plaque states what you must match. When that requirement actually
   // changes it acknowledges itself — state indication, not decoration.
+  // (A Wild's wash across the sauce is fx.js's, on its own layer: it fires for
+  // every Wild, including one that keeps the suit this check would miss.)
   if (g && pg && activeSuitOf(g) !== activeSuitOf(pg)) {
     pulse(nodes.plaque, 'is-pop', MS.plaquePop);
-    // A Wild is the one card whose topping is *chosen*: wash the new colour
-    // outward across the sauce. Rare enough to earn the flourish.
-    if (isWild(g.topCard) && !RM.matches) {
-      const tintLayer = nodes.ring.querySelector('.sauce-tint');
-      if (tintLayer) pulse(tintLayer, 'is-sweeping', MS.sweep);
-    }
   }
   // With a flight in the air the card lands when the ghost arrives (see
   // flyToPile); without one — no known source, or reduced motion — it lands now.
@@ -724,12 +726,18 @@ function runTravel(plan, snap, events, impactAt) {
       ? nodes['hand-row']
       : nodes.seats.querySelector(`.seat[data-player="${CSS.escape(deal.playerId)}"] .stack`);
     // Cards a +2 forced on somebody are thrown off the card that did it, not
-    // dealt off the deck like an ordinary draw.
+    // dealt off the deck like an ordinary draw. A callout's two are thrown by
+    // whoever made the call, from their seat — when the log names them; an
+    // unknown caller falls back to an ordinary deal.
+    const impactMs = (impactAt || 0) * 1000;
     const hit = (events || []).find((e) => e.type === 'plus2' && e.victimId === deal.playerId);
-    if (target) {
-      dealGhosts(target.getBoundingClientRect(), deal.count, wave++,
-        hit ? { lob: true, playerId: deal.playerId, impactMs: (impactAt || 0) * 1000 } : null);
-    }
+    const caught = hit ? null
+      : (events || []).find((e) => e.type === 'callout' && e.targetId === deal.playerId && e.callerId);
+    const fromRect = caught ? seatCardRect(caught.callerId) : null;
+    let opts = null;
+    if (hit) opts = { lob: true, playerId: deal.playerId, impactMs };
+    else if (fromRect) opts = { lob: true, playerId: deal.playerId, impactMs, fromRect };
+    if (target) dealGhosts(target.getBoundingClientRect(), deal.count, wave++, opts);
   }
 }
 
@@ -748,6 +756,22 @@ function pileRect() {
     if (r.width) { lastDeckRect = r; return r; }
   }
   return lastDeckRect || nodes['top-card'].getBoundingClientRect();
+}
+
+/**
+ * A card back sized for a seat, centred on it: where a seat's thrown cards
+ * leave from. An opponent's is the table's own --seat-back on their stack —
+ * the same box their played cards fly out of in planTravel. Yours is centred on
+ * your tile at .74 of its width, the ratio the seats use (--seat-back .08 over
+ * --seat-tile .108 of the table): the tray has no --seat-back of its own.
+ */
+function seatCardRect(playerId) {
+  if (playerId === app.youId) {
+    const tile = document.querySelector('.you-seat');
+    return tile && tile.offsetWidth ? cardRectAt(tile, tile.offsetWidth * .74) : null;
+  }
+  const stack = nodes.seats.querySelector(`.seat[data-player="${CSS.escape(playerId)}"] .stack`);
+  return stack ? cardRectAt(stack, cssPx(stack, '--seat-back', 34)) : null;
 }
 
 /** A card-proportioned rect (the 96×138 ratio) centred on `node`. */
@@ -837,10 +861,12 @@ function flyToPile(from, card) {
  * is the weight), arc up by 0.4 of a card on the way, and the victim's count
  * badge takes the punch when the last one arrives. `opts.impactMs` is that
  * impact frame: MS.flight while a played card is in the air, 0 without one.
+ * `opts.fromRect` overrides where a lob leaves from — a callout's cards leave
+ * the caller's seat (seatCardRect), not the top card.
  */
 function dealGhosts(target, count, wave, opts) {
   const lob = !!(opts && opts.lob);
-  const src = lob ? nodes['top-card'].getBoundingClientRect() : pileRect();
+  const src = lob ? (opts.fromRect || nodes['top-card'].getBoundingClientRect()) : pileRect();
   if (!src.width || !target.width) return;
   const shown = Math.min(count, 3); // a +2 reads at two; never flood the DOM
   const dx = (target.left + target.width / 2) - (src.left + src.width / 2);
@@ -2046,9 +2072,11 @@ function buildSeat(playerId) {
   return seat;
 }
 
-/** One-shot classes fired at a seat plate from outside the render (see renderSeats).
- *  (The skip duck is a WAAPI animation in fx.js, so it needs no entry here.) */
-const PLATE_ONE_SHOTS = ['is-pop'];
+/** One-shot classes fired at a seat plate from outside the render (see renderSeats):
+ *  the turn pop, and fx.js's TONDO stamp.
+ *  (The skip duck and the callout lunge are WAAPI animations in fx.js, so they
+ *  need no entry here.) */
+const PLATE_ONE_SHOTS = ['is-pop', 'is-tondo'];
 
 /** Adds or removes fanned card backs so the stack matches the hand size. */
 function syncFan(fan, shown) {

@@ -357,7 +357,9 @@ function transition(kind, { seats = 4, victim = 'bot' } = {}) {
     case 'tondo': {
       const declarer = hitsYou ? 'p1' : ids[1];
       before = base({ players: playersFrom(counts.map((n, i) => (ids[i] === declarer ? 2 : n))) });
-      afterGame = base({ players: playersFrom(counts.map((n, i) => (ids[i] === declarer ? 2 : n)), { [declarer]: { declaredTondo: true } }), log: ['SCRIPTED AFTER'] });
+      // The server's own wording (server/game.js declareTondo), so the rendered
+      // log line names the declaration and a probe can tell it was delivered.
+      afterGame = base({ players: playersFrom(counts.map((n, i) => (ids[i] === declarer ? 2 : n)), { [declarer]: { declaredTondo: true } }), log: ['SCRIPTED BEFORE', `${String(nameOf(declarer)).toUpperCase()} DECLARED TONDO`] });
       break;
     }
     case 'callout': {
@@ -497,7 +499,9 @@ function route(msg) {
       g.calloutTargets = [];
       g.players = g.players.map((p) => (p.id === msg.targetId
         ? Object.assign({}, p, { vulnerable: false, cardCount: p.cardCount + 2 }) : p));
-      g.log = g.log.slice(-3).concat(['YOU CAUGHT ' + nameOf(msg.targetId) + ' — THEY DREW 2']);
+      // server/game.js callOut()'s exact format: events.js reads the caller
+      // back out of it, so a looser wording here silently drops the lunge.
+      g.log = g.log.slice(-3).concat([`${String(table.name).toUpperCase()} CALLED OUT ${String(nameOf(msg.targetId)).toUpperCase()} - DRAW 2`]);
       emit(snapshot());
       later(1200, () => go('drawn'));
       return;
