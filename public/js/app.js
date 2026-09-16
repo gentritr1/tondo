@@ -12,6 +12,8 @@
  */
 
 import { Connection } from './net.js';
+import { deriveEvents } from './events.js';
+import * as sound from './sound.js';
 
 /* ------------------------------------------------------------- constants */
 
@@ -176,7 +178,8 @@ const nodes = {};
  'drawn-msg', 'drawn-play', 'drawn-keep',
  'wild-bar', 'wild-corner', 'wild-centre', 'wild-ghost', 'wild-grid',
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
- 'action-row', 'draw-btn', 'newround-btn', 'message', 'hint', 'game-leave', 'net-banner',
+ 'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips',
+ 'action-row', 'draw-btn', 'newround-btn', 'hold-btn', 'message', 'hint', 'game-leave', 'net-banner',
  'celebration',
 ].forEach((id) => { nodes[id] = el(id); });
 nodes['top-card'].style.setProperty('--land-rise', LAND_RISE + 'px');
@@ -210,7 +213,6 @@ const app = {
   handMoved: false,      // the player has scrolled the hand at least once
   handOverflows: false,  // the hand row is wider than the tray
   pile: [],              // the last few discards, so the stack has visible depth
-  lastSeatsHtml: '',     // unchanged HTML is not rewritten, so animations survive
   lastQueueHtml: '',
   ledger: [],            // the Slice Ledger: one topping per card played
   tally: new Map(),      // playerId → cards played this round (uncapped truth)
@@ -225,6 +227,8 @@ const app = {
   glowDir: null,         //   sweep the long way round instead of the short one
   flight: null,          // the in-flight played-card ghost animation
   offline: true,         // stale snapshots stay visible, but never actionable
+  nextDueAt: 0,         // epoch ms the next slice deals itself, 0 when idle
+  nextTicker: 0,        // the 1s interval that rewrites the countdown line
   celebratedWinner: '', // one confetti beat per completed round
   confettiTimer: 0,     // celebrate()'s own cleanup, so a second burst owns it
 };
@@ -476,10 +480,30 @@ function applySnapshot(snap) {
   document.title = yourTurnNow ? '● Your turn — TONDO' : 'TONDO';
 
   if (snap.phase === 'roundOver' && g) {
-    const winner = playerName(g.winnerId);
-    showBanner(g.winnerId === snap.youId ? 'YOU WIN' : (nicely(winner) + ' WINS').toUpperCase(), 'win', 0);
-    if (app.celebratedWinner !== g.winnerId) {
-      app.celebratedWinner = g.winnerId;
+    /* On the last slice two things are true at once — somebody won the round
+       and somebody took the pie — and they are often different people. The
+       banner announces the bigger of the two, so it cannot contradict the
+       scoreboard directly underneath it. */
+    const m = snap.match;
+    const champions = (m && m.complete) ? (m.championIds || []) : [];
+    let text;
+    if (champions.length > 1) {
+      text = 'PIE SHARED';
+    } else if (champions.length === 1) {
+      text = champions[0] === snap.youId
+        ? 'YOU TAKE THE PIE'
+        : `${nicely(playerName(champions[0]))} TAKES THE PIE`.toUpperCase();
+    } else {
+      text = g.winnerId === snap.youId
+        ? 'YOU WIN'
+        : `${nicely(playerName(g.winnerId))} WINS`.toUpperCase();
+    }
+    showBanner(text, 'win', 0);
+    // Keyed on the pie as well as the round, so the champion gets their own
+    // burst rather than inheriting the round winner's.
+    const celebrationKey = champions.length ? `pie:${champions.join(',')}` : g.winnerId;
+    if (app.celebratedWinner !== celebrationKey) {
+      app.celebratedWinner = celebrationKey;
       celebrate();
     }
     app.lastTurn = undefined;
@@ -516,8 +540,24 @@ function applySnapshot(snap) {
       (travel && travel.flight) ? MS.flight : 0);
   }
 
+  // ---- what actually happened -------------------------------------------
+  // The repaint below cannot tell a real move from an identical snapshot
+  // arriving twice; this can. Derived once here and shared, so a sound and a
+  // one-shot animation can never disagree about what the table just did.
+  // Deliberately outside the reduced-motion guard that gates `travel`: less
+  // movement is not less information.
+  const events = deriveEvents(prev, snap);
+
   renderGame(snap);
   runTravel(travel, snap);
+  // Scheduled against the frame the card actually lands on, not the frame the
+  // snapshot arrived — the same delay ledgerAdd above already uses. A sound
+  // that beats its own card to the pile is heard as being out of sync.
+  if (events.length) {
+    sound.playForEvents(events, {
+      impactAt: (travel && travel.flight) ? MS.flight / 1000 : 0,
+    });
+  }
 
   const pg = pgame;
   const turnChanged = !!(g && pg && prev.phase === 'playing' && snap.phase === 'playing'
@@ -989,7 +1029,12 @@ function renderGame(snap) {
     if (skip) skip.addEventListener('click', () => { app.calloutDismissed = targetKey; renderGame(app.snap); });
   }
 
-  nodes['drawn-bar'].hidden = !drawnCard;
+  /* Playing a DRAWN wild opens the suit picker while the server still holds a
+     drawn decision, so both bars used to show at once — and the drawn bar's
+     "Play it" simply re-opened the picker the player was already looking at.
+     One decision is on the table at a time: once the picker is up, it is the
+     only thing being asked. */
+  nodes['drawn-bar'].hidden = !drawnCard || wildOpen;
   if (drawnCard) {
     paintStock(nodes['drawn-card'], drawnCard);
     paintFace(drawnCard, {
@@ -1047,14 +1092,22 @@ function renderGame(snap) {
     nodes['event-ribbon'].hidden = true;
   }
 
+  /* --- the pie */
+  renderMatch(snap, over);
+
   /* --- hand */
-  const swapHand = !!drawnCard || wildOpen;
+  // A finished round swaps the hand for the scoreboard: the cards can no
+  // longer be played, and the standings are what the table wants to look at.
+  const swapHand = !!drawnCard || wildOpen || over;
   nodes['hand-wrap'].hidden = swapHand;
-  nodes['action-row'].hidden = swapHand;
+  nodes['action-row'].hidden = !!drawnCard || wildOpen;
   if (!swapHand) renderHand(g, yourTurn, playable, drawnId);
 
-  setText(nodes['hand-label'], wildOpen ? 'Pick a topping'
-    : (drawnCard ? 'Draw decision' : 'Your hand'));
+  // The label names whatever the tray is actually showing — at round over the
+  // hand has been swapped out for the scoreboard, so "Your hand" would be
+  // pointing at something that is not there.
+  setText(nodes['hand-label'], over ? 'The pie'
+    : (wildOpen ? 'Pick a topping' : (drawnCard ? 'Draw decision' : 'Your hand')));
   let playLabel;
   if (over) playLabel = 'Round over';
   else if (drawnCard) playLabel = 'Drawn card only';
@@ -1074,7 +1127,16 @@ function renderGame(snap) {
   deckButton.setAttribute('aria-label', deckButton.disabled
     ? `Draw pile — ${g.drawPileCount} cards left`
     : `Draw a card — ${g.drawPileCount} left in the deck`);
-  nodes['newround-btn'].hidden = !(over && snap.isHost);
+  /* Dealing is no longer the host's alone. A table used to stall because one
+     specific person had put their phone down, and everyone else was shown
+     "waiting for the host" with no control at all. */
+  const m = snap.match;
+  nodes['newround-btn'].hidden = !over;
+  if (over) setText(nodes['newround-btn'], m && m.complete ? 'New pie' : 'Next slice');
+  // Hold is only meaningful while a clock is actually running toward a deal.
+  const clockRunning = !!(over && m && m.nextDueAt);
+  nodes['hold-btn'].hidden = !clockRunning;
+  nodes['hold-btn'].disabled = app.offline;
   nodes['newround-btn'].disabled = app.offline;
 
   /* --- hint + assertive line */
@@ -1090,7 +1152,22 @@ function renderGame(snap) {
       ? `Waiting for ${nicely(current.name)} to reconnect…`
       : `${nicely(playerName(g.turnPlayerId))} is playing — hands off.`;
   }
-  setText(nodes.hint, hint);
+  /* The between-slices clock lives in the hint slot, in the tray's own quiet
+     type. Deliberately NOT a large counting digit and never a tick sound: the
+     beat exists so the table can read the standings and groan about them, and
+     a slot-machine reel would turn a pause into pressure. `app.nextDueAt`
+     drives a 1s ticker (below) that rewrites this line in place. */
+  app.nextDueAt = clockRunning ? m.nextDueAt : 0;
+  if (over) {
+    if (clockRunning) hint = nextSliceHint(m);
+    else if (m && m.held) hint = 'Held — deal when the table is ready.';
+    else if (m && m.complete) hint = 'Pie finished. Deal again for a fresh one.';
+    else hint = 'Round over — deal again when you like.';
+  }
+  // A countdown must not crossfade every second; it is rewritten in place.
+  if (clockRunning) nodes.hint.textContent = hint;
+  else setText(nodes.hint, hint);
+  scheduleNextSliceTicker();
 
   let alert = '';
   if (g.canDeclareTondo) alert = 'You are down to two cards. Call TONDO before you play.';
@@ -1106,6 +1183,119 @@ function renderGame(snap) {
 
 /** A small chip that travels the ring to whoever holds the turn — the turn
  *  passing is the Ring Table's one continuous, spatial fact. */
+/**
+ * The pie: four rounds, a running score, and the scoreboard that closes each
+ * one.
+ *
+ * A round used to end and leave nothing behind — a banner, a dead hand and a
+ * button. Nothing accumulated, so there was never a reason to play the next
+ * one beyond wanting to. This is where a round becomes part of something.
+ *
+ * During play it is deliberately almost invisible: one chip saying which slice
+ * this is. The product principle is that idle surfaces stay quiet, and a
+ * running scoreboard on screen while somebody is deciding a card is noise.
+ */
+function renderMatch(snap, over) {
+  const m = snap.match;
+  const chip = nodes['slice-chip'];
+  const board = nodes.scoreboard;
+  if (!m) { chip.hidden = true; board.hidden = true; return; }
+
+  // Slice N of 4 — `round` counts slices FINISHED, so the one being played is
+  // the next one up, capped so a finished pie does not read "slice 5 of 4".
+  const playing = Math.min(m.round + 1, m.roundsPerPie);
+  chip.hidden = over;
+  if (!over) setText(chip, `Slice ${playing}/${m.roundsPerPie}`);
+
+  board.hidden = !over;
+  if (!over) return;
+
+  const last = m.lastRound;
+  const champions = m.championIds || [];
+  const youWon = champions.includes(snap.youId);
+  const championNames = champions.map((id) => nicely(playerName(id))).join(' & ');
+
+  if (m.complete) {
+    setText(nodes['score-title'], champions.length > 1
+      ? 'The pie is shared'
+      : (youWon ? 'You take the pie!' : `${championNames} takes the pie`));
+    setText(nodes['score-sub'], champions.length > 1
+      ? `${championNames} finish level after four slices.`
+      : `Four slices played. Deal again for a fresh pie.`);
+  } else {
+    const winner = last && last.winnerId ? nicely(playerName(last.winnerId)) : null;
+    setText(nodes['score-title'], !winner ? 'Round over'
+      : (last.winnerId === snap.youId ? `You win slice ${m.round}` : `${winner} wins slice ${m.round}`));
+    setText(nodes['score-sub'], `${m.roundsPerPie - m.round} ${m.roundsPerPie - m.round === 1 ? 'slice' : 'slices'} left in the pie.`);
+  }
+
+  // Rows are keyed by player id for the same reason the seats are: a score
+  // that counts up should animate, and a rebuilt node cannot.
+  const rows = nodes['score-rows'];
+  const live = new Map([...rows.children].map((n) => [n.dataset.player, n]));
+  (m.standings || []).forEach((row, i) => {
+    let li = live.get(row.id);
+    if (!li) {
+      li = document.createElement('li');
+      li.className = 'score-row';
+      li.dataset.player = row.id;
+      li.innerHTML = '<span class="score-rank"></span><span class="score-name"></span>'
+        + '<span class="score-delta"></span><span class="score-total"></span>';
+    } else live.delete(row.id);
+    if (rows.children[i] !== li) rows.insertBefore(li, rows.children[i] || null);
+
+    const gained = last && last.winnerId === row.id ? last.points : 0;
+    const isChampion = m.complete && champions.includes(row.id);
+    const cls = `score-row${row.id === snap.youId ? ' is-you' : ''}${isChampion ? ' is-champion' : ''}`;
+    if (li.className !== cls) li.className = cls;
+    li.querySelector('.score-rank').textContent = String(i + 1);
+    li.querySelector('.score-name').textContent = nicely(row.name);
+    // The points just banked are the story of the round; a zero is left blank
+    // rather than shown as "+0", which reads as a failure the player caused.
+    li.querySelector('.score-delta').textContent = gained ? `+${gained}` : '';
+    li.querySelector('.score-total').textContent = String(row.points);
+    li.setAttribute('aria-label',
+      `${nicely(row.name)}, ${row.points} points${gained ? `, ${gained} this round` : ''}`);
+  });
+  live.forEach((n) => n.remove());
+
+  // One pip per slice, filled as the pie is eaten.
+  const pips = nodes['slice-pips'];
+  while (pips.children.length > m.roundsPerPie) pips.lastElementChild.remove();
+  while (pips.children.length < m.roundsPerPie) {
+    const pip = document.createElement('span');
+    pip.className = 'slice-pip';
+    pips.appendChild(pip);
+  }
+  [...pips.children].forEach((pip, i) => pip.classList.toggle('is-done', i < m.round));
+}
+
+/** "Next slice in 7 — or deal now." Seconds, floored, never below zero. */
+function nextSliceHint(m) {
+  const left = Math.max(0, Math.ceil((m.nextDueAt - Date.now()) / 1000));
+  return left > 0
+    ? `Next slice in ${left} — deal now, or hold.`
+    : 'Dealing the next slice…';
+}
+
+/* One 1s interval, alive only while a clock is actually running. It rewrites a
+   single text node and touches nothing else — a full repaint every second at
+   the round boundary would restart the scoreboard's own entry. */
+function scheduleNextSliceTicker() {
+  clearInterval(app.nextTicker);
+  app.nextTicker = 0;
+  if (!app.nextDueAt) return;
+  app.nextTicker = setInterval(() => {
+    const m = app.snap && app.snap.match;
+    if (!m || !m.nextDueAt || app.snap.phase !== 'roundOver') {
+      clearInterval(app.nextTicker);
+      app.nextTicker = 0;
+      return;
+    }
+    nodes.hint.textContent = nextSliceHint(m);
+  }, 1000);
+}
+
 function moveToken(snap) {
   const tok = document.getElementById('turn-token');
   const g = snap.game;
@@ -1153,12 +1343,19 @@ function renderQueue(snap, g, over) {
   const nextId = nextPlayerId(g);
   const next = g.players.find((p) => p.id === nextId);
   const colorOf = (id) => TONES[seatToneOf(g, snap.youId, id)].solid;
+  // On the last slice the chip follows the banner and the scoreboard: the pie
+  // outranks the round, and the three must not name three different people.
+  const m = snap.match;
+  const champions = (over && m && m.complete) ? (m.championIds || []) : [];
   let verb;
-  if (over) verb = (g.winnerId === snap.youId ? 'You win!' : nicely(playerName(g.winnerId)) + ' wins!');
+  if (champions.length > 1) verb = 'Pie shared';
+  else if (champions.length === 1) {
+    verb = champions[0] === snap.youId ? 'You take the pie!' : `${nicely(playerName(champions[0]))} takes the pie!`;
+  } else if (over) verb = (g.winnerId === snap.youId ? 'You win!' : nicely(playerName(g.winnerId)) + ' wins!');
   else if (g.turnPlayerId === snap.youId) verb = 'Your turn';
   else if (active && !active.connected) verb = 'Waiting for ' + nicely(active.name) + '…';
   else verb = nicely(active ? active.name : '') + ' is playing';
-  const leadId = over ? g.winnerId : g.turnPlayerId;
+  const leadId = champions.length === 1 ? champions[0] : (over ? g.winnerId : g.turnPlayerId);
   // The pill is the header's turn chip: a dot in the holder's tone, then the
   // verb. Whoever is next follows in the serif voice, not a second chip.
   let html = `<span class="chip">
@@ -1718,23 +1915,69 @@ function renderCenter(snap, g, over) {
    badge on the tile carries the true count. */
 const FAN_ROTS = [-10, -2, 6, 13];
 
+/** The empty shell of one seat. Everything inside it is then updated in place. */
+function buildSeat(playerId) {
+  const seat = document.createElement('div');
+  seat.className = 'seat';
+  seat.dataset.player = playerId;
+  seat.setAttribute('role', 'img');
+  seat.innerHTML = `<div class="plate">
+      <div class="seat-body">
+        <div class="stack">
+          <span class="seat-tile"><span class="seat-initial"></span></span>
+          <span class="count-badge"></span>
+        </div>
+        <div class="fan"></div>
+      </div>
+      <div class="seat-status">
+        <span class="seat-name"></span>
+        <span class="seat-verb"></span>
+      </div>
+    </div>`;
+  return seat;
+}
+
+/** Adds or removes fanned card backs so the stack matches the hand size. */
+function syncFan(fan, shown) {
+  while (fan.children.length > shown) fan.lastElementChild.remove();
+  while (fan.children.length < shown) {
+    const back = document.createElement('span');
+    back.className = 'mini-back back-face';
+    back.style.transform = `rotate(${FAN_ROTS[fan.children.length] || 0}deg)`;
+    fan.appendChild(back);
+  }
+}
+
+const setTextIfChanged = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+
+/**
+ * Seats are updated in place, keyed by player id — the same treatment the hand
+ * gets, and for the same reasons.
+ *
+ * This used to render one HTML string for the whole ring and assign it to
+ * `innerHTML` whenever it differed from last time. Because ANY difference
+ * rewrote EVERY seat, three things followed. A card count changing anywhere
+ * destroyed and rebuilt all four seats, so a player who had forgotten TONDO had
+ * their alarm restarted by other people's moves. The seats' own CSS opacity
+ * transitions could never run at all, because the node that would have
+ * transitioned was replaced rather than changed. And the rebuild cost the most
+ * DOM churn in the app on the single most frequent event in the game.
+ *
+ * Keeping the nodes fixes all three: an animation restarts only when the thing
+ * it describes actually changes.
+ */
 function renderSeats(snap, g, over) {
   const around = seatsAroundYou(g, snap.youId);
   const nextId = over ? '' : nextPlayerId(g);
   const maxBacks = COMPACT.matches ? 3 : 4;
+  const host = nodes.seats;
+  const live = new Map([...host.children].map((n) => [n.dataset.player, n]));
 
-  const seatsHtml = around.map(({ p, slot, offset }) => {
+  around.forEach(({ p, slot, offset }, i) => {
     const tone = TONES[SEAT_TONES[offset % SEAT_TONES.length]];
     const acting = !over && p.id === g.turnPlayerId && p.connected;
     const isNext = p.id === nextId && !acting;
-    const one = p.cardCount === 1;
     const name = nicely(p.name);
-
-    let backs = '';
-    const shown = Math.min(p.cardCount, maxBacks);
-    for (let k = 0; k < shown; k++) {
-      backs += `<span class="mini-back back-face" style="transform:rotate(${FAN_ROTS[k] || 0}deg)"></span>`;
-    }
 
     let status = '', loud = false, alarm = false;
     if (over && g.winnerId === p.id) { status = 'wins!'; loud = true; }
@@ -1744,36 +1987,58 @@ function renderSeats(snap, g, over) {
     else if (p.vulnerable) { status = 'forgot TONDO!'; alarm = true; }
     else if (acting) { status = 'playing…'; loud = true; }
     else if (isNext) { status = 'next'; }
-    else if (one) { status = 'one card!'; }
+    else if (p.cardCount === 1) { status = 'one card!'; }
     else if (p.declaredTondo) { status = 'TONDO!'; }
     else status = 'waiting';
 
-    const toneVars = `--tone-bg:${tone.bg};--tone-edge:${tone.edge}`;
+    let seat = live.get(p.id);
+    if (!seat) seat = buildSeat(p.id);
+    else live.delete(p.id);
+    if (host.children[i] !== seat) host.insertBefore(seat, host.children[i] || null);
+
+    // `className` is assigned wholesale only when it actually differs, so the
+    // seat's transitions see a class change only on a real state change.
+    const seatClass = `seat seat-${slot}${acting ? '' : (isNext ? ' is-next' : ' is-idle')}`;
+    if (seat.className !== seatClass) seat.className = seatClass;
+
     const cardWord = p.cardCount === 1 ? 'card' : 'cards';
-    const seatLabel = `${name}, ${p.cardCount} ${cardWord}, ${status}`;
-    return `<div class="seat seat-${slot} ${acting ? '' : (isNext ? 'is-next' : 'is-idle')}" data-player="${esc(p.id)}" role="img" aria-label="${esc(seatLabel)}">
-      <div class="plate ${acting ? 'is-acting' : ''} ${(loud || alarm) && !acting ? 'is-loud' : ''}">
-        <div class="seat-body">
-          <div class="stack" style="${toneVars}">
-            ${acting ? '<span class="seat-ring"></span>' : ''}
-            <span class="seat-tile"><span class="seat-initial">${esc((name.charAt(0) || '?').toUpperCase())}</span></span>
-            <span class="count-badge">${p.cardCount}</span>
-          </div>
-          <div class="fan">${backs}</div>
-        </div>
-        <div class="seat-status ${alarm ? 'is-alarm' : (loud ? 'is-loud' : '')}">
-          <span class="seat-name">${esc(name)}</span>
-          <span class="seat-verb">${esc(status)}</span>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-  // Skip identical repaints so the acting plate's bob is not restarted (and
-  // the pop not replayed) by every unrelated snapshot.
-  if (seatsHtml !== app.lastSeatsHtml) {
-    nodes.seats.innerHTML = seatsHtml;
-    app.lastSeatsHtml = seatsHtml;
-  }
+    const label = `${name}, ${p.cardCount} ${cardWord}, ${status}`;
+    if (seat.getAttribute('aria-label') !== label) seat.setAttribute('aria-label', label);
+
+    const plate = seat.firstElementChild;
+    const plateClass = `plate${acting ? ' is-acting' : ''}${(loud || alarm) && !acting ? ' is-loud' : ''}`;
+    // `is-pop` is a transient class popSeat() owns; preserve it across updates.
+    const popped = plate.classList.contains('is-pop');
+    if (plate.className.replace(' is-pop', '') !== plateClass) {
+      plate.className = plateClass + (popped ? ' is-pop' : '');
+    }
+
+    const stack = plate.querySelector('.stack');
+    if (stack.style.getPropertyValue('--tone-bg') !== tone.bg) {
+      stack.style.setProperty('--tone-bg', tone.bg);
+      stack.style.setProperty('--tone-edge', tone.edge);
+    }
+    // The acting ring is a node rather than a class so its pulse starts when
+    // the turn arrives and cannot be restarted by an unrelated repaint.
+    const ring = stack.querySelector('.seat-ring');
+    if (acting && !ring) {
+      const r = document.createElement('span');
+      r.className = 'seat-ring';
+      stack.insertBefore(r, stack.firstChild);
+    } else if (!acting && ring) ring.remove();
+
+    setTextIfChanged(stack.querySelector('.seat-initial'), (name.charAt(0) || '?').toUpperCase());
+    setTextIfChanged(stack.querySelector('.count-badge'), String(p.cardCount));
+    syncFan(plate.querySelector('.fan'), Math.min(p.cardCount, maxBacks));
+
+    const statusEl = plate.querySelector('.seat-status');
+    const statusClass = `seat-status${alarm ? ' is-alarm' : (loud ? ' is-loud' : '')}`;
+    if (statusEl.className !== statusClass) statusEl.className = statusClass;
+    setTextIfChanged(statusEl.querySelector('.seat-name'), name);
+    setTextIfChanged(statusEl.querySelector('.seat-verb'), status);
+  });
+
+  live.forEach((n) => n.remove());
 }
 
 /**
@@ -2058,6 +2323,31 @@ window.addEventListener('resize', () => {
   });
 });
 
+/* ------------------------------------------------------------------ sound */
+
+/* A browser will not create a running AudioContext outside a user gesture, and
+   iOS suspends the one we have whenever the tab goes away. So this listens to
+   every gesture rather than just the first: `unlock()` is a no-op once the
+   context is running, and the repeat is what brings it back after a suspend. */
+for (const evt of ['pointerdown', 'keydown', 'touchstart']) {
+  document.addEventListener(evt, () => sound.unlock(), { passive: true });
+}
+
+const soundBtn = document.getElementById('sound-btn');
+function paintSoundButton() {
+  const on = !sound.isMuted();
+  soundBtn.setAttribute('aria-pressed', String(on));
+  soundBtn.setAttribute('aria-label', on ? 'Sound on — turn off' : 'Sound off — turn on');
+  soundBtn.classList.toggle('is-off', !on);
+}
+soundBtn.addEventListener('click', () => {
+  const nowMuted = sound.toggleMuted();
+  paintSoundButton();
+  // Unmuting plays the sound it just re-enabled, so the button proves itself.
+  if (!nowMuted) sound.play('turn');
+});
+paintSoundButton();
+
 /* ------------------------------------------------------------- how to play */
 
 const helpDialog = document.getElementById('help-dialog');
@@ -2085,6 +2375,11 @@ nodes['drawn-play'].addEventListener('click', () => {
 });
 nodes['drawn-keep'].addEventListener('click', () => send({ type: 'pass' }));
 nodes['newround-btn'].addEventListener('click', () => send({ type: 'newRound' }));
+nodes['hold-btn'].addEventListener('click', () => {
+  // Sticky on the server: the table waits until somebody actually deals.
+  send({ type: 'hold' });
+  nodes['live-now'].textContent = 'Table held. Deal when you are ready.';
+});
 
 /* ------------------------------------------------------------------ boot */
 

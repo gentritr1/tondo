@@ -60,11 +60,22 @@
      cannot animate anything by accident. */
   interpolate-size: allow-keywords;
 
-  /* ---- Stone Oven palette ------------------------------------------- */
-  --page: #070C16;
-  --page-glow: #121B2E;
-  --shell: #0E1729;
-  --tray-bg: #0A1120;
+  /* ---- Stone Oven palette -------------------------------------------
+     The ground is WARM, not navy. It used to be #070C16 with a #121B2E glow —
+     a BLUE light source placed directly behind a warm pizza, which is the one
+     place the design spent extra light and it spent it cold, desaturating the
+     crust halo it was meant to lift. The board is a pie on a table in a room;
+     the room should be lit like one.
+
+     Contrast was measured, not assumed: `node scripts/check-contrast.js`
+     composites the whole translucent ink ladder against every surface here.
+     Worst case is --ink-3 on the glow at 5.58:1 (it was 6.18:1 on the old
+     glow), against a 4.5:1 floor — every word-carrying rung still clears AA.
+     Re-run that script after touching any of these four. */
+  --page: #0B0908;
+  --page-glow: #3A2413;
+  --shell: #14100D;
+  --tray-bg: #100C0A;
   --hair: rgba(255,247,232,.08);
   --hair-2: rgba(255,247,232,.16);
   --ink: #FFF7E8;          /* cream ink — card borders, letters */
@@ -99,9 +110,11 @@
   /* ---- the ink alpha ladder --------------------------------------------
      Muted cream had no ladder: `rgba(255,247,232, a)` appeared on 50 lines
      with 22 distinct alphas, and eight of those steps failed WCAG AA. These
-     four are now the only steps allowed to carry words. Ratios are measured
-     composited against --shell (#0E1729) — the darkest surface muted text
-     sits on, so every other surface in the app measures better:
+     four are now the only steps allowed to carry words. Ratios below were
+     measured against the ORIGINAL navy --shell (#0E1729). The ground is warm
+     now, and the worst surface is no longer --shell but --page-glow, where
+     --ink-3 measures 5.58:1. `node scripts/check-contrast.js` recomputes every
+     rung against every live surface — run it, do not trust these numbers:
        --ink-1  .92   loud secondary text        (~15:1)
        --ink-2  .72   10-11px caps labels        (~10:1; small type needs the
                                                   headroom, so labels never
@@ -588,13 +601,13 @@ body.is-offline #newround-btn { opacity: .55; cursor: wait; }
 
 /* ==========================================================================
    HOME + LOBBY — Stone Oven
-   The same page ground as the game screen (radial glow over #070C16) with the
+   The same page ground as the game screen (radial glow over --page) with the
    shell panel floating on it, so the three screens read as one product.
    ========================================================================== */
 
 body[data-screen="home"] #screen-home,
 body[data-screen="lobby"] #screen-lobby {
-  background: radial-gradient(ellipse 90% 46% at 50% 0%, var(--page-glow), var(--page) 72%);
+  background: radial-gradient(ellipse 62% 48% at 50% 38%, var(--page-glow), var(--page) 78%);
 }
 
 .home-card, .lobby-card {
@@ -744,7 +757,7 @@ body[data-screen="lobby"] #screen-lobby {
    ========================================================================== */
 
 body[data-screen="game"] { background: var(--page); }
-#screen-game { background: radial-gradient(ellipse 90% 46% at 50% 0%, var(--page-glow), var(--page) 72%); }
+#screen-game { background: radial-gradient(ellipse 62% 48% at 50% 38%, var(--page-glow), var(--page) 78%); }
 
 /* ------------------------------------------------------------ header bar */
 .strip {
@@ -771,6 +784,47 @@ body[data-screen="game"] { background: var(--page); }
   width: 44px; height: 44px; transform: translate(-50%, -50%); border-radius: 50%;
 }
 .strip-help:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
+
+/* The mute control wears the help button's geometry — same 30px circle, same
+   44x44 hit area — so the two read as one pair of utilities rather than two
+   unrelated controls. */
+.strip-sound {
+  position: relative;
+  width: 30px; height: 30px; min-height: 30px; padding: 0; flex: 0 0 auto;
+  border-radius: 50%; border: 1px solid rgba(255,247,232,.2);
+  color: rgba(255,247,232,.55);
+  display: flex; align-items: center; justify-content: center;
+}
+.strip-sound::before {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%); border-radius: 50%;
+}
+.strip-sound:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
+/* A speaker cone plus two arcs, drawn rather than typed: a glyph font would
+   render this differently on every platform, and it sits next to a "?" whose
+   weight it has to match. */
+.sound-glyph {
+  width: 15px; height: 13px; position: relative; display: block;
+  background: currentColor;
+  clip-path: polygon(0 33%, 32% 33%, 68% 4%, 68% 96%, 32% 67%, 0 67%);
+}
+.sound-glyph::after {
+  content: ""; position: absolute; left: 74%; top: 50%;
+  width: 7px; height: 7px; transform: translateY(-50%);
+  border: 1.6px solid currentColor; border-radius: 50%;
+  /* Only the right half of the ring shows, which reads as radiating sound. */
+  clip-path: polygon(50% 0, 100% 0, 100% 100%, 50% 100%);
+}
+/* Muted: the arcs go, a slash arrives. The state is carried by SHAPE, not by
+   colour alone — the control has to be readable to a player who cannot see the
+   dimming. */
+.strip-sound.is-off { color: rgba(255,247,232,.32); }
+.strip-sound.is-off .sound-glyph::after {
+  border: 0; border-radius: 0;
+  left: 78%; top: 50%; width: 9px; height: 1.6px;
+  background: currentColor; clip-path: none;
+  transform: translateY(-50%) rotate(-45deg);
+}
 .queue { display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .chip {
   display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
@@ -1731,8 +1785,8 @@ body[data-screen="game"] { background: var(--page); }
 .hand-row::-webkit-scrollbar { display: none; }
 .hand-row.is-overflowing { justify-content: flex-start; }
 .fade { position: absolute; top: 0; bottom: 0; width: 28px; pointer-events: none; }
-.fade-left { left: 0; background: linear-gradient(270deg, rgba(10,17,32,0), var(--tray-bg)); }
-.fade-right { right: 0; background: linear-gradient(90deg, rgba(10,17,32,0), var(--tray-bg)); }
+.fade-left { left: 0; background: linear-gradient(270deg, rgba(16,12,10,0), var(--tray-bg)); }
+.fade-right { right: 0; background: linear-gradient(90deg, rgba(16,12,10,0), var(--tray-bg)); }
 
 /* The fan: every card leans with its distance from the middle (--off, set per
    card in JS) plus a small per-card jitter, so the hand looks dealt by hand.
@@ -1989,7 +2043,15 @@ body[data-screen="game"] { background: var(--page); }
    into the MATCH plaque. Capping the tray and letting it scroll puts that
    viewport back in the regime the rules below already solve.) */
 @media (max-width: 719px) and (min-height: 541px) and (max-height: 780px) {
-  .stage.is-compressed + .tray {
+  /* `~`, not `+`. `#celebration` sits between `#stage` and `.tray` in the
+     markup, so the adjacent-sibling form matched ZERO elements and this whole
+     block — carefully measured, and needed — never applied to anything. The
+     symptom it was written to prevent was live the entire time: at 360x640
+     with the callout bar open, the Leave button sat 104px BELOW the viewport
+     and could not be reached. A selector that silently matches nothing is
+     indistinguishable from a rule that was never written; assert the match
+     count, do not assume it. */
+  .stage.is-compressed ~ .tray {
     min-height: 0;
     max-height: calc(100dvh - 277px - env(safe-area-inset-top));
     overflow-y: auto;
@@ -2164,4 +2226,101 @@ body[data-screen="game"] { background: var(--page); }
 
 @media (max-height: 540px) and (min-width: 560px) and (max-width: 599px) {
   .center { top: 58%; }
+}
+
+/* ---------------------------------------------------------------- the pie
+   A match is four rounds. The chip is what the table sees while playing (one
+   short label, no scores — a scoreboard on screen during a decision is noise);
+   the board is what replaces the dead hand the moment a round ends. */
+
+.slice-chip {
+  flex: 0 0 auto;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .18em;
+  text-transform: uppercase; color: rgba(255,247,232,.42);
+  padding: 4px 9px; border-radius: 999px;
+  border: 1px solid rgba(255,247,232,.12);
+  white-space: nowrap;
+}
+.slice-chip[hidden] { display: none; }
+
+.scoreboard {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  padding: 18px 20px 16px;
+  border-radius: 18px;
+  background: rgba(255,247,232,.045);
+  border: 1px solid rgba(255,247,232,.12);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.scoreboard[hidden] { display: none; }
+
+.score-head { text-align: center; }
+.score-title {
+  margin: 0;
+  font-family: var(--font-display); font-weight: 800; font-size: 22px;
+  letter-spacing: .01em; color: var(--ink);
+}
+.score-sub {
+  margin: 3px 0 0;
+  font-family: var(--font-voice); font-style: italic; font-size: 15px;
+  color: rgba(255,247,232,.5);
+}
+
+.score-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.score-row {
+  display: grid;
+  /* rank | name | what they just banked | running total */
+  grid-template-columns: 22px 1fr auto 56px;
+  align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 11px;
+  border: 1px solid transparent;
+}
+.score-rank {
+  font-family: var(--font-mono); font-size: 11px;
+  color: rgba(255,247,232,.35); text-align: center;
+}
+.score-name {
+  font-family: var(--font-body); font-weight: 700; font-size: 15px;
+  color: rgba(255,247,232,.86);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The points just banked — the one number that explains the round. */
+.score-delta {
+  font-family: var(--font-display); font-weight: 800; font-size: 14px;
+  color: var(--bas-solid);
+}
+.score-total {
+  font-family: var(--font-display); font-weight: 800; font-size: 19px;
+  color: var(--ink); text-align: right; font-variant-numeric: tabular-nums;
+}
+/* Your own row is marked by a border and a tint, never by colour alone. */
+.score-row.is-you {
+  background: rgba(255,247,232,.06);
+  border-color: rgba(255,247,232,.16);
+}
+.score-row.is-champion {
+  background: rgba(245,203,92,.14);
+  border-color: rgba(245,203,92,.42);
+}
+.score-row.is-champion .score-name,
+.score-row.is-champion .score-total { color: var(--gold); }
+/* A crown the champion row wears, so the win is not carried by gold alone. */
+.score-row.is-champion .score-rank::before { content: "★"; font-size: 13px; color: var(--gold); }
+.score-row.is-champion .score-rank { font-size: 0; }
+
+/* One pip per slice of the pie, filled as it is eaten. */
+.slice-pips { display: flex; justify-content: center; gap: 7px; }
+.slice-pip {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid rgba(255,247,232,.28);
+  transition: background-color var(--t-state) ease, border-color var(--t-state) ease;
+}
+.slice-pip.is-done { background: var(--gold); border-color: var(--gold); }
+
+@media (max-width: 560px) {
+  .scoreboard { padding: 14px 14px 12px; border-radius: 15px; }
+  .score-title { font-size: 19px; }
+  .score-sub { font-size: 14px; }
+  .score-row { grid-template-columns: 20px 1fr auto 48px; gap: 8px; padding: 6px 8px; }
+  .score-total { font-size: 17px; }
 }

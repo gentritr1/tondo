@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TONDO</title>
+<meta name="description" content="A pizza card game for 2–4 players. Match toppings, flip the order, and catch your friends forgetting TONDO.">
+<meta name="theme-color" content="#0B0908">
+<!-- Declaring an icon is also what STOPS the browser requesting /favicon.ico,
+     which had been 404ing on every single visit. -->
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=DM+Mono:wght@500&family=DM+Sans:wght@400;500;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
@@ -81,7 +86,12 @@
     <div class="strip-inner">
       <h1 id="game-title" class="strip-mark">TONDO</h1>
       <div id="queue" class="queue"></div>
+      <div id="slice-chip" class="slice-chip" hidden></div>
       <div id="strip-code" class="strip-code"></div>
+      <button id="sound-btn" type="button" class="btn btn-tiny strip-sound" aria-pressed="false">
+        <span class="sound-glyph" aria-hidden="true"></span>
+        <span class="sr-only">Sound</span>
+      </button>
       <button type="button" class="btn btn-tiny strip-help" data-help-open aria-label="How to play">?</button>
     </div>
   </div>
@@ -239,6 +249,18 @@
          was up to 900px from the nearest card on a wide screen. It follows the
          fan (or drops to the line below it when the fan needs the width), and
          the phone band swaps it for the tray's own Draw button. -->
+    <!-- The scoreboard takes the hand's place when a round ends. The hand is
+         dead at that moment, and the ten seconds after a round is the one
+         moment the table is all looking at the same thing. -->
+    <div id="scoreboard" class="scoreboard fx-panel" hidden>
+      <div class="score-head">
+        <h2 id="score-title" class="score-title">Round over</h2>
+        <p id="score-sub" class="score-sub"></p>
+      </div>
+      <ol id="score-rows" class="score-rows"></ol>
+      <div id="slice-pips" class="slice-pips" aria-hidden="true"></div>
+    </div>
+
     <div class="hand-dock">
       <div id="hand-wrap" class="hand-wrap fx-panel">
         <div id="hand-row" class="hand-row"></div>
@@ -257,6 +279,7 @@
         <span>Draw a card</span>
       </button>
       <button id="newround-btn" type="button" class="btn btn-primary fx-fade" hidden>New round</button>
+      <button id="hold-btn" type="button" class="btn btn-quiet fx-fade" hidden>Hold</button>
       <div id="message" class="message txt-fade"></div>
     </div>
 

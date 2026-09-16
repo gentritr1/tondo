@@ -5,7 +5,6 @@
  * game over one WebSocket on the same port. See PROTOCOL.md.
  */
 
-const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
@@ -13,6 +12,7 @@ const { WebSocketServer } = require('ws');
 const game = require('./game');
 const bot = require('./bot');
 const { RoomManager } = require('./rooms');
+const { Assets } = require('./assets');
 
 const PORT = Number(process.env.PORT) || 4600;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -28,23 +28,41 @@ const MIME = {
 };
 
 const manager = new RoomManager();
+const assets = new Assets(PUBLIC_DIR);
+
+/* The design reference (`_ref.html`, 1.7MB) and the concept pages are working
+   material, not the product. They stay reachable while developing and are 404
+   in production so they are never served to a player. */
+const DEV_ONLY = /^\/(_ref\.html|_concept\/)/;
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 function notFound(res) {
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('Not found');
 }
 
-/** Static files, and nothing clever: no gzip, no caching, no directory walk. */
+/**
+ * Static files: compressed, revalidated with an ETag, and — where the URL
+ * carries the content hash the server itself stamped in — cached for a year.
+ * See server/assets.js for why the hash is transitive.
+ */
 function serveStatic(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return notFound(res);
 
+  let url;
+  try {
+    url = new URL(req.url, 'http://localhost');
+  } catch {
+    return notFound(res);
+  }
   let pathname;
   try {
-    pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+    pathname = decodeURIComponent(url.pathname);
   } catch {
     return notFound(res);
   }
   if (pathname === '/') pathname = '/index.html';
+  if (IS_PROD && DEV_ONLY.test(pathname)) return notFound(res);
 
   const filePath = path.join(PUBLIC_DIR, pathname);
   // `..` in a URL must never reach outside the public folder.
@@ -54,11 +72,28 @@ function serveStatic(req, res) {
   const type = MIME[path.extname(filePath).toLowerCase()];
   if (!type) return notFound(res);
 
-  fs.readFile(filePath, (err, body) => {
-    if (err) return notFound(res);
-    res.writeHead(200, { 'Content-Type': type, 'Content-Length': body.length });
-    res.end(req.method === 'HEAD' ? undefined : body);
+  const out = assets.serve(filePath, {
+    accept: req.headers['accept-encoding'] || '',
+    versionQuery: url.searchParams.get('v'),
   });
+  if (!out) return notFound(res);
+
+  // A matching ETag means the bytes the browser already holds are current:
+  // answer 304 and send no body at all. This is the cheapest possible hit.
+  const headers = {
+    'Content-Type': type,
+    'Cache-Control': out.cacheControl,
+    ETag: out.etag,
+    Vary: 'Accept-Encoding',
+  };
+  if (req.headers['if-none-match'] === out.etag) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  if (out.encoding) headers['Content-Encoding'] = out.encoding;
+  headers['Content-Length'] = out.body.length;
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : out.body);
 }
 
 const server = http.createServer((req, res) => {
@@ -199,10 +234,22 @@ function handleMessage(socket, session, message) {
       break;
     }
     case 'newRound': {
-      if (!room.isActingHost(seatId)) return refuse(socket, room, seatId, 'Only the host can deal again.');
+      /* ANY seated human may deal the next slice — not only the host. A table
+         used to stall because one specific person had walked away from their
+         phone, and everyone else was shown "waiting for the host" with no
+         control at all. Dealing is not a destructive act and the round is
+         already over; there is nothing here worth gating on a title. */
+      if (seat.isBot) return refuse(socket, room, seatId, 'Bots do not deal.');
       if (room.phase !== 'roundOver') return refuse(socket, room, seatId, 'The round is not over.');
       const started = room.startRound();
       if (!started.ok) return refuse(socket, room, seatId, started.error);
+      break;
+    }
+    case 'hold': {
+      // "Not yet" — stops the between-slices countdown until somebody deals.
+      if (seat.isBot) return refuse(socket, room, seatId, 'Bots do not hold the table.');
+      if (room.phase !== 'roundOver') return refuse(socket, room, seatId, 'Nothing to hold.');
+      room.holdNextSlice();
       break;
     }
     case 'leaveRoom': {

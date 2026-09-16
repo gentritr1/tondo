@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Tondo">
+  <!-- A whole pie, full-bleed. At 16px a tab icon gets about six legible
+       shapes, so this is only the three that carry the brand: crust, sauce,
+       pepperoni. The wordmark's gold is deliberately absent — a "T" is
+       unreadable at this size and would just add noise. -->
+  <circle cx="16" cy="16" r="15.5" fill="#E0A44A"/>
+  <circle cx="16" cy="16" r="15.5" fill="none" stroke="#B87A2A" stroke-width="1"/>
+  <circle cx="16" cy="16" r="11.5" fill="#A03A22"/>
+  <g fill="#D9503A">
+    <circle cx="11.6" cy="12.4" r="2.9"/>
+    <circle cx="20.4" cy="14.2" r="2.6"/>
+    <circle cx="14.6" cy="21" r="2.7"/>
+  </g>
+</svg>

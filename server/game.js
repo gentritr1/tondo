@@ -128,6 +128,7 @@ function createGame(seats, options = {}) {
     drawnCard: null, // { playerId, cardId } while a drawn card may still be played
     status: 'playing', // 'playing' | 'roundOver'
     winnerId: null,
+    roundResult: null, // set by endRound: what the finished round was worth
     log: [],
     turnSerial: 0, // internal; the room hangs its turn timers off it
   };
@@ -254,10 +255,50 @@ function advanceTurn(state, steps = 1) {
   if (player && next !== from) player.vulnerable = false;
 }
 
-function endRound(state, winner) {
+/**
+ * What one card is worth when it is caught in a losing hand.
+ *
+ * Numbers score their face value; SKIP, +2 and REVERSE score 20; WILD scores
+ * 50. These are UNO's values, deliberately: a scale players already know needs
+ * no explaining, and Tondo's deck is the same shape.
+ */
+function cardPoints(card) {
+  if (!card) return 0;
+  if (card.value === WILD) return 50;
+  return NUMBERS.includes(card.value) ? Number(card.value) : 20;
+}
+
+function handPoints(hand) {
+  return (hand || []).reduce((total, card) => total + cardPoints(card), 0);
+}
+
+/**
+ * Ends the round and records what it was worth.
+ *
+ * `forfeited` carries points from a hand that has already been returned to the
+ * deck. `removePlayer` empties a leaving player's hand BEFORE it can end the
+ * round, so reading the hands here would score their cards as zero and quietly
+ * hand the winner a smaller pot than they earned.
+ */
+function endRound(state, winner, forfeited = 0) {
   state.status = 'roundOver';
   state.winnerId = winner ? winner.id : null;
   state.drawnCard = null;
+
+  const breakdown = [];
+  let points = forfeited;
+  if (winner) {
+    for (const p of state.players) {
+      if (p.id === winner.id || p.left) continue;
+      const worth = handPoints(p.hand);
+      points += worth;
+      breakdown.push({ id: p.id, cards: p.hand.length, points: worth });
+    }
+  }
+  state.roundResult = winner
+    ? { winnerId: winner.id, points, forfeited, breakdown }
+    : { winnerId: null, points: 0, forfeited: 0, breakdown: [] };
+
   if (winner) addLog(state, `${up(winner.name)} WINS THE ROUND`);
   else addLog(state, 'THE ROUND ENDED WITH NOBODY AT THE TABLE');
 }
@@ -448,6 +489,10 @@ function removePlayer(state, playerId) {
   const wasTheirTurn = state.status === 'playing' && currentPlayer(state).id === playerId;
 
   player.left = true;
+  // Banked before the hand is returned to the deck: if this departure is what
+  // ends the round, the winner is owed these points and there would otherwise
+  // be nothing left to count.
+  const forfeited = handPoints(player.hand);
   state.drawPile.push(...player.hand.splice(0));
   shuffle(state.drawPile, state.rng);
   addLog(state, `${up(player.name)} LEFT THE TABLE`);
@@ -455,7 +500,7 @@ function removePlayer(state, playerId) {
   if (state.status !== 'playing') return { ok: true };
   const remaining = activePlayers(state);
   if (remaining.length <= 1) {
-    endRound(state, remaining[0] || null);
+    endRound(state, remaining[0] || null, forfeited);
     return { ok: true };
   }
   if (wasTheirTurn) advanceTurn(state, 1);
@@ -529,6 +574,8 @@ module.exports = {
   callOut,
   removePlayer,
   viewFor,
+  cardPoints,
+  handPoints,
   topCard,
   currentPlayer,
   findPlayer,

@@ -53,6 +53,43 @@ function seatsWithYou() {
   return [{ id: 'p1', name: table.name, isBot: false, connected: true }].concat(table.seats.slice(1));
 }
 
+/**
+ * The pie, faked at a plausible mid-match position (PROTOCOL.md v1.1). The
+ * scoreboard and the slice chip both read `match`, so a mock without one
+ * renders neither — which silently hides the thing a round-boundary scene
+ * exists to show.
+ */
+function matchBlock() {
+  const over = table.phase === 'roundOver';
+  const winnerId = table.game && table.game.winnerId;
+  const points = 107;
+  const scores = { p1: 81, p2: 166, p3: 0, p4: 0 };
+  if (over && winnerId) scores[winnerId] = (scores[winnerId] || 0) + points;
+  const standings = table.seats
+    .map((s) => ({
+      id: s.id, name: s.name, isBot: s.isBot,
+      points: scores[s.id] || 0,
+      roundsWon: (scores[s.id] || 0) > 0 ? 1 : 0,
+    }))
+    .sort((a, b) => b.points - a.points || b.roundsWon - a.roundsWon);
+  const best = standings[0];
+  return {
+    roundsPerPie: 4,
+    round: over ? 2 : 1,
+    complete: false,
+    championIds: [],
+    leaderIds: best && best.points ? [best.id] : [],
+    standings,
+    lastRound: over && winnerId
+      ? { winnerId, points, forfeited: 0, breakdown: [] }
+      : null,
+    // The scripted table has no server to deal for it, so the boundary clock
+    // is shown at rest rather than counting toward a deal that cannot happen.
+    nextDueAt: null,
+    held: false,
+  };
+}
+
 function snapshot() {
   return {
     type: 'state',
@@ -63,6 +100,7 @@ function snapshot() {
     isHost: true,
     seats: table.seats,
     game: table.game,
+    match: matchBlock(),
   };
 }
 

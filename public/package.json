@@ -1,0 +1,4 @@
+{
+  "//": "Scopes public/ to ES modules so node can load the client files directly in tests. The server (server/*.js) stays CommonJS under the root package.json. Not served: .json is not in the MIME allow-list in server/index.js.",
+  "type": "module"
+}
