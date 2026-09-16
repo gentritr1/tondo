@@ -503,7 +503,10 @@ test('the bot declares TONDO, answers a draw decision and prefers numbers', () =
   handOf(state, 'p1').pop();
   handOf(state, 'p1').pop(); // down to just the number: two cards would be one
   handOf(state, 'p1').push(wild);
-  eq(bot.decide(game.viewFor(state, 'p1')).action, 'tondo', 'two cards means shout first');
+  // A forced low roll: personalities now roll for the declare, so a bare
+  // Math.random() call here would make this assertion flaky (~15% of runs
+  // miss it under the default 'Chef Bot' personality). Pin the roll instead.
+  eq(bot.decide(game.viewFor(state, 'p1'), 'Chef Bot', () => 0).action, 'tondo', 'two cards means shout first');
 });
 
 test('the bot only ever names a suit it is allowed to name', () => {
@@ -659,6 +662,68 @@ test('pickStartCard throws instead of spinning on a deck with no number', () => 
   let threw = null;
   try { game.pickStartCard(pile); } catch (err) { threw = err; }
   assert(threw && /no number card/.test(threw.message), `threw: ${threw && threw.message}`);
+});
+
+// ---------------------------------------------------------------------------
+// Bots: personalities, fair tie-breaks
+// ---------------------------------------------------------------------------
+
+test('each named bot has a personality, and unknown Chef Bots share one', () => {
+  for (const name of ['Carmela', 'Dominic', 'Pina', 'Chef Bot']) {
+    const p = bot.personalityOf(name);
+    assert(p && typeof p.tondoChance === 'number' && typeof p.calloutChance === 'number', `${name} has chances`);
+    assert(Array.isArray(p.think) && p.think[0] < p.think[1], `${name} has a think range`);
+  }
+  assert(bot.personalityOf('Chef Bot 3') === bot.personalityOf('Chef Bot'), 'numbered Chef Bots share the record');
+});
+
+test('a bot that rolls a miss does not declare TONDO', () => {
+  const view = {
+    winnerId: null, canDeclareTondo: true, drawnDecisionCardId: null,
+    hand: [{ id: 'x', suit: 'basil', value: '4' }, { id: 'y', suit: 'cheese', value: '2' }],
+    playableCardIds: ['x'],
+  };
+  const always = bot.decide(view, 'Carmela', () => 0.0);
+  const never = bot.decide(view, 'Carmela', () => 0.9999);
+  assert(always.action === 'tondo', `low roll declares, got ${always.action}`);
+  assert(never.action === 'play', `high roll forgets and plays, got ${never.action}`);
+});
+
+test('think time scales with how many cards the bot could play', () => {
+  const [lo, hi] = bot.personalityOf('Dominic').think;
+  const forced = bot.thinkMs('Dominic', { playableCardIds: ['a'] }, () => 0.5);
+  const open = bot.thinkMs('Dominic', { playableCardIds: ['a', 'b', 'c', 'd', 'e'] }, () => 0.5);
+  assert(forced >= lo && forced <= hi, `forced ${forced} in range`);
+  assert(open >= lo && open <= hi, `open ${open} in range`);
+  assert(open - forced >= (hi - lo) * 0.8, `a real choice visibly takes longer: ${forced} vs ${open}`);
+});
+
+test('tie-break between equal-rank cards is fair, not deal-order biased', () => {
+  const rng = game.makeRng(4242);
+  const counts = { a: 0, b: 0, c: 0 };
+  const hand = [{ id: 'a', suit: 'basil', value: '1' }, { id: 'b', suit: 'basil', value: '2' }, { id: 'c', suit: 'basil', value: '3' }];
+  const view = { winnerId: null, canDeclareTondo: false, drawnDecisionCardId: null, hand, playableCardIds: ['a', 'b', 'c'] };
+  const N = 200000;
+  for (let i = 0; i < N; i++) counts[bot.decide(view, 'Chef Bot', rng).cardId]++;
+  for (const id of ['a', 'b', 'c']) {
+    const pct = (counts[id] / N) * 100;
+    assert(Math.abs(pct - 33.333) <= 1.5, `${id} chosen ${pct.toFixed(2)}% (want 33.3 ± 1.5)`);
+  }
+});
+
+test('bestSuit breaks a balanced hand evenly across suits', () => {
+  const rng = game.makeRng(777);
+  const hand = [
+    { id: '1', suit: 'pepperoni', value: '1' }, { id: '2', suit: 'cheese', value: '1' },
+    { id: '3', suit: 'basil', value: '1' }, { id: '4', suit: 'anchovy', value: '1' },
+  ];
+  const counts = { pepperoni: 0, cheese: 0, basil: 0, anchovy: 0 };
+  const N = 10000;
+  for (let i = 0; i < N; i++) counts[bot.bestSuit(hand, rng)]++;
+  for (const s of Object.keys(counts)) {
+    const pct = (counts[s] / N) * 100;
+    assert(Math.abs(pct - 25) <= 2, `${s} ${pct.toFixed(2)}% (want 25 ± 2)`);
+  }
 });
 
 // ---------------------------------------------------------------------------

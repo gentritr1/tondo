@@ -10,16 +10,26 @@
 
 const game = require('./game');
 
+/**
+ * Bots are people at the table, not a difficulty setting. Each has a declare
+ * rate (how often they remember TONDO), a callout rate (how often they catch
+ * someone who forgot) and a think range. STARTING values — tuned against
+ * `node scripts/measure-scoring.js --callouts`, which must report >= 0.30
+ * windows per round. Do not change one without re-running it.
+ */
+const PERSONALITIES = {
+  Carmela: { tondoChance: 0.95, calloutChance: 0.60, think: [900, 1600] },  // quick, sharp-eyed
+  Dominic: { tondoChance: 0.70, calloutChance: 0.35, think: [1100, 3000] }, // deliberate, forgetful
+  Pina: { tondoChance: 0.60, calloutChance: 0.10, think: [2200, 3400] },    // slow, generous
+  'Chef Bot': { tondoChance: 0.85, calloutChance: 0.35, think: [1400, 2600] },
+};
 const BOT_NAMES = ['Carmela', 'Dominic', 'Pina', 'Chef Bot'];
 
-/** How often a bot notices a missed TONDO. Rolled once per open window. */
-const CALLOUT_CHANCE = 0.35;
-
-/** Bots pause this long before moving, so the table stays readable. A human
- * casual play lands around 1.5-3s; instant bot moves read as a glitch, not a
- * turn, so the pause has to be long enough to SEE whose turn it was. */
-const THINK_MIN_MS = 1400;
-const THINK_MAX_MS = 2600;
+function personalityOf(name) {
+  const key = String(name || '');
+  if (PERSONALITIES[key]) return PERSONALITIES[key];
+  return PERSONALITIES['Chef Bot'];
+}
 
 function pickBotName(usedNames) {
   const taken = new Set(usedNames.map((n) => String(n).toLowerCase()));
@@ -30,21 +40,31 @@ function pickBotName(usedNames) {
   return `Chef Bot ${i}`;
 }
 
-function thinkMs() {
-  return Math.round(THINK_MIN_MS + Math.random() * (THINK_MAX_MS - THINK_MIN_MS));
+/** One roll of the missed-TONDO lottery, at this bot's own rate. */
+function wantsCallout(name, rng = Math.random) {
+  return rng() < personalityOf(name).calloutChance;
 }
 
-/** One roll of the missed-TONDO lottery. */
-function wantsCallout() {
-  return Math.random() < CALLOUT_CHANCE;
+/**
+ * How long this bot pauses. Timing carries information: a forced play (one
+ * legal card) is quick, a real choice visibly takes longer. A little jitter
+ * keeps two identical choices from ticking in lockstep.
+ */
+function thinkMs(name, view, rng = Math.random) {
+  const [lo, hi] = personalityOf(name).think;
+  const choices = view && Array.isArray(view.playableCardIds) ? view.playableCardIds.length : 1;
+  const weight = Math.min(1, Math.max(0, (choices - 1) / 4));
+  const jitter = (rng() - 0.5) * 0.1 * (hi - lo);
+  return Math.round(Math.min(hi, Math.max(lo, lo + (hi - lo) * weight + jitter)));
 }
 
-/** The suit the bot holds most of, for a wild. */
-function bestSuit(hand) {
-  const counts = Object.create(null);
-  for (const suit of game.SUITS) counts[suit] = 0;
+/** The suit the bot holds most of, for a wild. Ties are broken at random. */
+function bestSuit(hand, rng = Math.random) {
+  const counts = Object.fromEntries(game.SUITS.map((s) => [s, 0]));
   for (const card of hand) if (card.suit) counts[card.suit]++;
-  return game.SUITS.reduce((best, s) => (counts[s] > counts[best] ? s : best), game.SUITS[0]);
+  const top = Math.max(...Object.values(counts));
+  const tied = game.SUITS.filter((s) => counts[s] === top);
+  return tied[Math.floor(rng() * tied.length)];
 }
 
 /** Numbers first, then action cards, wilds last so they stay in reserve. */
@@ -53,36 +73,39 @@ function rank(card) {
   return game.NUMBERS.includes(card.value) ? 0 : 1;
 }
 
-function playMove(view, card) {
+function playMove(view, card, rng) {
   const move = { action: 'play', cardId: card.id };
   if (card.value === game.WILD) {
-    move.suit = bestSuit(view.hand.filter((c) => c.id !== card.id));
+    move.suit = bestSuit(view.hand.filter((c) => c.id !== card.id), rng);
   }
   return move;
 }
 
 /**
  * @param {object} view a `game.viewFor()` result for this bot
- * @returns {{action:'play',cardId:string,suit?:string}|{action:'draw'}
- *          |{action:'pass'}|{action:'tondo'}|null}
+ * @param {string} name the bot's seat name, which selects its personality
+ * @param {() => number} [rng]
  */
-function decide(view) {
+function decide(view, name, rng = Math.random) {
   if (!view || view.winnerId) return null;
 
-  // Shout before the second to last card goes down.
-  if (view.canDeclareTondo) return { action: 'tondo' };
+  // A bot remembers TONDO at its own rate. The misses are the game's hook:
+  // "catch your friends forgetting TONDO" needs someone who forgets.
+  if (view.canDeclareTondo && rng() < personalityOf(name).tondoChance) return { action: 'tondo' };
 
   const playable = view.hand.filter((c) => view.playableCardIds.includes(c.id));
 
   if (view.drawnDecisionCardId) {
     const drawn = playable.find((c) => c.id === view.drawnDecisionCardId);
-    return drawn ? playMove(view, drawn) : { action: 'pass' };
+    return drawn ? playMove(view, drawn, rng) : { action: 'pass' };
   }
   if (playable.length > 0) {
-    // Rank, then a coin toss inside the rank so two bots do not play the same
-    // way every round.
-    playable.sort((a, b) => rank(a) - rank(b) || (Math.random() < 0.5 ? -1 : 1));
-    return playMove(view, playable[0]);
+    // Shuffle, then a STABLE sort by rank: the shuffle order survives inside
+    // each rank, which makes the tie-break a real coin toss. The old random
+    // comparator was not one — it favoured deal order.
+    game.shuffle(playable, rng);
+    playable.sort((a, b) => rank(a) - rank(b));
+    return playMove(view, playable[0], rng);
   }
   return { action: 'draw' };
 }
@@ -93,8 +116,7 @@ module.exports = {
   pickBotName,
   thinkMs,
   bestSuit,
+  personalityOf,
+  PERSONALITIES,
   BOT_NAMES,
-  CALLOUT_CHANCE,
-  THINK_MIN_MS,
-  THINK_MAX_MS,
 };

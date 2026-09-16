@@ -102,10 +102,73 @@ function roundsToTarget(scores, target, trials = 20000) {
   return stats(out);
 }
 
+/**
+ * Counts callout windows a human gets on a bot: a snapshot in which the human's
+ * `calloutTargets` gains a bot id it did not hold one step earlier. The human
+ * plays legally and always declares TONDO, so the only windows are bot misses.
+ * Bot-on-bot callouts are timed (1400ms) in the real room and are ignored here:
+ * the human always gets the first beat.
+ */
+function measureCallouts(rounds) {
+  const seats = [
+    { id: 'p1', name: 'Human' },
+    { id: 'p2', name: 'Carmela', isBot: true },
+    { id: 'p3', name: 'Dominic', isBot: true },
+    { id: 'p4', name: 'Pina', isBot: true },
+  ];
+  const nameOf = Object.fromEntries(seats.map((s) => [s.id, s.name]));
+  let windows = 0;
+  let finished = 0;
+  for (let r = 0; r < rounds; r++) {
+    const state = game.createGame(seats, { seed: r * 104729 + 17, startIndex: r % 4 });
+    let open = new Set();
+    let steps = 0;
+    while (state.status === 'playing' && steps < 3000) {
+      const me = game.currentPlayer(state);
+      const view = game.viewFor(state, me.id);
+      if (me.id === 'p1') {
+        if (view.canDeclareTondo) game.declareTondo(state, 'p1');
+        else if (view.drawnDecisionCardId) {
+          const card = view.hand.find((c) => c.id === view.drawnDecisionCardId);
+          if (view.playableCardIds.includes(view.drawnDecisionCardId)) {
+            game.playCard(state, 'p1', card.id, card.value === 'WILD' ? 'basil' : undefined);
+          } else game.passTurn(state, 'p1');
+        } else if (view.playableCardIds.length) {
+          const card = view.hand.find((c) => c.id === view.playableCardIds[0]);
+          game.playCard(state, 'p1', card.id, card.value === 'WILD' ? 'basil' : undefined);
+        } else game.drawCard(state, 'p1');
+      } else {
+        const move = bot.decide(view, nameOf[me.id]);
+        if (!move) break;
+        if (move.action === 'play') game.playCard(state, me.id, move.cardId, move.suit);
+        else if (move.action === 'draw') game.drawCard(state, me.id);
+        else if (move.action === 'pass') game.passTurn(state, me.id);
+        else if (move.action === 'tondo') game.declareTondo(state, me.id);
+      }
+      const now = new Set(game.viewFor(state, 'p1').calloutTargets.filter((id) => id !== 'p1'));
+      for (const id of now) if (!open.has(id)) windows++;
+      open = now;
+      steps++;
+    }
+    if (state.status === 'roundOver') finished++;
+  }
+  return { rounds, finished, windows, perRound: windows / rounds };
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const i = argv.indexOf('--rounds');
   const ROUNDS = i >= 0 ? Number(argv[i + 1]) : 2000;
+
+  if (argv.includes('--callouts')) {
+    const n = i >= 0 ? Number(argv[i + 1]) : 2000;
+    const m = measureCallouts(n);
+    console.log(`\nCallout windows on bots — 1 legal human + Carmela, Dominic, Pina — ${m.rounds} rounds (${m.finished} finished)`);
+    console.log(`  windows: ${m.windows}   per round: ${m.perRound.toFixed(2)}   per pie (x4): ${(m.perRound * 4).toFixed(2)}`);
+    console.log(`  required: >= 0.30 per round  ->  ${m.perRound >= 0.30 ? 'PASS' : 'FAIL'}\n`);
+    process.exitCode = m.perRound >= 0.30 ? 0 : 1;
+    return;
+  }
 
   console.log(`\nTondo round-value measurement — ${ROUNDS} complete rounds per seat count`);
   console.log(`scoring: numbers = face, SKIP/+2/REVERSE = ${ACTION_POINTS}, WILD = ${WILD_POINTS}\n`);

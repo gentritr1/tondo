@@ -34,7 +34,7 @@ Tondo is a 2–4 player UNO-style card game (pizza theme).
 - **Round over**: first player to 0 cards wins. The host deals again; the opening seat moves to the seat after the previous opener each round, tracked by seat so a player joining or leaving between rounds does not skip or repeat anyone. `turnPlayerId` is `null` while the round is over, and the winner stays in `players` even if they leave.
 - When the draw pile empties, reshuffle the discard pile (minus the top card) into it. If both are empty, draws are no-ops.
 
-Bots: fill seats via host's `addBot`. Bots always declare TONDO; each bot callouts a vulnerable player with 35% probability (rolled once when the window opens, after a 1s delay).
+Bots: fill seats via host's `addBot`. Each named bot has a personality (`server/bot.js` `PERSONALITIES`): a chance to remember TONDO, a chance to call out a vulnerable player (rolled once per bot when the window opens, acted on after 1.4s so a human gets the first beat), and a think range. Think time scales with how many cards the bot could play, so a real choice visibly takes longer than a forced one. Bots forget TONDO at a rate tuned so a table of one human and three bots averages at least 0.30 callout windows on a bot per round (`node scripts/measure-scoring.js --callouts`).
 
 ## Client → server
 

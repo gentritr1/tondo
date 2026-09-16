@@ -321,7 +321,7 @@ class Room {
     // seconds an away player has left, or postpone a bot forever.
     const wantBot = Boolean(seat && seat.isBot);
     const wantAway = Boolean(seat && !seat.isBot && !seat.connected);
-    this.botDueAt = wantBot ? (serialChanged || !this.botDueAt ? now + bot.thinkMs() : this.botDueAt) : 0;
+    this.botDueAt = wantBot ? (serialChanged || !this.botDueAt ? now + bot.thinkMs(seat.name, game.viewFor(this.game, seat.id)) : this.botDueAt) : 0;
     this.awayDueAt = wantAway ? (serialChanged || !this.awayDueAt ? now + AWAY_TURN_MS : this.awayDueAt) : 0;
   }
 
@@ -349,7 +349,7 @@ class Room {
       this.rolledFor.add(targetId);
       for (const seat of this.seats) {
         if (!seat.isBot || seat.id === targetId) continue;
-        if (bot.wantsCallout()) {
+        if (bot.wantsCallout(seat.name)) {
           this.calloutPlans.push({ targetId, botId: seat.id, dueAt: now + BOT_CALLOUT_MS });
         }
       }
@@ -611,7 +611,7 @@ class RoomManager {
       room.botDueAt = 0;
       const current = game.currentPlayer(room.game);
       const before = room.game.turnSerial;
-      const move = bot.decide(game.viewFor(room.game, current.id));
+      const move = bot.decide(game.viewFor(room.game, current.id), current.name);
       if (move) this.applyAction(room, current.id, { type: move.action, ...move });
       else game.drawCard(room.game, current.id);
       room.finishRoundIfOver();
