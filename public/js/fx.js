@@ -19,9 +19,36 @@ export function init(deps) { d = deps; }
 
 const later = (seconds, fn) => setTimeout(fn, Math.max(0, seconds * 1000));
 
+/*
+ * The skip duck: a small lift, then the seat sinks and greys out for a beat
+ * before it comes back. Percentages of the seat's own box, not pixels — 11.4%
+ * is the measured 9px on a 78.7px plate, so it reads the same at every table
+ * size. Each keyframe's `easing` runs from that keyframe to the next, exactly
+ * like `animation-timing-function` inside a CSS keyframe.
+ *
+ * WAAPI with `composite: 'add'`, not a class. A class that sets `animation` on
+ * the plate REPLACES what the plate is already running: a vulnerable seat's
+ * plate carries `.is-loud` (its alarm pop), and when the duck's class came off
+ * the plate fell back to that animation and replayed it. Added on top, the duck
+ * composes with whatever the seat is doing and leaves its classes alone.
+ */
+const DUCK_FRAMES = [
+  { offset: 0, transform: 'translateY(0) scale(1)', filter: 'saturate(1)' },
+  { offset: .18, transform: 'translateY(-5.1%) scale(1.02)', easing: 'cubic-bezier(.33,0,.67,1)' },
+  { offset: .55, transform: 'translateY(11.4%) scale(.90)', filter: 'saturate(.45)', easing: 'cubic-bezier(.34,1.56,.64,1)' },
+  { offset: 1, transform: 'translateY(0) scale(1)', filter: 'saturate(1)' },
+];
+const DUCK_MS = 380;
+const ducks = new WeakMap();
+
 function duck(playerId) {
   const target = playerId === d.youId() ? document.querySelector('.you-seat') : d.seatPlate(playerId);
-  if (target) d.pulse(target, 'is-skipped', 380);
+  if (!target) return;
+  const running = ducks.get(target);
+  if (running) running.cancel();   // a second skip restarts the duck cleanly
+  ducks.set(target, target.animate(DUCK_FRAMES, {
+    duration: DUCK_MS, easing: 'linear', composite: 'add', id: 'seat-skipped',
+  }));
 }
 
 function sweep(direction) {
@@ -51,11 +78,15 @@ export function playForEvents(events, { impactAt = 0 } = {}) {
       fired.push('plus2'); // the lob and badge punch ride the deal ghosts in app.js
     } else if (e.type === 'reverse') {
       if (!d.RM.matches) later(impactAt, () => sweep(e.direction));
-      // Read after the repaint, so the words match what the badge now says.
-      later(0, () => {
-        const label = (d.nodes['dir-label'] && d.nodes['dir-label'].textContent || '').toLowerCase();
-        d.announce(`Play order reversed — now ${label || (e.direction === 1 ? 'clockwise' : 'counter-clockwise')}.`);
-      });
+      // Announced NOW, in the snapshot's own task: the repaint has already run,
+      // so the label says the new direction. Deferring it overwrote the
+      // snapshot's "Your turn" line one tick later, and the live region only
+      // keeps its last text — so when the reversal hands you the turn, both
+      // facts go in one line.
+      const label = ((d.nodes['dir-label'] && d.nodes['dir-label'].textContent) || '').toLowerCase()
+        || (e.direction === 1 ? 'clockwise' : 'counter-clockwise');
+      const yours = events.find((t) => t.type === 'turn' && t.yours);
+      d.announce(`Play order reversed — now ${label}.${yours ? ` Your turn, ${yours.playable} playable.` : ''}`);
       fired.push('reverse');
     }
   }

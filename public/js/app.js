@@ -559,12 +559,13 @@ function applySnapshot(snap) {
   // movement is not less information.
   const events = deriveEvents(prev, snap);
 
-  renderGame(snap);
-  runTravel(travel, snap, events);
   // Scheduled against the frame the card actually lands on, not the frame the
   // snapshot arrived — the same delay ledgerAdd above already uses. A sound
-  // that beats its own card to the pile is heard as being out of sync.
+  // that beats its own card to the pile is heard as being out of sync. The +2
+  // throw below holds from this same frame.
   const impactAt = (travel && travel.flight) ? MS.flight / 1000 : 0;
+  renderGame(snap);
+  runTravel(travel, snap, events, impactAt);
   if (events.length) {
     sound.playForEvents(events, { impactAt });
   }
@@ -624,9 +625,27 @@ function seatPlate(playerId) {
 function setSeatNote(playerId, text, ms) {
   if (!playerId) return;
   app.seatNotes[playerId] = { text, until: Date.now() + ms };
-  clearTimeout(app.seatNoteTimer);
-  app.seatNoteTimer = setTimeout(() => { if (app.snap) renderGame(app.snap); }, ms + 20);
+  scheduleSeatNoteExpiry();
   if (app.snap) renderGame(app.snap);
+}
+
+/** One repaint at the EARLIEST live note's expiry, then again for the next.
+ *  A single timer re-armed for the newest note cancelled the older note's
+ *  repaint, so "skipped" stayed up until the second note expired (1839ms for a
+ *  1200ms note, measured). */
+function scheduleSeatNoteExpiry() {
+  clearTimeout(app.seatNoteTimer);
+  const now = Date.now();
+  let next = Infinity;
+  for (const [id, note] of Object.entries(app.seatNotes)) {
+    if (note.until <= now) delete app.seatNotes[id];
+    else next = Math.min(next, note.until);
+  }
+  if (next === Infinity) return;
+  app.seatNoteTimer = setTimeout(() => {
+    if (app.snap) renderGame(app.snap);
+    scheduleSeatNoteExpiry();
+  }, next - now + 20);
 }
 
 function liveSeatNote(playerId) {
@@ -696,7 +715,7 @@ function planTravel(prev, snap) {
   return (plan.flight || plan.deals.length) ? plan : null;
 }
 
-function runTravel(plan, snap, events) {
+function runTravel(plan, snap, events, impactAt) {
   if (!plan) return;
   if (plan.flight) flyToPile(plan.flight.from, plan.flight.card);
   let wave = 0;
@@ -707,7 +726,10 @@ function runTravel(plan, snap, events) {
     // Cards a +2 forced on somebody are thrown off the card that did it, not
     // dealt off the deck like an ordinary draw.
     const hit = (events || []).find((e) => e.type === 'plus2' && e.victimId === deal.playerId);
-    if (target) dealGhosts(target.getBoundingClientRect(), deal.count, wave++, hit ? { lob: true, playerId: deal.playerId } : null);
+    if (target) {
+      dealGhosts(target.getBoundingClientRect(), deal.count, wave++,
+        hit ? { lob: true, playerId: deal.playerId, impactMs: (impactAt || 0) * 1000 } : null);
+    }
   }
 }
 
@@ -813,7 +835,8 @@ function flyToPile(from, card) {
  * Card backs travelling to a hand. `opts.lob` is a +2: the cards leave the top
  * card that forced them, after a 90ms hold past the impact frame (the stillness
  * is the weight), arc up by 0.4 of a card on the way, and the victim's count
- * badge takes the punch when the last one arrives.
+ * badge takes the punch when the last one arrives. `opts.impactMs` is that
+ * impact frame: MS.flight while a played card is in the air, 0 without one.
  */
 function dealGhosts(target, count, wave, opts) {
   const lob = !!(opts && opts.lob);
@@ -824,13 +847,14 @@ function dealGhosts(target, count, wave, opts) {
   const dy = (target.top + target.height / 2) - (src.top + src.height / 2);
   const lift = 0.4 * src.height;
   const LOB_MS = 300;
+  const hold = lob ? (opts.impactMs || 0) + 90 : 0;
   let lastAnim = null;
   for (let k = 0; k < shown; k++) {
     const ghost = ghostShell(src);
     ghost.classList.add('travel-back', 'back-face');
     ghost.style.setProperty('--cw', Math.round(src.width) + 'px');
     document.body.appendChild(ghost);
-    const delay = lob ? MS.flight + 90 + k * 90 : wave * 120 + k * MS.dealStep;
+    const delay = lob ? hold + k * 90 : wave * 120 + k * MS.dealStep;
     /* `finished` is the only thing holding these ghosts' leashes, and it does
        not always settle: on a hidden or unfocused page the animation never
        advances, so the promise never resolves and the ghost stays in <body>
@@ -873,7 +897,7 @@ function dealGhosts(target, count, wave, opts) {
       if (badge) pulse(badge, 'is-punched', 260);
     };
     lastAnim.finished.then(punch, punch);
-    punchGuard = setTimeout(punch, MS.flight + 90 + (shown - 1) * 90 + LOB_MS + 400);
+    punchGuard = setTimeout(punch, hold + (shown - 1) * 90 + LOB_MS + 400);
   }
 }
 
@@ -1079,8 +1103,9 @@ function renderGame(snap) {
   else if (!over && nextPlayerId(g) === snap.youId) youStatus = 'you’re next';
   else if (g.hand.length === 1) youStatus = 'one card!';
   else youStatus = 'you';
-  const youNote = youStatus === 'winner!' ? null : liveSeatNote(snap.youId);
-  if (youNote) { youStatus = youNote; youAlarm = false; }
+  // Same ladder as the seats: a win and the forgot-TONDO alarm outrank a note.
+  const youNote = (youStatus === 'winner!' || youAlarm) ? null : liveSeatNote(snap.youId);
+  if (youNote) youStatus = youNote;
   setText(nodes['you-status'], youStatus);
   nodes['you-status'].hidden = !youStatus;
   nodes['you-status'].classList.toggle('is-acting', yourTurn);
@@ -2021,8 +2046,9 @@ function buildSeat(playerId) {
   return seat;
 }
 
-/** One-shot classes fired at a seat plate from outside the render (see renderSeats). */
-const PLATE_ONE_SHOTS = ['is-pop', 'is-skipped'];
+/** One-shot classes fired at a seat plate from outside the render (see renderSeats).
+ *  (The skip duck is a WAAPI animation in fx.js, so it needs no entry here.) */
+const PLATE_ONE_SHOTS = ['is-pop'];
 
 /** Adds or removes fanned card backs so the stack matches the hand size. */
 function syncFan(fan, shown) {
@@ -2077,11 +2103,14 @@ function renderSeats(snap, g, over) {
     else if (p.cardCount === 1) { status = 'one card!'; }
     else if (p.declaredTondo) { status = 'TONDO!'; }
     else status = 'waiting';
-    // A transient verb ("skipped", "+2") outranks everything but a win and an
-    // absence: it is the words half of a consequence, and it has to be there
-    // under reduced motion, where the duck and the throw are not.
-    const note = (status === 'wins!' || status === 'away — reconnecting') ? null : liveSeatNote(p.id);
-    if (note) { status = note; loud = true; alarm = false; }
+    // A transient verb ("skipped", "+2") outranks the ordinary statuses: it is
+    // the words half of a consequence, and it has to be there under reduced
+    // motion, where the duck and the throw are not. A win, an absence and the
+    // forgot-TONDO alarm outrank it — the alarm is still true and still
+    // catchable, and swapping it out for 1.2s toggled the plate's `is-loud` off
+    // and on, which replayed the alarm pop when the note expired.
+    const note = (status === 'wins!' || status === 'away — reconnecting' || alarm) ? null : liveSeatNote(p.id);
+    if (note) { status = note; loud = true; }
 
     let seat = live.get(p.id);
     if (!seat) seat = buildSeat(p.id);
@@ -2100,14 +2129,13 @@ function renderSeats(snap, g, over) {
     const plate = seat.firstElementChild;
     // A seat note makes the PILL loud, never the plate. `.plate.is-loud` is a pop,
     // and the note arrives with the snapshot: on the plate it fired before the
-    // card's impact frame, and when the duck's `is-skipped` came off, the plate's
-    // animation-name fell back to `tondo-pop` and replayed it — a 0.4-opacity
-    // flash straight after the duck (measured at 406ms). The consequence effect
-    // (duck, throw, punch) is the only motion the victim's plate gets.
+    // card's impact frame, and it replayed straight after the duck (a 0.4-opacity
+    // flash, measured at 406ms). The consequence effect (duck, throw, punch) is
+    // the only motion the victim's plate gets.
     const plateClass = `plate${acting ? ' is-acting' : ''}${(loud || alarm) && !acting && !note ? ' is-loud' : ''}`;
-    // `is-pop` (popSeat) and `is-skipped` (fx.js's duck) are transient one-shot
-    // classes owned by their callers; preserve them across updates, or a repaint
-    // landing mid-animation would strip the class and cut the motion short.
+    // Transient one-shot classes (PLATE_ONE_SHOTS) are owned by their callers;
+    // preserve them across updates, or a repaint landing mid-animation would
+    // strip the class and cut the motion short.
     const transient = PLATE_ONE_SHOTS.filter((c) => plate.classList.contains(c));
     const bare = transient.reduce((cls, c) => cls.replace(' ' + c, ''), plate.className);
     if (bare !== plateClass) {

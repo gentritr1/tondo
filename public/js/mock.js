@@ -292,7 +292,8 @@ function next() {
 /**
  * Emits one scripted BEFORE/AFTER pair so a check can watch exactly one event
  * land. `seats` picks the table size (2-4). `victim: 'you'` makes a skip, +2 or
- * callout land on you (p1); otherwise it lands on a bot.
+ * callout land on you (p1), and makes a 3-4 seat reverse hand the turn to you;
+ * otherwise it lands on a bot.
  * Resolves just after the AFTER snapshot is delivered.
  */
 function transition(kind, { seats = 4, victim = 'bot' } = {}) {
@@ -300,7 +301,9 @@ function transition(kind, { seats = 4, victim = 'bot' } = {}) {
   table.phase = 'playing';
   const ids = table.seats.map((s) => s.id);
   const hitsYou = victim === 'you';
-  const actor = hitsYou ? ids[ids.length - 1] : 'p1';
+  // A reversal "on you" is the one that hands you the turn: the seat after you
+  // plays it, and the new order runs straight back to you.
+  const actor = hitsYou ? (kind === 'reverse' && seats > 2 ? ids[1] : ids[ids.length - 1]) : 'p1';
   const target = hitsYou ? 'p1' : ids[1];
   const hand = [c('h1', 'basil', '4'), c('h2', 'cheese', '2'), c('h3', 'anchovy', '9'), c('h4', 'basil', '6'), c('h5', 'pepperoni', '1')];
   const counts = ids.map((id) => (id === 'p1' ? hand.length : 5));

@@ -453,16 +453,8 @@ body { height: 100dvh; }
   0%   { transform: scale(.3); opacity: .85 }
   100% { transform: scale(2.4); opacity: 0 }
 }
-/* A skipped seat ducks: a small lift, then it sinks and greys out for a beat
-   before it comes back. Percentages of the plate's own box, not pixels — 11.4%
-   is the measured 9px on a 78.7px plate, so the duck reads the same at every
-   table size. */
-@keyframes seat-skipped {
-  0%   { transform: translateY(0) scale(1); filter: saturate(1); }
-  18%  { transform: translateY(-5.1%) scale(1.02); animation-timing-function: cubic-bezier(.33,0,.67,1); }
-  55%  { transform: translateY(11.4%) scale(.90); filter: saturate(.45); animation-timing-function: cubic-bezier(.34,1.56,.64,1); }
-  100% { transform: translateY(0) scale(1); filter: saturate(1); }
-}
+/* (The skip duck is not here: it is a WAAPI animation in public/js/fx.js,
+   composed on top of whatever the seat is running — see DUCK_FRAMES there.) */
 /* The count badge taking a +2. `scale` (the property) composes with any
    transform the badge already has, so it never replaces one. */
 @keyframes badge-punch { 0% { scale: 1; } 40% { scale: 1.34; } 100% { scale: 1; } }
@@ -518,8 +510,9 @@ body { height: 100dvh; }
   .sauce-tint.is-sweeping { animation: none !important; }
   /* The consequence effects move; their meaning rides the seat verb ("skipped",
      "+2") and the live region instead, which fx.js writes under every
-     preference. */
-  .plate.is-skipped, .you-seat.is-skipped, .count-badge.is-punched, .you-count.is-punched,
+     preference. (fx.js does not start the WAAPI skip duck at all under reduced
+     motion, so it has no entry here.) */
+  .count-badge.is-punched, .you-count.is-punched,
   .dir-sweep { animation: none !important; }
   /* A topping still has to APPEAR — that is the state change. It just does not
      fall, squash or throw a ripple; the grease ring is pure decoration. */
@@ -1504,10 +1497,6 @@ body[data-screen="game"] { background: var(--page); }
 .plate.is-pop { animation: tondo-pop 260ms var(--e-pop) 1; }
 .plate.is-loud { animation: tondo-pop 200ms var(--e-out) 1; }
 .plate.is-loud::after { animation: tondo-ring-pulse 220ms var(--e-out) 1; }
-/* The skip duck (fx.js). Declared AFTER .plate.is-loud on purpose: a plate can
-   still be loud for its own reasons (a win) when a duck is fired at it, and the
-   rule written later is the one whose `animation` applies when both are on. */
-.plate.is-skipped, .you-seat.is-skipped { animation: seat-skipped 380ms linear 1; }
 
 .seat-body { display: flex; align-items: flex-end; gap: max(4px, calc(9px * var(--ss))); transition: opacity var(--t-state) var(--e-out); }
 .seat-left .seat-body { flex-direction: row-reverse; }
