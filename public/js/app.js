@@ -239,6 +239,7 @@ const app = {
   glowRot: null,         // the lit wedge's rotation, UNWRAPPED so a Flip can
   glowDir: null,         //   sweep the long way round instead of the short one
   flight: null,          // the in-flight played-card ghost animation
+  roundDeal: null,       // {players, seatIndex, startDelay} during a new deal's repaint
   offline: true,         // stale snapshots stay visible, but never actionable
   nextDueAt: 0,         // epoch ms the next slice deals itself, 0 when idle
   nextTicker: 0,        // the 1s interval that rewrites the countdown line
@@ -542,9 +543,21 @@ function applySnapshot(snap) {
   // ---- the ledger: whoever just played dresses their own wedge -----------
   // A new deal is a new pie. `roundOver` itself keeps the finished ledger on
   // screen — that is the round's scoreboard — and it is the NEXT round that
-  // wipes it.
+  // clears it: the finished pie is swept off the board first, and the new
+  // deal waits for the board to be clear before its first card leaves.
   const pgame = prev && prev.game;
-  if (prev && prev.phase === 'roundOver' && snap.phase === 'playing') ledgerClear();
+  if (prev && prev.phase === 'roundOver' && snap.phase === 'playing') {
+    const clearIn = ledgerClear({ sweep: true });
+    if (travel && travel.roundDeal) travel.startDelay = clearIn;
+  }
+  // renderHand reads this while it builds the new hand, so your cards rise as
+  // their own ghosts arrive rather than on the ordinary draw stagger. It lives
+  // for exactly this snapshot's repaint: a later repaint is not a deal.
+  app.roundDeal = (travel && travel.roundDeal) ? {
+    players: travel.deals.length,
+    seatIndex: travel.deals.findIndex((d) => d.playerId === snap.youId),
+    startDelay: travel.startDelay || 0,
+  } : null;
   // `pgame.turnPlayerId` is the player who just moved: this runs before the
   // repaint, so it is still the pre-play snapshot. A bot resolves here exactly
   // as your own play does. The suit is the ACTIVE one, so a Wild drops the
@@ -569,6 +582,7 @@ function applySnapshot(snap) {
   // throw below holds from this same frame.
   const impactAt = (travel && travel.flight) ? MS.flight / 1000 : 0;
   renderGame(snap);
+  app.roundDeal = null;
   runTravel(travel, snap, events, impactAt);
   if (events.length) {
     sound.playForEvents(events, { impactAt });
@@ -677,7 +691,14 @@ function pulse(el, className, ms) {
 function planTravel(prev, snap) {
   const g = snap.game;
   const pg = prev && prev.game;
-  if (!pg || !g || RM.matches) return null;
+  if (!g || RM.matches) return null;
+  // A new deal — the next slice, or the first one out of the lobby, which has
+  // no previous game at all. This is the one moment cards are literally being
+  // dealt, so it gets the whole table's worth rather than a diff.
+  if (prev && (prev.phase === 'roundOver' || prev.phase === 'lobby') && snap.phase === 'playing') {
+    return planRoundDeal(g);
+  }
+  if (!pg) return null;
   if (!(prev.phase === 'playing')) return null;
 
   const plan = { flight: null, deals: [] };
@@ -717,14 +738,38 @@ function planTravel(prev, snap) {
   return (plan.flight || plan.deals.length) ? plan : null;
 }
 
+/**
+ * One deal per player at their full hand, in seat order (`g.players`), starting
+ * from the player after the opener — so the opener, who plays first, is dealt
+ * last and the deal hands straight over to their turn. `startDelay` is filled
+ * in by applySnapshot once it knows how long the finished pie takes to leave.
+ */
+function planRoundDeal(g) {
+  const ps = g.players || [];
+  if (!ps.length) return null;
+  const opener = Math.max(0, ps.findIndex((p) => p.id === g.turnPlayerId));
+  const deals = [];
+  for (let i = 1; i <= ps.length; i++) {
+    const p = ps[(opener + i) % ps.length];
+    deals.push({ playerId: p.id, count: p.cardCount });
+  }
+  return { flight: null, deals, roundDeal: true, startDelay: 0 };
+}
+
+/** Where a player's cards go: your hand row, or an opponent's seat stack. */
+function travelTarget(playerId, snap) {
+  return playerId === snap.youId
+    ? nodes['hand-row']
+    : nodes.seats.querySelector(`.seat[data-player="${CSS.escape(playerId)}"] .stack`);
+}
+
 function runTravel(plan, snap, events, impactAt) {
   if (!plan) return;
+  if (plan.roundDeal) { runRoundDeal(plan, snap); return; }
   if (plan.flight) flyToPile(plan.flight.from, plan.flight.card);
   let wave = 0;
   for (const deal of plan.deals) {
-    const target = deal.playerId === snap.youId
-      ? nodes['hand-row']
-      : nodes.seats.querySelector(`.seat[data-player="${CSS.escape(deal.playerId)}"] .stack`);
+    const target = travelTarget(deal.playerId, snap);
     // Cards a +2 forced on somebody are thrown off the card that did it, not
     // dealt off the deck like an ordinary draw. A callout's two are thrown by
     // whoever made the call, from their seat — when the log names them; an
@@ -739,6 +784,84 @@ function runTravel(plan, snap, events, impactAt) {
     else if (fromRect) opts = { lob: true, playerId: deal.playerId, impactMs, fromRect };
     if (target) dealGhosts(target.getBoundingClientRect(), deal.count, wave++, opts);
   }
+}
+
+/**
+ * The deal goes around the table: card k of the player at seat position p
+ * leaves at startDelay + k·(players·90) + p·90 ms, so a four-seat table is 16
+ * ghosts over ~1.35s, one card to each seat per lap.
+ *
+ * Every ghost is created NOW, in the snapshot's own task, because your hand's
+ * entry animations (renderHand) are created in this task too: WAAPI delays that
+ * start on the same ready frame stay locked together, where a timer would drift
+ * from them by however long the task runs (see the lob's badge punch).
+ *
+ * But the table is not where it will be. The snapshot that deals is the one
+ * that swaps the scoreboard back out for the hand, so for the next --t-swap the
+ * tray is changing height, the stage with it, and --table-d is easing the seat
+ * orbit back out. Aimed at the snapshot frame, the worst ghost landed 116px
+ * from its target at 1440x900 and 146px at 390x844 (the deck and your hand move
+ * furthest). So each ghost is re-aimed every frame until it leaves
+ * (followDeal), and keeps the course it left on: 0px measured with it.
+ */
+function runRoundDeal(plan, snap) {
+  const players = plan.deals.length;
+  const startDelay = plan.startDelay || 0;
+  const legs = [];
+  plan.deals.forEach((deal, seatIndex) => {
+    const el = travelTarget(deal.playerId, snap);
+    if (!el) return;
+    const ghosts = dealGhosts(el.getBoundingClientRect(), deal.count, 0,
+      { roundDeal: { players, seatIndex, startDelay } });
+    if (ghosts.length) legs.push({ el, ghosts });
+  });
+  if (legs.length) followDeal(legs);
+}
+
+/** Re-aims a round deal's waiting ghosts at the table as it is on this frame. */
+function followDeal(legs) {
+  const aim = () => {
+    const src = pileRect();
+    let waiting = 0;
+    for (const leg of legs) {
+      const to = leg.el.isConnected ? leg.el.getBoundingClientRect() : null;
+      for (const g of leg.ghosts) {
+        if (!g.ghost.isConnected) continue;
+        const t = g.anim.currentTime;
+        if (t !== null && t >= g.delay) continue;   // on its way: keeps its course
+        waiting++;
+        if (to && to.width && src.width) aimDealGhost(g, src, to);
+      }
+    }
+    if (waiting) requestAnimationFrame(aim);
+  };
+  requestAnimationFrame(aim);
+}
+
+/** The ordinary deck → hand path: straight there, shrinking, fading at the end. */
+function dealFrames(dx, dy) {
+  const tilt = dx > 0 ? 9 : -9;
+  return [
+    { transform: 'translate(0,0) scale(1) rotate(0deg)', opacity: 1 },
+    { transform: `translate(${dx}px,${dy}px) scale(.55) rotate(${tilt}deg)`, opacity: .85, offset: .8 },
+    { transform: `translate(${dx}px,${dy}px) scale(.5) rotate(${tilt}deg)`, opacity: 0 },
+  ];
+}
+
+function aimDealGhost(g, src, to) {
+  const key = [src.left, src.top, src.width, src.height, to.left, to.top, to.width, to.height]
+    .map((v) => Math.round(v * 2)).join(',');
+  if (g.key === key) return;
+  g.key = key;
+  const node = g.ghost;
+  node.style.left = src.left + 'px';
+  node.style.top = src.top + 'px';
+  node.style.width = src.width + 'px';
+  node.style.height = src.height + 'px';
+  node.style.setProperty('--cw', Math.round(src.width) + 'px');
+  const dx = (to.left + to.width / 2) - (src.left + src.width / 2);
+  const dy = (to.top + to.height / 2) - (src.top + src.height / 2);
+  g.anim.effect.setKeyframes(dealFrames(dx, dy));
 }
 
 /** The pile's on-screen source: the deck, or the top card where the deck hides.
@@ -863,24 +986,38 @@ function flyToPile(from, card) {
  * impact frame: MS.flight while a played card is in the air, 0 without one.
  * `opts.fromRect` overrides where a lob leaves from — a callout's cards leave
  * the caller's seat (seatCardRect), not the top card.
+ * `opts.roundDeal = { players, seatIndex, startDelay }` is a new round's deal
+ * (runRoundDeal): four cards instead of three, on the round-robin stagger, and
+ * unseen while they wait their turn on the deck. Returns the ghosts it threw,
+ * as `{ ghost, anim, delay }`, so a round deal can re-aim the ones still waiting.
  */
 function dealGhosts(target, count, wave, opts) {
   const lob = !!(opts && opts.lob);
+  const round = (opts && opts.roundDeal) || null;
   const src = lob ? (opts.fromRect || nodes['top-card'].getBoundingClientRect()) : pileRect();
-  if (!src.width || !target.width) return;
-  const shown = Math.min(count, 3); // a +2 reads at two; never flood the DOM
+  if (!src.width || !target.width) return [];
+  // A +2 reads at two; a deal reads at four; never flood the DOM.
+  const shown = Math.min(count, round ? 4 : 3);
   const dx = (target.left + target.width / 2) - (src.left + src.width / 2);
   const dy = (target.top + target.height / 2) - (src.top + src.height / 2);
   const lift = 0.4 * src.height;
   const LOB_MS = 300;
   const hold = lob ? (opts.impactMs || 0) + 90 : 0;
   let lastAnim = null;
+  const thrown = [];
   for (let k = 0; k < shown; k++) {
     const ghost = ghostShell(src);
     ghost.classList.add('travel-back', 'back-face');
     ghost.style.setProperty('--cw', Math.round(src.width) + 'px');
+    // Up to ~1.9s of waiting for a round deal: a stack of backs sitting on the
+    // deck that long — or on the discard, where the phone band has no deck —
+    // would cover the card the new round starts on. The first keyframe brings
+    // each one in at opacity 1 the moment it leaves.
+    if (round) ghost.style.opacity = '0';
     document.body.appendChild(ghost);
-    const delay = lob ? hold + k * 90 : wave * 120 + k * MS.dealStep;
+    const delay = lob ? hold + k * 90
+      : round ? round.startDelay + k * (round.players * 90) + round.seatIndex * 90
+        : wave * 120 + k * MS.dealStep;
     /* `finished` is the only thing holding these ghosts' leashes, and it does
        not always settle: on a hidden or unfocused page the animation never
        advances, so the promise never resolves and the ghost stays in <body>
@@ -895,15 +1032,12 @@ function dealGhosts(target, count, wave, opts) {
         { transform: `translate(${dx * .5}px, ${dy * .5 - lift}px) scale(.8)`, opacity: 1, offset: .5 },
         { transform: `translate(${dx}px, ${dy}px) scale(.5)`, opacity: 0 },
       ]
-      : [
-        { transform: 'translate(0,0) scale(1) rotate(0deg)', opacity: 1 },
-        { transform: `translate(${dx}px,${dy}px) scale(.55) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: .85, offset: .8 },
-        { transform: `translate(${dx}px,${dy}px) scale(.5) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: 0 },
-      ];
+      : dealFrames(dx, dy);
     const duration = lob ? LOB_MS : MS.deal;
     lastAnim = ghost.animate(frames, { duration, delay, easing: EASE_OUT, fill: 'forwards' });
     lastAnim.finished.then(drop, drop);
     guard = setTimeout(drop, duration + delay + 400);
+    thrown.push({ ghost, anim: lastAnim, delay });
   }
   if (lob && lastAnim) {
     // The punch rides the LAST card's own `finished`, not a timer started here.
@@ -925,6 +1059,7 @@ function dealGhosts(target, count, wave, opts) {
     lastAnim.finished.then(punch, punch);
     punchGuard = setTimeout(punch, hold + (shown - 1) * 90 + LOB_MS + 400);
   }
+  return thrown;
 }
 
 /* ------------------------------------------------------------------ home */
@@ -1848,13 +1983,60 @@ function layoutLedger(g, force) {
   }
 }
 
-/** A new round is a new pie. */
-function ledgerClear() {
+/* The finished pie leaving the board: each topping slides outward along its own
+   bearing, past the crust, fading as it goes. Ease-in, because it is leaving —
+   it gathers speed on the way out rather than arriving anywhere. */
+const LEDGER_SWEEP_MS = 520;
+const LEDGER_SWEEP_EASE = 'cubic-bezier(.55,.06,.68,.19)';
+
+/**
+ * A new round is a new pie. The ledger's STATE resets at once — the next
+ * round's toppings start from nothing even while the last round's are still
+ * leaving — but with `{ sweep: true }` the finished pie is swept off the board
+ * instead of vanishing in one frame. Returns the milliseconds until the board is
+ * clear: LEDGER_SWEEP_MS while sweeping, 0 when it cleared immediately (reduced
+ * motion, an empty pie, or any caller that did not ask for the sweep).
+ */
+function ledgerClear({ sweep = false } = {}) {
   app.ledger = [];
   app.tally = new Map();
   app.ledgerKey = 0;
   app.ledgerLaidOut = '';
-  if (nodes.ledger) nodes.ledger.replaceChildren();
+  if (!nodes.ledger) return 0;
+  const leaving = [...nodes.ledger.querySelectorAll('.tp')];
+  const box = nodes.sauce ? nodes.sauce.getBoundingClientRect() : null;
+  const R = box ? box.width / 2 : 0;
+  if (!sweep || RM.matches || !leaving.length || !R) {
+    nodes.ledger.replaceChildren();
+    return 0;
+  }
+  const cx = box.left + R, cy = box.top + box.height / 2;
+  for (const node of leaving) {
+    // The point is the topping's position (the .tp box is 0x0), so its bearing
+    // is read off the rect; a piece dead on the centre leaves straight up.
+    const p = node.getBoundingClientRect();
+    const x = p.left - cx, y = p.top - cy;
+    const len = Math.hypot(x, y);
+    const ux = len > 0.5 ? x / len : 0, uy = len > 0.5 ? y / len : -1;
+    /* composite: 'add' appends this translate AFTER the topping's own
+       `scale(--age-s)`, which scales it: divide that back out so every piece
+       travels the full 135% of the radius, aged or not. */
+    const s = Number.parseFloat(node.style.getPropertyValue('--age-s')) || 1;
+    const d = (1.35 * R) / s;
+    const timing = { id: 'ledger-sweep', duration: LEDGER_SWEEP_MS, easing: LEDGER_SWEEP_EASE, fill: 'forwards' };
+    const move = node.animate([
+      { transform: 'translate(0px, 0px)' },
+      { transform: `translate(${(ux * d).toFixed(2)}px, ${(uy * d).toFixed(2)}px)` },
+    ], { ...timing, composite: 'add' });
+    // Opacity is its own, replacing effect: an additive one would add to the
+    // topping's age dimming rather than fade it out.
+    node.animate([{ opacity: 0 }], timing);
+    let gone = false, guard = 0;
+    const drop = () => { if (gone) return; gone = true; clearTimeout(guard); node.remove(); };
+    move.finished.then(drop, drop);
+    guard = setTimeout(drop, LEDGER_SWEEP_MS + 400);
+  }
+  return LEDGER_SWEEP_MS;
 }
 
 /** One card played → one topping in that player's wedge. */
@@ -2261,6 +2443,12 @@ function renderHand(g, yourTurn, playable, drawnId) {
   const focusedIndex = focusedId
     ? [...row.children].findIndex((n) => n.dataset.card === focusedId) : -1;
 
+  // A new deal is a whole new hand, even where a card id repeats. Ids name a
+  // card in the deck (c0…c67), not a hand, so a keyed node from last round's
+  // leftovers would be KEPT for the same card in the new deal — shown at once,
+  // before any ghost has left the deck. (A three-card leftover shares an id
+  // with a fresh seven-card hand 1 − C(65,7)/C(68,7) ≈ 28% of the time.)
+  if (app.roundDeal) row.replaceChildren();
   const live = new Map([...row.children].map((n) => [n.dataset.card, n]));
   const entering = [];
   g.hand.forEach((c, i) => {
@@ -2304,10 +2492,15 @@ function renderHand(g, yourTurn, playable, drawnId) {
      entry finishes; opacity is a separate effect because additive opacity
      would cancel the fade. */
   if (entering.length && !RM.matches) {
+    // During a new round's deal each card rises as its own ghost arrives:
+    // the same round-robin slot dealGhosts gives it, plus the flight.
+    const deal = app.roundDeal && app.roundDeal.seatIndex >= 0 ? app.roundDeal : null;
     entering.forEach((node, k) => {
       const timing = {
         duration: MS.handIn,
-        delay: Math.min(k, 6) * MS.dealStep,
+        delay: deal
+          ? deal.startDelay + k * (deal.players * 90) + deal.seatIndex * 90 + MS.deal
+          : Math.min(k, 6) * MS.dealStep,
         easing: EASE_OUT,
         fill: 'backwards',   // invisible during its delay, not popped in early
       };

@@ -1626,28 +1626,46 @@ body[data-screen="game"] { background: var(--page); }
   color: rgba(255,247,232,.5); background: transparent; padding: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* The banner sat at 30% of the stage and covered 100% of the MATCH plaque at
-   1800x900, 1280x900 and 1024x768 (88.8% at 375x812) for the ~840ms at the
-   start of every one of your turns — i.e. the answer to "what am I allowed to
-   play?" was hidden behind the words YOUR TURN. It keeps its slam; it is
-   simply anchored clear of the plaque now.
+/* Where the banner hangs has been moved twice, and both moves were forced by
+   the thing it was covering.
 
-   It hangs from the TOP of the stage rather than at a fraction of it. A
-   proportional offset does not work: the clearance it needs is the plaque's
-   half-height plus the banner's own height, which are fixed px, while the
-   fraction shrinks exactly when the window gets short — a first attempt at
-   `50% - --table-fit * .34` still covered 27.8% of the plaque at 1024x768 and
-   33.7% at 1800x747. Upward, never downward: .center only ever moves DOWN from
-   50% (the short-phone bands push it to 58/60/64%), so above is the only
-   direction that is safe at every size. Measured clearance banner-bottom to
-   plaque-top: 11px at the worst size tested (320x568) and 13-115px everywhere
-   else, with 0% of the plaque covered at all of them.
-   The trade this makes: on a full table the banner covers the TOP opponent's
-   seat for its ~840ms. That is the cheaper of the two — a seat tile whose
-   information is duplicated in the header queue, against the one element that
-   answers "what am I allowed to play?". */
+   It sat at 30% of the stage and covered 100% of the MATCH plaque at 1800x900,
+   1280x900 and 1024x768 (88.8% at 375x812) for the ~840ms at the start of every
+   one of your turns. It then hung from the TOP of the stage, which cleared the
+   plaque everywhere — and on a full table covered the TOP opponent's seat
+   instead, both for that ~840ms and for the whole of round over, where the win
+   banner stays up (measured: seat p3 under it at 390x844, 1280x800 and
+   1440x900, at round over and at YOUR TURN).
+
+   It now stands on the BOTTOM of the stage. Below the side seats is the one
+   band no seat is placed in: side seats sit on the stage's vertical middle,
+   the top seat above them, and yours is in the tray, not on the stage. The
+   plaque is never down here either (.center only moves DOWN on short phones,
+   and the plaque is the top of that column). Measured, four seats, every
+   animation finished — gap from the nearest seat above / share of the top card
+   covered, round over then YOUR TURN:
+     1440x900  51px / 0%     302px / 0%
+     1280x800   8px / 22.4%  234px / 0%   (6px / 25.1% with a 15-char winner)
+     390x844   71px / 0%     116px / 0%
+   8px is the lowest the banner goes: its rotated box already reaches 0-6px from
+   the stage's clipped bottom edge, and any lower clips its own lip.
+   The trades, measured rather than hoped away:
+   - the event ribbon (also bottom: 8px) is underneath it. At round over it says
+     what the banner says louder ("Carmela is out of cards"); at YOUR TURN it is
+     covered for the banner's ~840ms.
+   - a compressed desktop stage shorter than ~260px (round over at 760-768px
+     tall) has no band left below the side seats: the banner's corner overlaps
+     a side seat's pill by 3px at 1024x768, 5px at 1366x768, 9px at 1280x760
+     (3px more for a 15-char winner) and covers 35-42% of the winning card.
+     Hung from the top, the same banner covered the top seat AND a side seat
+     and 87-100% of the MATCH plaque at those sizes; no position on that stage
+     clears every seat.
+   - short phones (360x640, 320x568) push the pile to the bottom of the stage,
+     so YOUR TURN covers 35% / 58% of the top card for its ~840ms, where hung
+     from the top it covered the top seat (and 4.5% of the plaque at 320x568).
+     The plaque is clear at every size measured here. */
 .banner {
-  position: absolute; left: 50%; top: 8px; z-index: 12;
+  position: absolute; left: 50%; bottom: 8px; z-index: 12;
   transform: translate(-50%, 0) rotate(-2deg);
   font-family: var(--font-display); font-weight: 800; font-size: 30px; letter-spacing: .02em;
   /* One line, always. The longest string this ever holds is a winner's name
