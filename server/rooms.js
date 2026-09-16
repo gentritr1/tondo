@@ -84,6 +84,10 @@ class Room {
     this.calloutPlans = [];
     this.emptySince = 0;
     this.roundCount = 0;
+    // Who opened the last round, by seat id. Rotating by index broke whenever
+    // a seat joined or left between rounds, because the modulus base moved.
+    this.lastStarterId = null;
+    this.lastStarterIndex = 0;
     this.pie = freshPie();
     /* The round-boundary clock. A round used to end and wait for one specific
        person; everyone else read "waiting for the host" and had no button.
@@ -248,10 +252,21 @@ class Room {
     // The finished pie stays on screen through `roundOver`; dealing again is
     // what starts a new one.
     if (this.pie.complete) this.pie = freshPie();
+    // The lead rotates round by round so the host does not open every deal,
+    // tracked by seat identity rather than a modulus: a seat count that
+    // changes between rounds must not skip or repeat anyone.
+    const ids = this.seats.map((s) => s.id);
+    const previous = ids.indexOf(this.lastStarterId);
+    let startIndex = 0;
+    if (previous >= 0) startIndex = (previous + 1) % ids.length;
+    // The last opener left: whoever now sits in their place is next.
+    else if (this.lastStarterId) startIndex = this.lastStarterIndex % ids.length;
+    this.lastStarterId = ids[startIndex];
+    this.lastStarterIndex = startIndex;
+    this.roundCount++;
     this.game = game.createGame(
       this.seats.map((s) => ({ id: s.id, name: s.name, isBot: s.isBot })),
-      // The lead rotates round by round so the host does not open every deal.
-      { startIndex: this.roundCount++ % this.seats.length }
+      { startIndex }
     );
     this.phase = 'playing';
     // A new slice is dealt: the boundary clock and any hold are spent.
@@ -323,7 +338,7 @@ class Room {
     }
     const vulnerable = new Set(
       this.game.players
-        .filter((p) => !p.left && p.vulnerable && p.hand.length === 1)
+        .filter((p) => !p.left && p.vulnerable)
         .map((p) => p.id)
     );
     for (const id of [...this.rolledFor]) if (!vulnerable.has(id)) this.rolledFor.delete(id);

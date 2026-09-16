@@ -580,6 +580,88 @@ test('twenty seeded games at 2, 3 and 4 players all finish without throwing', ()
 });
 
 // ---------------------------------------------------------------------------
+// Round end, the two-player escape, the start card
+// ---------------------------------------------------------------------------
+
+test('round end clears every TONDO flag, so no callout survives into roundOver', () => {
+  const state = game.createGame([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }], { seed: 21 });
+  const b = game.findPlayer(state, 'b');
+  b.hand = b.hand.slice(0, 1);
+  b.vulnerable = true;
+  b.declaredTondo = false;
+  const mover = game.currentPlayer(state);
+  const win = { id: 'w-end', suit: game.topCard(state).suit, value: '3' };
+  mover.hand = [win];
+  assert(game.playCard(state, mover.id, win.id).ok, 'winning play');
+  assert(state.status === 'roundOver', 'round over');
+  for (const p of state.players) {
+    assert(p.vulnerable === false, `${p.id} vulnerable cleared`);
+    assert(p.declaredTondo === false, `${p.id} declaration cleared`);
+  }
+  const viewA = game.viewFor(state, 'a');
+  assert(viewA.calloutTargets.length === 0, `no callout targets at round over, got ${JSON.stringify(viewA.calloutTargets)}`);
+});
+
+test('TWO PLAYERS: drawing does not erase a missed TONDO', () => {
+  const state = game.createGame([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], { seed: 22 });
+  const a = game.findPlayer(state, 'a');
+  state.turnIndex = state.players.findIndex((p) => p.id === 'a');
+  const top = game.topCard(state);
+  const skip = { id: 'skip-a', suit: top.suit, value: 'SKIP' };
+  const last = { id: 'last-a', suit: top.suit === 'basil' ? 'cheese' : 'basil', value: top.value === '9' ? '8' : '9' };
+  a.hand = [skip, last];
+  a.declaredTondo = false;
+  assert(game.playCard(state, 'a', skip.id).ok, 'SKIP as the second-to-last card');
+  assert(game.currentPlayer(state).id === 'a', 'the turn came straight back to A');
+  assert(a.vulnerable === true, 'A missed TONDO');
+  // Force a draw A cannot play (not the SKIP's suit, not a SKIP), so the turn
+  // moves on instead of lingering on a drawn-card decision.
+  const otherSuit = game.SUITS.find((suit) => suit !== top.suit);
+  state.drawPile.push({ id: 'unplayable', suit: otherSuit, value: '0' });
+  const drew = game.drawCard(state, 'a');
+  assert(drew.ok, `draw accepted: ${drew.error}`);
+  assert(a.hand.length === 2, `A holds two cards, holds ${a.hand.length}`);
+  assert(a.vulnerable === true, 'a voluntary draw must NOT end the vulnerability');
+  assert(game.viewFor(state, 'b').calloutTargets.includes('a'), 'B can still see A as a target');
+  const caught = game.callOut(state, 'b', 'a');
+  assert(caught.ok, `B's callout accepted: ${caught.error}`);
+  assert(a.hand.length === 4, `A drew the two-card penalty, holds ${a.hand.length}`);
+  assert(a.vulnerable === false, 'and the penalty closes the window');
+});
+
+test('an involuntary +2 still ends vulnerability, as before', () => {
+  const state = game.createGame([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }], { seed: 23 });
+  const b = game.findPlayer(state, 'b');
+  b.hand = b.hand.slice(0, 1);
+  b.vulnerable = true;
+  state.turnIndex = state.players.findIndex((p) => p.id === 'a');
+  const a = game.findPlayer(state, 'a');
+  const plus2 = { id: 'p2-a', suit: game.topCard(state).suit, value: 'PLUS2' };
+  a.hand.push(plus2);
+  assert(game.playCard(state, 'a', plus2.id).ok, '+2 on B');
+  assert(b.vulnerable === false, 'the +2 ended it');
+});
+
+test('pickStartCard returns a number and cycles actions to the bottom', () => {
+  const pile = [
+    { id: 'n1', suit: 'basil', value: '5' },
+    { id: 's1', suit: 'basil', value: 'SKIP' },
+    { id: 'w1', suit: null, value: 'WILD' },
+  ];
+  const first = game.pickStartCard(pile);
+  assert(first.id === 'n1', `picked ${first.id}`);
+  // pop() takes from the end: w1 goes to the bottom, then s1 goes under it.
+  assert(pile.length === 2 && pile[0].id === 's1' && pile[1].id === 'w1', `non-numbers went to the bottom: ${pile.map((c) => c.id)}`);
+});
+
+test('pickStartCard throws instead of spinning on a deck with no number', () => {
+  const pile = [{ id: 's1', suit: 'basil', value: 'SKIP' }, { id: 'w1', suit: null, value: 'WILD' }];
+  let threw = null;
+  try { game.pickStartCard(pile); } catch (err) { threw = err; }
+  assert(threw && /no number card/.test(threw.message), `threw: ${threw && threw.message}`);
+});
+
+// ---------------------------------------------------------------------------
 
 if (failures.length) {
   for (const f of failures) {

@@ -99,6 +99,21 @@ function buildDeck() {
 // ---------------------------------------------------------------------------
 
 /**
+ * The starting card must be a number: an action card with nobody to act on is
+ * a rule nobody wants to write down. Non-numbers go back to the bottom. Bounded
+ * by the pile's length, so a deck with no number card throws instead of
+ * spinning forever.
+ */
+function pickStartCard(drawPile) {
+  for (let tries = 0; tries <= drawPile.length; tries++) {
+    const card = drawPile.pop();
+    if (isNumber(card)) return card;
+    drawPile.unshift(card);
+  }
+  throw new Error('The deck has no number card to start on.');
+}
+
+/**
  * Starts a round.
  * @param {Array<{id:string,name:string,isBot?:boolean}>} seats 2-4 seats
  * @param {{seed?:number, startIndex?:number}} options
@@ -137,13 +152,7 @@ function createGame(seats, options = {}) {
     for (const player of state.players) player.hand.push(state.drawPile.pop());
   }
 
-  // The starting card must be a number: an action card with nobody to act on
-  // is a rule nobody wants to write down. Non-numbers go back to the bottom.
-  let first = state.drawPile.pop();
-  while (!isNumber(first)) {
-    state.drawPile.unshift(first);
-    first = state.drawPile.pop();
-  }
+  const first = pickStartCard(state.drawPile);
   state.discardPile.push(first);
   state.activeSuit = first.suit;
 
@@ -214,8 +223,12 @@ function refillDrawPile(state) {
   return true;
 }
 
-/** Gives `count` cards to a player. Returns the cards actually dealt. */
-function dealTo(state, player, count) {
+/** Gives `count` cards to a player. Returns the cards actually dealt.
+ *  `voluntary` marks a draw the player chose on their own turn: it does not end
+ *  a missed-TONDO window (at two players the turn can come straight back to a
+ *  vulnerable player, and drawing used to be a free escape). Cards forced on a
+ *  player — a +2, a callout penalty — still end it. */
+function dealTo(state, player, count, { voluntary = false } = {}) {
   const dealt = [];
   for (let i = 0; i < count; i++) {
     if (state.drawPile.length === 0 && !refillDrawPile(state)) break;
@@ -224,7 +237,7 @@ function dealTo(state, player, count) {
   player.hand.push(...dealt);
   // A bigger hand is no longer one card away, and past two the declaration is
   // spent: both flags follow the hand, never the other way round.
-  if (player.hand.length > 1) player.vulnerable = false;
+  if (player.hand.length > 1 && !voluntary) player.vulnerable = false;
   if (player.hand.length > 2) player.declaredTondo = false;
   return dealt;
 }
@@ -284,6 +297,13 @@ function endRound(state, winner, forfeited = 0) {
   state.status = 'roundOver';
   state.winnerId = winner ? winner.id : null;
   state.drawnCard = null;
+
+  // Nothing about TONDO outlives the round: a flag left standing here kept the
+  // callout bar on screen beside the scoreboard, and every tap on it was refused.
+  for (const p of state.players) {
+    p.vulnerable = false;
+    p.declaredTondo = false;
+  }
 
   const breakdown = [];
   let points = forfeited;
@@ -401,7 +421,7 @@ function drawCard(state, playerId) {
   const player = turn.player;
   if (state.drawnCard) return { ok: false, error: 'Play the drawn card or pass.' };
 
-  const dealt = dealTo(state, player, 1);
+  const dealt = dealTo(state, player, 1, { voluntary: true });
   if (dealt.length === 0) {
     addLog(state, `NO CARDS LEFT - ${up(player.name)} PASSED`);
     advanceTurn(state, 1);
@@ -472,7 +492,7 @@ function callOut(state, callerId, targetId) {
   if (!caller || caller.left) return { ok: false, error: 'Unknown player.' };
   if (!target || target.left) return { ok: false, error: 'Unknown target.' };
   if (callerId === targetId) return { ok: false, error: 'You cannot call out yourself.' };
-  if (!target.vulnerable || target.hand.length !== 1) {
+  if (!target.vulnerable) {
     return { ok: false, error: `${target.name} cannot be called out right now.` };
   }
 
@@ -544,7 +564,7 @@ function viewFor(state, playerId) {
       me && !me.left && state.status === 'playing' && me.hand.length === 2 && !me.declaredTondo
     ),
     calloutTargets: seated
-      .filter((p) => p.id !== playerId && p.vulnerable && p.hand.length === 1)
+      .filter((p) => p.id !== playerId && p.vulnerable)
       .map((p) => p.id),
     log: state.log.slice(-LOG_LIMIT),
   };
@@ -563,6 +583,7 @@ module.exports = {
   makeRng,
   shuffle,
   buildDeck,
+  pickStartCard,
   createGame,
   canPlay,
   playableCardIds,

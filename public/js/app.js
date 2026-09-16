@@ -1008,7 +1008,7 @@ function renderGame(snap) {
 
   const targets = (g.calloutTargets || []).filter(Boolean);
   const targetKey = targets.join(',');
-  const showCallout = targets.length > 0 && app.calloutDismissed !== targetKey;
+  const showCallout = !over && targets.length > 0 && app.calloutDismissed !== targetKey;
   const drawnCard = drawnId ? g.hand.find((c) => c.id === drawnId) : null;
   nodes['callout-bar'].hidden = !showCallout;
   nodes.stage.classList.toggle(
