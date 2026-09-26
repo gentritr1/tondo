@@ -18,6 +18,67 @@
  *   node scripts/shoot.js --scene none --path "/?code=BASIL-4821" --storage-json '{"tondo.name":"Gent"}'
  *   node scripts/shoot.js --scene mock:yourTurn --prelude scripts/probes/haptics-stub.js --query novibrate
  *   node scripts/shoot.js --scene mock:pieComplete --clipboard --probe "…navigator.clipboard.readText()…"
+ *   node scripts/shoot.js --check
+ *   node scripts/shoot.js --check --update-docs
+ *
+ * --check         starts its own server on a free port (never :4600 or a
+ *                 task's own port — this owns its whole lifecycle: spawn,
+ *                 wait for GET /health, kill on exit whether the run passes
+ *                 or fails), then runs the fixed regression suite below and
+ *                 sets a non-zero exit code if anything fails. This is the
+ *                 only mode `npm run shoot` invokes. It also captures every
+ *                 mock scene at every reference viewport into the git-ignored
+ *                 `.superpowers/qa-latest/`, so a failing run still leaves
+ *                 something to look at.
+ *                   tray-selector   `.stage.is-compressed ~ .tray` really
+ *                                   matches AND its rule actually applies
+ *                                   (`.tray`'s computed overflow-y is
+ *                                   `auto`) — the DOM-sibling match alone
+ *                                   stays true even when the stylesheet
+ *                                   combinator regresses from `~` to `+`,
+ *                                   because that is a fact about markup
+ *                                   order, not about which CSS rule won; a
+ *                                   `+` here once matched nothing, silently,
+ *                                   and the Leave button it was written to
+ *                                   save stayed unreachable for a full task
+ *                                   cycle).
+ *                   leave-reachable `#game-leave` is on screen after
+ *                                   scrolling the GAME SCREEN'S OWN scroll
+ *                                   container to the bottom. That container
+ *                                   is `.tray` (styles.css:2260-2265,
+ *                                   2382-2393), not the document — `html,
+ *                                   body { overflow: hidden }` (364-367)
+ *                                   makes `document.scrollingElement` report
+ *                                   scrollHeight===clientHeight===0 always,
+ *                                   which reads exactly like "trapped
+ *                                   off-screen" and is not.
+ *                   seat-plaque-gap scripts/probes/seat-plaque-gap.js
+ *                                   `pass: true` across the desktop/tablet
+ *                                   widths it was written for.
+ *                   banner-clear    scripts/probes/round-boundary.js's
+ *                                   `atRoundOver.overlaps` is empty — the
+ *                                   round-over banner covers no seat.
+ *                   no-page-errors  zero page errors across every page this
+ *                                   run loaded (assertions AND captures),
+ *                                   except the one Chrome intervention
+ *                                   message round-boundary.js's synthetic tap
+ *                                   always produces (see the comment at its
+ *                                   check, below) — not an application error.
+ *                   contrast        `node scripts/check-contrast.js` exits 0.
+ *                 One Chrome browser process is reused for the whole run
+ *                 (spawning 70+ fresh Chrome processes serially would make
+ *                 this too slow to run before every commit), but every
+ *                 scene is a fresh `Page.navigate` — a full document reload,
+ *                 not a re-render — and a script installed once with
+ *                 `Page.addScriptToEvaluateOnNewDocument` clears
+ *                 localStorage/sessionStorage before the app boots on every
+ *                 one of those navigations. That is what "fresh page" means
+ *                 here: no DOM, no timers, no monkey-patched prototype, and
+ *                 no persisted `tondo.*` key survives from one scene into
+ *                 the next, even though the browser process does.
+ * --update-docs   with --check, also writes the curated 8-file set into
+ *                 `docs/qa/` (the ones worth committing), on top of the full
+ *                 capture into `.superpowers/qa-latest/`.
  *
  * Scenes: home, lobby, game, roundOver, pieComplete, mock:<name>, none.
  *   `none` loads the page and stops — no driving at all, for the screens that
@@ -64,7 +125,7 @@
  * The server must already be running (npm start on :4600, or TONDO_URL).
  */
 
-const { spawn, execSync } = require('node:child_process');
+const { spawn, execSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -82,10 +143,12 @@ const ORIGIN = process.env.TONDO_URL || 'http://localhost:4600';
 
 // --------------------------------------------------------------------- args
 function parseArgs(argv) {
-  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0, path: null, storage: null, prelude: null, query: null, clipboard: false };
+  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0, path: null, storage: null, prelude: null, query: null, clipboard: false, check: false, updateDocs: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--out') a.out = argv[++i];
+    else if (k === '--check') a.check = true;
+    else if (k === '--update-docs') a.updateDocs = true;
     else if (k === '--scene') a.scene = argv[++i];
     else if (k === '--w') a.w = Number(argv[++i]);
     else if (k === '--h') a.h = Number(argv[++i]);
@@ -391,9 +454,304 @@ async function shoot(cdp, file, { settle = true } = {}) {
   return `${file} (${kb}KB)`;
 }
 
+// ------------------------------------------------------------------- check
+/** Finds a free TCP port by asking the OS for one and immediately releasing it. */
+async function getFreePort() {
+  const net = require('node:net');
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
+
+/** Polls GET /health until it answers `{ ok: true }` or the timeout expires. */
+async function waitForHealth(origin, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr = null;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${origin}/health`);
+      if (res.ok) {
+        const body = await res.json();
+        if (body && body.ok) return body;
+      }
+    } catch (err) { lastErr = err; }
+    await sleep(150);
+  }
+  throw new Error(`server never answered GET ${origin}/health within ${timeoutMs}ms`
+    + (lastErr ? ` (last error: ${lastErr.message})` : ''));
+}
+
+// The 8 scenes and 5 reference viewports the full `.superpowers/qa-latest/`
+// capture covers. Kept as one list so the capture and the assertions that
+// reuse the same scenes cannot silently drift apart.
+const CHECK_SCENES = ['yourTurn', 'opponents', 'tondo', 'callout', 'drawn', 'wild', 'roundOver', 'pieComplete'];
+const CHECK_SIZES = [[320, 568], [360, 640], [390, 844], [852, 393], [1280, 800]];
+
+// The curated set worth committing to docs/qa/ — the screens a reviewer
+// actually needs, not every scene at every size.
+const CURATED_QA = [
+  ['yourTurn', 390, 844], ['yourTurn', 1280, 800],
+  ['callout', 390, 844], ['callout', 1280, 800], ['callout', 360, 640],
+  ['roundOver', 390, 844], ['roundOver', 1280, 800],
+  ['pieComplete', 1280, 800],
+];
+
+/**
+ * `--check`: the regression suite. Owns a server (its own free port) and one
+ * Chrome browser for its whole lifetime, both torn down in `finally` whether
+ * the run passes, fails, or throws. Returns nothing; sets `process.exitCode`.
+ */
+async function runCheck(a) {
+  const root = path.join(__dirname, '..');
+  const results = [];
+  let hardError = null;
+
+  const record = (group, label, pass, detail) => {
+    results.push({ group, label, pass, detail });
+    console.log(`${pass ? 'PASS' : 'FAIL'}  ${group.padEnd(16)}${label.padEnd(28)}${detail}`);
+  };
+
+  const port = await getFreePort();
+  const origin = `http://localhost:${port}`;
+  console.log(`--check: launching server on ${origin} (PORT=${port}, never :4600)`);
+  const server = spawn(process.execPath, ['server/index.js'], {
+    cwd: root,
+    env: Object.assign({}, process.env, { PORT: String(port) }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let serverLog = '';
+  server.stdout.on('data', (d) => { serverLog += d; });
+  server.stderr.on('data', (d) => { serverLog += d; });
+  let serverExitedEarly = false;
+  server.once('exit', (code, sig) => {
+    if (code !== 0 && code !== null) serverExitedEarly = true;
+    if (code !== null && code !== 0) console.error(`server exited early: code=${code} sig=${sig}\n${serverLog}`);
+  });
+
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tondo-check-'));
+  const chrome = await launchChrome(userDataDir);
+  let cdp;
+
+  try {
+    await waitForHealth(origin).catch((err) => {
+      if (serverExitedEarly) throw new Error(`server exited before answering /health:\n${serverLog}`);
+      throw err;
+    });
+    console.log(`server healthy at ${origin}`);
+
+    const devPort = await readDevToolsPort(userDataDir);
+    cdp = await Cdp.attach(devPort);
+    await cdp.send('Page.enable');
+    await cdp.send('Runtime.enable');
+    await cdp.send('Log.enable').catch(() => { /* older builds */ });
+    // "Fresh Chrome page" per scene without paying for 70+ fresh Chrome
+    // PROCESSES: every Page.navigate below is a full document reload (new
+    // globals, new listeners, nothing left running from the last scene), and
+    // this script — installed once, evaluated before every one of those new
+    // documents — clears the persisted `tondo.*` localStorage keys before
+    // app.js ever reads them. Without it, the SAME profile persists
+    // localStorage across navigations, so a later scene could silently
+    // inherit a setting an earlier scene wrote.
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: 'try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}',
+    });
+
+    /** Navigates to a mock scene at a given viewport and waits for it to settle. */
+    async function gotoScene(scene, w, h) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        width: w, height: h, deviceScaleFactor: 2, mobile: w < 768,
+      });
+      const url = `${origin}/?mock=1&scene=${scene}`;
+      await cdp.send('Page.navigate', { url });
+      await cdp.until(`document.readyState === 'complete'`, { what: `load ${scene}@${w}x${h}` });
+      await cdp.until(`document.body.dataset.screen === 'game'`, { what: `mock game screen (${scene}@${w}x${h})` });
+      // Finished animations and two settled frames, same discipline the
+      // probes below already hold themselves to — a mid-transition read is
+      // not where anything actually sits.
+      await cdp.eval(`(() => { document.getAnimations().forEach(x => { try { x.finish(); } catch {} });
+        return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+    }
+
+    // ---- tray-selector ---------------------------------------------------
+    // The brief's own two conditions (is-compressed set, and the general-
+    // sibling selector matches exactly one element) are necessary but proved
+    // NOT sufficient while proving this check in the worktree at Step 3:
+    // `querySelectorAll('.stage.is-compressed ~ .tray')` asks the DOM "is
+    // `.tray` a later sibling of `#stage`?", which is a fact about MARKUP
+    // ORDER and stays true even when the STYLESHEET rule is quietly reverted
+    // from `~` to `+` — the DOM did not move, only the CSS combinator did.
+    // Measured directly: sabotaging styles.css to `+` still returned
+    // `matches=1` here, while `.tray`'s computed style silently reverted to
+    // `overflow-y: visible; max-height: none` (its unconstrained default —
+    // `.tray`'s base rule sets neither). The computed style is the runtime
+    // truth the stylesheet rule is actually supposed to produce, so it is
+    // asserted too; the DOM-order checks stay because they guard the
+    // original 2026-08 bug (markup reordering could break the `~` combinator
+    // the same way `+` broke it then).
+    await gotoScene('callout', 360, 640);
+    const compressed = await cdp.eval(`document.getElementById('stage').classList.contains('is-compressed')`);
+    const trayMatches = await cdp.eval(`document.querySelectorAll('.stage.is-compressed ~ .tray').length`);
+    const trayStyle = JSON.parse(await cdp.eval(`(() => { const t = document.querySelector('.tray'); if (!t) return JSON.stringify(null);
+      const s = getComputedStyle(t); return JSON.stringify({ overflowY: s.overflowY, maxHeight: s.maxHeight }); })()`));
+    record('tray-selector', 'mock:callout@360x640',
+      compressed === true && trayMatches === 1 && !!trayStyle && trayStyle.overflowY === 'auto',
+      `is-compressed=${compressed} domSiblingMatches=${trayMatches} `
+      + `computedOverflowY=${trayStyle && trayStyle.overflowY} computedMaxHeight=${trayStyle && trayStyle.maxHeight}`);
+
+    // ---- leave-reachable ---------------------------------------------------
+    // The document does NOT scroll (html, body { overflow: hidden },
+    // styles.css:364-367) — the game screen's own scroll container is
+    // `.tray` (styles.css:2260-2265 at 360x640/320x568). Scrolling
+    // `document.scrollingElement` measures nothing and would read as a false
+    // "unreachable". Scroll `.tray` itself and judge reachability from what
+    // is still outside the viewport at ITS scroll extreme.
+    const LEAVE_PROBE = `(() => {
+      const tray = document.querySelector('.tray');
+      const leave = document.getElementById('game-leave');
+      if (!tray || !leave) return JSON.stringify({ valid: false, reason: !tray ? 'no .tray in this scene' : 'no #game-leave in this scene' });
+      const scrollableAmount = Math.round((tray.scrollHeight - tray.clientHeight) * 10) / 10;
+      tray.scrollTop = tray.scrollHeight;
+      window.scrollTo(0, document.body.scrollHeight);   // belt-and-braces; a no-op today
+      const r = leave.getBoundingClientRect();
+      return JSON.stringify({
+        valid: true, container: '.tray', scrollableAmount,
+        trayScrollTop: Math.round(tray.scrollTop * 10) / 10,
+        leaveBottom: Math.round(r.bottom * 10) / 10,
+        innerHeight,
+        pass: r.bottom <= innerHeight + 1,
+      });
+    })()`;
+    for (const [w, h] of [[360, 640], [320, 568]]) {
+      for (const scene of ['tondo', 'callout', 'drawn', 'wild']) {
+        await gotoScene(scene, w, h);
+        const parsed = JSON.parse(await cdp.eval(LEAVE_PROBE));
+        record('leave-reachable', `mock:${scene}@${w}x${h}`, parsed.valid === true && parsed.pass === true,
+          parsed.valid
+            ? `container=${parsed.container} scrollable=${parsed.scrollableAmount}px scrollTop=${parsed.trayScrollTop} leaveBottom=${parsed.leaveBottom} innerHeight=${parsed.innerHeight}`
+            : `INVALID: ${parsed.reason}`);
+      }
+    }
+
+    // ---- seat-plaque-gap ---------------------------------------------------
+    const seatPlaqueSrc = fs.readFileSync(path.join(__dirname, 'probes', 'seat-plaque-gap.js'), 'utf8');
+    for (const [w, h] of [[1024, 768], [1280, 800], [1440, 900]]) {
+      for (const scene of ['tondo', 'callout', 'drawn', 'wild']) {
+        await gotoScene(scene, w, h);
+        const parsed = JSON.parse(await cdp.eval(seatPlaqueSrc));
+        record('seat-plaque-gap', `mock:${scene}@${w}x${h}`, parsed.valid === true && parsed.pass === true,
+          `valid=${parsed.valid} pass=${parsed.pass} gapY=${parsed.gapY} parts=${parsed.parts}`
+          + (parsed.valid ? '' : ` reason=${parsed.reason}`));
+      }
+    }
+
+    // ---- banner-clear ---------------------------------------------------
+    const roundBoundarySrc = fs.readFileSync(path.join(__dirname, 'probes', 'round-boundary.js'), 'utf8');
+    for (const [w, h] of [[390, 844], [1280, 800], [1440, 900]]) {
+      await gotoScene('roundOver', w, h);
+      const parsed = JSON.parse(await cdp.eval(roundBoundarySrc));
+      const ar = parsed.atRoundOver || {};
+      const ok = parsed.valid === true && ar.bannerVisible === true && Array.isArray(ar.overlaps) && ar.overlaps.length === 0;
+      record('banner-clear', `mock:roundOver@${w}x${h}`, ok,
+        `valid=${parsed.valid} bannerVisible=${ar.bannerVisible} seats=${ar.seats} overlaps=${JSON.stringify(ar.overlaps)}`);
+    }
+
+    // ---- capture every mock scene at every reference viewport ----------
+    const qaLatest = path.join(root, '.superpowers', 'qa-latest');
+    fs.rmSync(qaLatest, { recursive: true, force: true });
+    let shots = 0;
+    for (const scene of CHECK_SCENES) {
+      for (const [w, h] of CHECK_SIZES) {
+        await gotoScene(scene, w, h);
+        await shoot(cdp, path.join(qaLatest, `${scene}-${w}x${h}.png`), { settle: true });
+        shots++;
+      }
+    }
+    console.log(`captured ${shots} scene shots into ${qaLatest}`);
+
+    // ---- curated docs/qa/ (only with --update-docs) ---------------------
+    if (a.updateDocs) {
+      const docsQa = path.join(root, 'docs', 'qa');
+      fs.mkdirSync(docsQa, { recursive: true });
+      for (const [scene, w, h] of CURATED_QA) {
+        await gotoScene(scene, w, h);
+        await shoot(cdp, path.join(docsQa, `${scene}-${w}x${h}.png`), { settle: true });
+      }
+      console.log(`wrote ${CURATED_QA.length} curated screenshots into ${docsQa}`);
+    }
+
+    // ---- no-page-errors ---------------------------------------------------
+    // Read LAST and over the whole session: `cdp.events` accumulates every
+    // Runtime/Log event since Page.enable/Runtime.enable above, across every
+    // navigation this run made (assertions and captures alike), so this is
+    // genuinely "every page loaded during the check", not just the last one.
+    //
+    // One exact message is excluded, narrowly, by exact text match: Chrome
+    // refuses `navigator.vibrate()` without a prior TRUSTED user gesture, and
+    // `scripts/probes/round-boundary.js`'s own tap test drives a synthetic
+    // `.click()` — untrusted by definition — immediately before the app calls
+    // `haptics.tap()`. task-9-report.md already flagged this exact policy
+    // interaction as a known artifact of synthetic taps ("Chrome blocks
+    // vibrate until the frame has been tapped, so the stub can OVER-report
+    // versus a real browser"), not an application defect. Confirmed here by
+    // running round-boundary.js alone against this build with every one of
+    // its own checks green (`pass: true, valid: true`): it still produced
+    // exactly this message, every time, three times per full --check run —
+    // one per banner-clear viewport. Anything else Chrome or the app logs
+    // still fails this assertion.
+    const VIBRATE_BLOCKED = /^Blocked call to navigator\.vibrate because user hasn't tapped/;
+    const allErrors = cdp.pageErrors();
+    const errors = allErrors.filter((e) => !VIBRATE_BLOCKED.test(e));
+    const excludedCount = allErrors.length - errors.length;
+    record('no-page-errors', 'every page this run loaded', errors.length === 0,
+      `errors=${errors.length}`
+      + (excludedCount ? ` (excluded ${excludedCount} known synthetic-tap vibrate-policy message(s))` : '')
+      + (errors.length ? ` first="${errors[0]}"` : ''));
+  } catch (err) {
+    hardError = err;
+  } finally {
+    if (cdp) cdp.close();
+    killTree(chrome, userDataDir);
+    try { fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
+    catch { /* the OS will reap it */ }
+    try { server.kill('SIGTERM'); } catch { /* already gone */ }
+  }
+
+  // ---- contrast --------------------------------------------------------
+  // No browser needed; runs whether or not the Chrome-based checks above
+  // threw, so one broken assertion never hides a contrast regression.
+  const contrast = spawnSync(process.execPath, ['scripts/check-contrast.js'], { cwd: root, encoding: 'utf8' });
+  if (contrast.stdout) process.stdout.write(contrast.stdout);
+  if (contrast.stderr) process.stderr.write(contrast.stderr);
+  record('contrast', 'node scripts/check-contrast.js', contrast.status === 0, `exit=${contrast.status}`);
+
+  console.log('\n--- summary ---');
+  const byGroup = new Map();
+  for (const r of results) {
+    if (!byGroup.has(r.group)) byGroup.set(r.group, []);
+    byGroup.get(r.group).push(r);
+  }
+  let anyFail = false;
+  for (const [group, rs] of byGroup) {
+    const fails = rs.filter((r) => !r.pass).length;
+    if (fails) anyFail = true;
+    console.log(`${fails ? 'FAIL' : 'PASS'}  ${group.padEnd(16)}${rs.length - fails}/${rs.length} passed`);
+  }
+  if (hardError) {
+    console.error(`\nHARD FAILURE (infra, not an assertion): ${hardError.message}`);
+    anyFail = true;
+  }
+  process.exitCode = anyFail ? 1 : 0;
+}
+
 // --------------------------------------------------------------------- main
 async function main() {
   const a = parseArgs(process.argv.slice(2));
+  if (a.check) { await runCheck(a); return; }
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tondo-cdp-'));
   const chrome = await launchChrome(userDataDir);
   let cdp;
