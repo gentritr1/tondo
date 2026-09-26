@@ -13,6 +13,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=DM+Mono:wght@500&family=DM+Sans:wght@400;500;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./styles.css">
+<!-- The app is reached through a dynamic import() the preload scanner cannot
+     see, so without this the module request does not start until the inline
+     module runs: measured FCP 520ms against app.js responseEnd 722ms on a cold
+     profile, i.e. the home card painted ~200ms before bootHome could read
+     `tondo.lastTable`. -->
+<link rel="modulepreload" href="./js/app.js">
 </head>
 <body data-screen="home">
 

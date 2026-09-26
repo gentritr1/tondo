@@ -219,6 +219,8 @@ const app = {
   messageTone: 'info',
   pendingWild: null,       // card id waiting for a suit
   autoJoin: '',            // a ?code= on THIS load, waiting for an open socket
+  autoJoinWait: false,     // a joinRoom is out and the seating line is showing
+  autoJoinTimer: 0,        // the deadline that hands the front door back
   rejoinAttempt: false,    // this join came from a link or a remembered table
   quickPie: null,          // null | 'creating' | 'seating' | 'dealing'
   rosterPending: false,    // the next snapshot names tondo.lastTable's roster
@@ -414,6 +416,12 @@ function onNetStatus(state) {
   if (state === 'synchronized' && app.autoJoin) sendAutoJoin();
 }
 
+/* An open socket with no credentials is `synchronized`, which takes the net
+   banner DOWN — so without this the whole joinRoom round trip is a bare
+   gradient with nothing on it, and a reply that never comes is a bare
+   gradient forever. The wait says what it is doing and gives up out loud. */
+const AUTOJOIN_MS = 8000;
+
 /** The Join button's message, sent for the player, from a ?code= on this load. */
 function sendAutoJoin() {
   const code = app.autoJoin;
@@ -427,11 +435,32 @@ function sendAutoJoin() {
     app.rejoinAttempt = false;
     revealHome();
     nodes['home-msg'].textContent = 'Not connected — try again in a moment.';
+    return;
   }
+  app.autoJoinWait = true;
+  nodes['net-banner'].hidden = false;
+  nodes['net-banner'].textContent = 'Taking your seat…';
+  clearTimeout(app.autoJoinTimer);
+  app.autoJoinTimer = setTimeout(() => {
+    app.autoJoinTimer = 0;
+    app.rejoinAttempt = false;
+    revealHome();
+    nodes['home-msg'].textContent = 'That table did not answer — try again, or start a new one.';
+  }, AUTOJOIN_MS);
+}
+
+/** Takes the seating line down and disarms its deadline. */
+function endAutoJoinWait() {
+  if (!app.autoJoinWait) return;
+  app.autoJoinWait = false;
+  clearTimeout(app.autoJoinTimer);
+  app.autoJoinTimer = 0;
+  nodes['net-banner'].hidden = true;
 }
 
 /** Puts the home card back on screen after an auto-join that went nowhere. */
 function revealHome() {
+  endAutoJoinWait();
   nodes['home-card'].hidden = false;
   setScreen('home');
 }
@@ -516,6 +545,8 @@ function send(payload) {
 /* -------------------------------------------------------------- snapshot */
 
 function applySnapshot(snap) {
+  // The table answered: the seating line has nothing left to say.
+  endAutoJoinWait();
   const prev = app.snap;
   app.snap = snap;
   app.youId = snap.youId;
@@ -552,12 +583,19 @@ function applySnapshot(snap) {
     // snapshot rather than a timer, so a dropped message stalls instead of
     // seating a fifth chair.
     if (app.quickPie === 'creating' || app.quickPie === 'seating') {
+      // Nothing is queued, so a dropped message ends the shortcut. The player
+      // is the host of a real lobby with every control in front of them —
+      // they are not stranded, but they are owed an explanation.
+      const stalled = () => {
+        app.quickPie = null;
+        nodes['lobby-msg'].textContent = 'Not connected — fill the table and deal when it comes back.';
+      };
       if (snap.seats.length < 4) {
         app.quickPie = 'seating';
-        if (!conn.send({ type: 'addBot' })) app.quickPie = null;
+        if (!conn.send({ type: 'addBot' })) stalled();
       } else {
         app.quickPie = 'dealing';
-        if (!conn.send({ type: 'startGame' })) app.quickPie = null;
+        if (!conn.send({ type: 'startGame' })) stalled();
       }
     }
     return;
@@ -1335,6 +1373,11 @@ nodes['forget-btn'].addEventListener('click', () => {
   nodes['forget-btn'].textContent = FORGET_IDLE;
   wipeStore(() => localStorage);
   wipeStore(() => sessionStorage);
+  // The stores are only half of it: Connection still holds { name, code,
+  // token } in memory, and the next socket drop would re-send joinRoom and
+  // write every one of those keys back. "Nothing about you is stored here
+  // now" has to be true a minute later too.
+  conn.forget();
   nodes['name-input'].value = '';
   app.name = '';
   renderLastTable();

@@ -1,11 +1,13 @@
 (async () => {
   // The front door (`--scene none`): what the page does on its own between the
-  // first byte and the first tap. Three modes, chosen by the URL fragment so
+  // first byte and the first tap. Four modes, chosen by the URL fragment so
   // the same file serves every check and the app never sees the switch:
   //
-  //   (no hash)  screen + storage after load — the invite-link auto-join
+  //   (no hash)  an invite link WITH a seeded name: it must seat you
+  //   #no-name   the same link with NO seeded name: it must NOT seat you
   //   #quick     One quick pie: one tap on a cold home screen to a dealt table
   //   #forget    Forget this device: the two-stage confirm, stage by stage
+  //   #autojoin-timeout  a server that accepts the socket and never answers
   //
   // House rules, per mode:
   //  - PRIMED before anything is counted: the socket has to be open (the net
@@ -138,20 +140,79 @@
     };
   }
 
-  // -------------------------------------- mode: screen + storage (default)
+  // ------------------------------------------- mode: auto-join deadline
+  // Paired with a server that accepts the socket and never answers joinRoom.
+  // The prime is that the app really did go into the seating wait; the verdict
+  // is whether it ever comes out of it.
+  if (mode === 'autojoin-timeout') {
+    const banner = document.getElementById('net-banner');
+    const card = document.querySelector('.home-card');
+    // Sample the wait itself before anything can end it.
+    let sawSeatingLine = '';
+    let sawCardHidden = null;
+    const t0 = performance.now();
+    while (performance.now() - t0 < 3000) {
+      if (banner && !banner.hidden && banner.textContent.trim()) {
+        sawSeatingLine = banner.textContent.trim();
+        sawCardHidden = card.hidden;
+        break;
+      }
+      await sleep(25);
+    }
+    // PRIME: the card was hidden and a line was showing — i.e. the app was
+    // actually in the interstitial this check is about. Neither reads the
+    // effect under test, which is whether it ever ENDS.
+    const valid = sawCardHidden === true && !!sawSeatingLine
+      && new URLSearchParams(location.search).has('code');
+    if (!valid) {
+      return { mode, valid: false, why: { sawSeatingLine, sawCardHidden, screen: document.body.dataset.screen } };
+    }
+    const t1 = performance.now();
+    while (performance.now() - t1 < 14000 && card.hidden) await sleep(50);
+    return {
+      mode, valid: true,
+      seatingLine: sawSeatingLine,
+      cardHiddenDuringWait: sawCardHidden,
+      recoveredMs: Math.round(performance.now() - t1),
+      deadlineMs: 8000,
+      homeCardVisible: card.hidden === false,
+      bannerHidden: banner.hidden,
+      homeMsg: txt('home-msg'),
+      screen: document.body.dataset.screen,
+      codeInput: (document.getElementById('code-input') || {}).value,
+      controlsUsable: ['create-btn', 'quickpie-btn', 'join-btn', 'forget-btn']
+        .filter((id) => { const n = document.getElementById(id); return n && n.offsetParent !== null && !n.disabled; }).length,
+    };
+  }
+
+  // ------------------------- modes: an invite link, seated and not seated
+  // The URL fragment DECLARES which of the two this run is, so the prime can
+  // fail when the harness seeded nothing — a run with no `tondo.name` is
+  // otherwise indistinguishable from the app ignoring the link entirely.
+  const expectSeated = mode !== 'no-name';
+  const params = new URLSearchParams(location.search);
+  const hasCodeParam = params.has('code');
+  let seededName = '';
+  try { seededName = localStorage.getItem('tondo.name') || ''; } catch { /* no storage */ }
   const t0 = performance.now();
-  // Wait up to 4s for the app to settle on a screen other than the initial home render.
-  while (performance.now() - t0 < 4000 && document.body.dataset.screen === 'home'
-    && new URLSearchParams(location.search).has('code') && localStorage.getItem('tondo.name')) {
+  // Up to 4s for the app to settle. It settles either by leaving the home
+  // screen or by writing a line and handing the card back — waiting out the
+  // whole budget after the second one measures nothing but the budget.
+  while (performance.now() - t0 < 4000
+    && document.body.dataset.screen === 'home'
+    && !txt('home-msg')
+    && hasCodeParam && seededName) {
     await sleep(100);
   }
   return {
-    mode: 'screen',
-    // The prime for this one is the page itself: the app booted and named a
-    // screen, and the URL carried what the check is about.
-    valid: !!document.body.dataset.screen,
-    hasCodeParam: new URLSearchParams(location.search).has('code'),
-    codeParam: new URLSearchParams(location.search).get('code'),
+    mode: expectSeated ? 'screen' : 'no-name',
+    // The URL had to carry a code, and the storage had to be in the state this
+    // run is about. Neither reads the screen the app settled on.
+    valid: hasCodeParam && (expectSeated ? !!seededName : !seededName),
+    expectSeated,
+    hasCodeParam,
+    codeParam: params.get('code'),
+    seededNamePresent: !!seededName,
     screen: document.body.dataset.screen,
     homeCardHidden: (document.querySelector('.home-card') || {}).hidden,
     codeInput: (document.getElementById('code-input') || {}).value,

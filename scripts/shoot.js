@@ -23,7 +23,8 @@
  *
  * --path <p>          navigate to ORIGIN + p instead of ORIGIN, so a probe can
  *                     be handed a real query string ("/?code=BASIL-4821").
- *                     Ignored by mock: scenes, which build their own URL.
+ *                     A missing leading slash is added. Ignored by mock:
+ *                     scenes, which build their own URL.
  * --storage-json <j>  a JSON object installed into localStorage BEFORE the app
  *                     boots (Page.addScriptToEvaluateOnNewDocument), every set
  *                     wrapped in try/catch. Values are stored as strings, so a
@@ -66,7 +67,11 @@ function parseArgs(argv) {
     else if (k === '--probe') a.probe = argv[++i];
     // A specific URL, and storage that exists before the first line of app.js
     // runs: the two things a "what does this page do on load" probe needs.
-    else if (k === '--path') a.path = argv[++i];
+    else if (k === '--path') {
+      // `--path foo` would otherwise concatenate into "http://host:4707foo".
+      const v = argv[++i];
+      a.path = (v && !v.startsWith('/')) ? '/' + v : v;
+    }
     else if (k === '--storage-json') a.storage = argv[++i];
     // A mid-animation frame: skip the finish-every-animation settle, and hold
     // for a fixed time after the probe so the capture lands at a known moment.
