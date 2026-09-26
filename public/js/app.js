@@ -163,6 +163,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (ch) => (
 const el = (id) => document.getElementById(id);
 const nodes = {};
 ['name-input', 'code-input', 'create-btn', 'join-btn', 'home-msg',
+ 'quickpie-btn', 'last-table', 'last-table-sub', 'rejoin-btn', 'forget-btn',
  'room-code', 'copy-btn', 'seat-list', 'host-controls', 'addbot-btn', 'start-btn',
  'lobby-wait', 'lobby-hint', 'lobby-msg', 'leave-btn',
  'queue', 'strip-code', 'stage', 'ring', 'plaque', 'match-label', 'dir-badge',
@@ -184,6 +185,9 @@ const nodes = {};
 ].forEach((id) => { nodes[id] = el(id); });
 nodes['top-card'].style.setProperty('--land-rise', LAND_RISE + 'px');
 nodes['top-card'].style.setProperty('--land-scale', String(LAND_SCALE));
+/* The home card itself: an invite link hides it while it seats you, and every
+   revert of the forget control watches clicks anywhere inside it. */
+nodes['home-card'] = document.querySelector('.home-card');
 /* The three pieces of centre furniture the ledger has to keep its toppings off,
    plus the sauce disc they are positioned inside. Class-based, so they are
    resolved once here rather than re-queried on every repaint. */
@@ -214,6 +218,10 @@ const app = {
   message: '',
   messageTone: 'info',
   pendingWild: null,       // card id waiting for a suit
+  autoJoin: '',            // a ?code= on THIS load, waiting for an open socket
+  rejoinAttempt: false,    // this join came from a link or a remembered table
+  quickPie: null,          // null | 'creating' | 'seating' | 'dealing'
+  rosterPending: false,    // the next snapshot names tondo.lastTable's roster
   armedCard: null,         // coarse pointers: first tap arms, second commits
   calloutDismissed: '',    // target key the player chose to let pass
   bannerTimer: 0,
@@ -401,6 +409,31 @@ function onNetStatus(state) {
     if (app.snap.phase === 'lobby') renderLobby(app.snap);
     else if (app.snap.game) renderGame(app.snap);
   }
+  // An invite link's join is the first thing the open socket does. `send()`
+  // queues nothing, so this is the only moment it can be sent from.
+  if (state === 'synchronized' && app.autoJoin) sendAutoJoin();
+}
+
+/** The Join button's message, sent for the player, from a ?code= on this load. */
+function sendAutoJoin() {
+  const code = app.autoJoin;
+  app.autoJoin = '';
+  const seat = conn.seatFor(code);
+  app.rejoinAttempt = true;
+  const ok = conn.send({ type: 'joinRoom', code, name: app.name, token: seat ? seat.token : undefined });
+  if (!ok) {
+    // The socket went away between the status hook and here. Hand the player
+    // the ordinary front door with the code already in the box.
+    app.rejoinAttempt = false;
+    revealHome();
+    nodes['home-msg'].textContent = 'Not connected — try again in a moment.';
+  }
+}
+
+/** Puts the home card back on screen after an auto-join that went nowhere. */
+function revealHome() {
+  nodes['home-card'].hidden = false;
+  setScreen('home');
 }
 
 function names(snap) {
@@ -426,27 +459,48 @@ function nicely(name) {
 function handleMessage(msg, context) {
   if (context && context.rejoinRefused) {
     app.snap = null;
-    setScreen('home');
+    app.quickPie = null;
+    app.rejoinAttempt = false;
+    revealHome();
     nodes['home-msg'].textContent = msg.message || 'That seat is gone.';
     return;
   }
   if (msg.type === 'joined') {
     app.roomCode = msg.roomCode;
     app.youId = msg.youId;
+    app.rejoinAttempt = false;
     conn.remember(app.name, msg.roomCode, msg.token);
     try { sessionStorage.setItem('tondo.room', msg.roomCode); } catch { /* ignore */ }
+    // The code is known now; the roster is not — the seats arrive with the
+    // first snapshot, which fills it in. Rejoining the same table keeps the
+    // names already written rather than blanking them for one beat.
+    const code = String(msg.roomCode || '').toUpperCase();
+    const prev = readLastTable();
+    writeLastTable(code, (prev && prev.code === code) ? prev.roster : []);
+    app.rosterPending = true;
     return;
   }
   if (msg.type === 'state') { applySnapshot(msg); return; }
   if (msg.type === 'left') {
     app.snap = null;
+    app.quickPie = null;
+    app.rejoinAttempt = false;
     try { sessionStorage.removeItem('tondo.room'); } catch { /* ignore */ }
-    setScreen('home');
+    renderLastTable();
+    revealHome();
     return;
   }
   if (msg.type === 'error') {
     const text = msg.message || 'That did not work.';
-    nodes['home-msg'].textContent = text;
+    // A shortcut into a table nobody is sitting at any more is not an error
+    // the player did anything about; it is a dead end with a way out.
+    const fromMemory = app.rejoinAttempt;
+    app.rejoinAttempt = false;
+    app.quickPie = null;
+    if (fromMemory) revealHome();
+    nodes['home-msg'].textContent = (fromMemory && text === 'No table has that code.')
+      ? 'That table has closed — start a new one.'
+      : text;
     nodes['lobby-msg'].textContent = text;
     setMessage(text, 'bad');
     nodes['live-now'].textContent = text; // refusals are announced, not just shown
@@ -467,6 +521,14 @@ function applySnapshot(snap) {
   app.youId = snap.youId;
   app.roomCode = snap.roomCode;
 
+  // The table you were last at, as the table itself reports it. Written when
+  // the roster is first known and refreshed at every round boundary, so the
+  // names on the home screen are the ones you actually played with.
+  if (app.rosterPending || (prev && prev.phase !== 'roundOver' && snap.phase === 'roundOver')) {
+    app.rosterPending = false;
+    writeLastTable(String(snap.roomCode || '').toUpperCase(), rosterOf(snap));
+  }
+
   const g = snap.game;
   // A wild waiting for a suit is only meaningful while that card is in hand.
   if (app.pendingWild && !(g && g.hand.some((c) => c.id === app.pendingWild))) app.pendingWild = null;
@@ -485,10 +547,24 @@ function applySnapshot(snap) {
     app.celebratedWinner = '';
     setScreen('lobby');
     renderLobby(snap);
+    // One tap asked for a dealt table, so the lobby fills itself: one bot per
+    // snapshot (each addBot answers with one), then deal. Driven off the
+    // snapshot rather than a timer, so a dropped message stalls instead of
+    // seating a fifth chair.
+    if (app.quickPie === 'creating' || app.quickPie === 'seating') {
+      if (snap.seats.length < 4) {
+        app.quickPie = 'seating';
+        if (!conn.send({ type: 'addBot' })) app.quickPie = null;
+      } else {
+        app.quickPie = 'dealing';
+        if (!conn.send({ type: 'startGame' })) app.quickPie = null;
+      }
+    }
     return;
   }
 
   setScreen('game');
+  if (snap.phase === 'playing') app.quickPie = null;
   if (snap.phase !== 'roundOver') app.celebratedWinner = '';
   if (!prev || prev.phase === 'lobby') { setMessage('', 'info'); app.handMoved = false; }
 
@@ -1092,13 +1168,76 @@ function dealGhosts(target, count, wave, opts) {
 
 /* ------------------------------------------------------------------ home */
 
+/* Storage is a privilege, not a given: Safari's private mode throws on the
+   first touch of either store, and an uncaught throw at boot is a blank
+   screen. Every read and every write is guarded on its own, and a value that
+   will not parse is read as "nothing remembered" — never deleted, never
+   allowed to take the home screen down with it. */
+
+const LAST_TABLE_KEY = 'tondo.lastTable';
+const LAST_TABLE_MS = 12 * 60 * 60 * 1000;
+
+/** The seats around you, as the table names them. */
+function rosterOf(snap) {
+  return ((snap && snap.seats) || [])
+    .filter((s) => s.id !== snap.youId)
+    .map((s) => (s.isBot ? nicely(s.name) : s.name))
+    .filter(Boolean);
+}
+
+/** `{ code, roster, at }`, or null for anything that is not exactly that. */
+function readLastTable() {
+  let raw = '';
+  try { raw = localStorage.getItem(LAST_TABLE_KEY) || ''; } catch { return null; }
+  if (!raw) return null;
+  let v = null;
+  // A truncated or hand-edited value is not an error to report, it is simply
+  // no last table. The bad value stays where it is: the next join rewrites it.
+  try { v = JSON.parse(raw); } catch { return null; }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const code = typeof v.code === 'string' ? v.code.trim().toUpperCase() : '';
+  const at = Number(v.at);
+  if (!code || !Number.isFinite(at)) return null;
+  const roster = Array.isArray(v.roster)
+    ? v.roster.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim()).slice(0, 3)
+    : [];
+  return { code, roster, at };
+}
+
+function writeLastTable(code, roster) {
+  if (!code) return;
+  try {
+    localStorage.setItem(LAST_TABLE_KEY, JSON.stringify({ code, roster: roster || [], at: Date.now() }));
+  } catch { /* nowhere to keep it */ }
+}
+
+/** Decided before first paint, so the row never shoves the card downwards. */
+function renderLastTable() {
+  const last = readLastTable();
+  // Older than half a day and the names stop being a promise worth making.
+  const fresh = !!last && (Date.now() - last.at) < LAST_TABLE_MS;
+  nodes['last-table'].hidden = !fresh;
+  // The copy never claims the table is still there — only that it was yours.
+  nodes['last-table-sub'].textContent = fresh && last.roster.length
+    ? 'with ' + last.roster.join(', ') : '';
+}
+
 function bootHome() {
   const params = new URLSearchParams(location.search);
   let stored = '';
   try { stored = localStorage.getItem('tondo.name') || ''; } catch { /* ignore */ }
   nodes['name-input'].value = stored;
-  const code = params.get('code');
-  if (code) nodes['code-input'].value = code.toUpperCase();
+  const code = (params.get('code') || '').trim().toUpperCase();
+  if (code) nodes['code-input'].value = code;
+  renderLastTable();
+  // A friend tapping an invite link has already told us the two things the
+  // front door asks for. Only a ?code= on THIS load may do this — a
+  // remembered table never seats you without a tap.
+  if (code && stored) {
+    app.name = stored;
+    app.autoJoin = code;
+    nodes['home-card'].hidden = true;
+  }
 }
 
 function readName() {
@@ -1116,14 +1255,97 @@ nodes['create-btn'].addEventListener('click', () => {
   send({ type: 'createRoom', name });
 });
 
+/* One tap instead of create, add three bots, deal. No stats, no record, no
+   progression: playing alone must not grow a ledger to keep up with. */
+nodes['quickpie-btn'].addEventListener('click', () => {
+  const name = readName();
+  if (!name) return;
+  nodes['home-msg'].textContent = '';
+  app.quickPie = 'creating';
+  if (!send({ type: 'createRoom', name })) app.quickPie = null;
+});
+
 nodes['join-btn'].addEventListener('click', () => {
+  // Whether this join came from a remembered table is decided BEFORE
+  // readName() can bail out, and only survives as far as a message actually
+  // sent — otherwise the next server error would wear the wrong copy.
+  const fromMemory = app.rejoinAttempt;
+  app.rejoinAttempt = false;
   const name = readName();
   if (!name) return;
   const code = (nodes['code-input'].value || '').trim().toUpperCase();
   if (!code) { nodes['home-msg'].textContent = 'A table code goes in the box.'; nodes['code-input'].focus(); return; }
   nodes['home-msg'].textContent = '';
   const seat = conn.seatFor(code);
-  send({ type: 'joinRoom', code, name, token: seat ? seat.token : undefined });
+  app.rejoinAttempt = fromMemory;
+  if (!send({ type: 'joinRoom', code, name, token: seat ? seat.token : undefined })) app.rejoinAttempt = false;
+});
+
+/* Always an explicit tap: the row offers the table, it never takes it. */
+nodes['rejoin-btn'].addEventListener('click', () => {
+  const last = readLastTable();
+  if (!last) { renderLastTable(); return; }
+  nodes['code-input'].value = last.code;
+  app.rejoinAttempt = true;
+  nodes['join-btn'].click();
+});
+
+/* ---- forget this device -------------------------------------------------
+   Two taps on one button, not a modal: the wipe takes the seat token with it,
+   so a mis-tap on a control that sits where a thumb rests would be
+   unrecoverable, and a modal is focus-trap surface a privacy affordance does
+   not deserve. The armed state is announced by #home-msg, which is already a
+   polite live region — no second one is added. */
+const FORGET_IDLE = 'Forget this device';
+const FORGET_ARMED = 'Tap again to forget';
+const FORGET_WARN = 'This clears your name and your last table. It cannot be undone.';
+const FORGET_DONE = 'Forgotten. Nothing about you is stored here now.';
+const FORGET_MS = 4000;
+let forgetTimer = 0;
+
+function disarmForget() {
+  if (!forgetTimer) return;
+  clearTimeout(forgetTimer);
+  forgetTimer = 0;
+  nodes['forget-btn'].textContent = FORGET_IDLE;
+  // Only the warning is ours to take back. Another control may have written
+  // its own line in the same breath, and that one stands.
+  if (nodes['home-msg'].textContent === FORGET_WARN) nodes['home-msg'].textContent = '';
+}
+
+/** Removes every `tondo.` key from one store, and nothing else. */
+function wipeStore(get) {
+  try {
+    const store = get();
+    for (const key of Object.keys(store)) {
+      if (key.startsWith('tondo.')) { try { store.removeItem(key); } catch { /* ignore */ } }
+    }
+  } catch { /* no storage to clear */ }
+}
+
+nodes['forget-btn'].addEventListener('click', () => {
+  if (!forgetTimer) {
+    forgetTimer = setTimeout(disarmForget, FORGET_MS);
+    nodes['forget-btn'].textContent = FORGET_ARMED;
+    nodes['home-msg'].textContent = FORGET_WARN;
+    return;
+  }
+  clearTimeout(forgetTimer);
+  forgetTimer = 0;
+  nodes['forget-btn'].textContent = FORGET_IDLE;
+  wipeStore(() => localStorage);
+  wipeStore(() => sessionStorage);
+  nodes['name-input'].value = '';
+  app.name = '';
+  renderLastTable();
+  nodes['home-msg'].textContent = FORGET_DONE;
+});
+
+// Leaving the button, or reaching for anything else on the card, puts the
+// safety back on.
+nodes['forget-btn'].addEventListener('blur', disarmForget);
+nodes['home-card'].addEventListener('click', (e) => {
+  if (!nodes['forget-btn'].contains(e.target)) disarmForget();
 });
 
 nodes['code-input'].addEventListener('keydown', (e) => { if (e.key === 'Enter') nodes['join-btn'].click(); });
@@ -1204,8 +1426,10 @@ function leaveTable() {
   }
   try { sessionStorage.removeItem('tondo.room'); } catch { /* ignore */ }
   app.snap = null;
+  app.quickPie = null;
   conn.forget();
-  setScreen('home');
+  renderLastTable();
+  revealHome();
 }
 
 /* ------------------------------------------------------------ game: read */
@@ -2801,7 +3025,7 @@ setScreen('home');
 /* A reload is a drop that lost its variables: arm the seat first, then dial. */
 let room = '';
 try { room = sessionStorage.getItem('tondo.room') || ''; } catch { /* ignore */ }
-if (room) {
+if (room && !app.autoJoin) {
   const seat = conn.seatFor(room);
   if (seat) { app.name = seat.name; conn.restore(seat); }
 }

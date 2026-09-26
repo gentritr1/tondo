@@ -710,6 +710,21 @@ body[data-screen="lobby"] #screen-lobby {
 .join-row { display: flex; gap: 10px; align-items: flex-end; }
 .join-row > .btn { min-height: 48px; flex: 0 0 auto; }
 
+/* ------------------------------------------------- one tap to a table
+   Layout only. Every one of these controls is an existing button species
+   (.btn, .btn-block, .btn-tiny) wearing its own colour, radius, shadow and
+   size — a fourth species on the home card would be a design-system change,
+   not a feature. The card's own 14px row gap already clears the 8px minimum
+   between adjacent tappable controls, so nothing here tightens it.
+
+   No entrance animation on either block: both are decided before first paint
+   and the home screen is a surface people see many times a day. */
+.quick-hint { margin: -7px 0 0; }
+.last-table { display: flex; flex-direction: column; gap: 8px; }
+.last-table-sub { max-width: none; margin: 0; }
+.last-table-sub:empty { display: none; }
+.home-card > .btn-forget { align-self: center; }
+
 /* ------------------------------------------------------------------ lobby */
 .lobby-head { display: flex; flex-direction: column; gap: 7px; }
 .lobby-mark {

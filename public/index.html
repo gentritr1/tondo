@@ -38,7 +38,20 @@
 
     <button id="create-btn" type="button" class="btn btn-primary btn-block">Create table</button>
 
+    <!-- Secondary to "Create table": two primaries on one card means neither
+         is primary. The hint is static helper text, not a tooltip. -->
+    <button id="quickpie-btn" type="button" class="btn btn-block" aria-describedby="quickpie-hint">One quick pie</button>
+    <p id="quickpie-hint" class="tagline quick-hint">Warm up against three bots while your friends arrive.</p>
+
     <div class="rule"><span>or join one</span></div>
+
+    <!-- Present on first paint or not at all: `tondo.lastTable` is read
+         synchronously at boot, so this never appears after the card has been
+         painted and shoves "Create table" out from under a moving thumb. -->
+    <div id="last-table" class="last-table" hidden>
+      <button id="rejoin-btn" type="button" class="btn btn-block" aria-describedby="last-table-sub">Rejoin last table</button>
+      <p id="last-table-sub" class="home-hook last-table-sub"></p>
+    </div>
 
     <div class="join-row">
       <label class="field field-grow" for="code-input">
@@ -50,6 +63,10 @@
 
     <p id="home-msg" class="msg" role="status" aria-live="polite"></p>
     <button type="button" class="btn btn-tiny" data-help-open>How to play</button>
+    <!-- The card's quiet register, same species as "How to play". It arms on
+         the first tap and wipes on the second; the warning is announced by
+         #home-msg, which is already a polite live region. -->
+    <button id="forget-btn" type="button" class="btn btn-tiny btn-forget">Forget this device</button>
   </div>
 </section>
 

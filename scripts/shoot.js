@@ -15,9 +15,22 @@
  *   node scripts/shoot.js --out /tmp/shots --scene game --reduced
  *   node scripts/shoot.js --probe "document.getAnimations().length"
  *   node scripts/shoot.js --out /tmp/shots --scene mock:yourTurn --probe "…" --no-settle --wait 480
+ *   node scripts/shoot.js --scene none --path "/?code=BASIL-4821" --storage-json '{"tondo.name":"Gent"}'
  *
- * Scenes: home, lobby, game, roundOver.
- * The server must already be running (npm start on :4600).
+ * Scenes: home, lobby, game, roundOver, pieComplete, mock:<name>, none.
+ *   `none` loads the page and stops — no driving at all, for the screens that
+ *   ARE the thing under test (the home card, an invite link seating itself).
+ *
+ * --path <p>          navigate to ORIGIN + p instead of ORIGIN, so a probe can
+ *                     be handed a real query string ("/?code=BASIL-4821").
+ *                     Ignored by mock: scenes, which build their own URL.
+ * --storage-json <j>  a JSON object installed into localStorage BEFORE the app
+ *                     boots (Page.addScriptToEvaluateOnNewDocument), every set
+ *                     wrapped in try/catch. Values are stored as strings, so a
+ *                     JSON value goes in as a JSON string:
+ *                     '{"tondo.name":"Gent","tondo.lastTable":"{\"code\":…}"}'
+ *
+ * The server must already be running (npm start on :4600, or TONDO_URL).
  */
 
 const { spawn, execSync } = require('node:child_process');
@@ -38,7 +51,7 @@ const ORIGIN = process.env.TONDO_URL || 'http://localhost:4600';
 
 // --------------------------------------------------------------------- args
 function parseArgs(argv) {
-  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0 };
+  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0, path: null, storage: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--out') a.out = argv[++i];
@@ -51,6 +64,10 @@ function parseArgs(argv) {
     else if (k === '--reduced') a.reduced = true;
     else if (k === '--keep') a.keep = true;
     else if (k === '--probe') a.probe = argv[++i];
+    // A specific URL, and storage that exists before the first line of app.js
+    // runs: the two things a "what does this page do on load" probe needs.
+    else if (k === '--path') a.path = argv[++i];
+    else if (k === '--storage-json') a.storage = argv[++i];
     // A mid-animation frame: skip the finish-every-animation settle, and hold
     // for a fixed time after the probe so the capture lands at a known moment.
     else if (k === '--no-settle') a.settle = false;
@@ -348,10 +365,23 @@ async function main() {
         features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
       });
     }
+    if (a.storage) {
+      let entries;
+      try { entries = Object.entries(JSON.parse(a.storage)); }
+      catch (err) { throw new Error(`--storage-json is not a JSON object: ${err.message}`); }
+      // Installed on the NEW document, so the values are already there when
+      // app.js reads them at boot — setting them after navigate would be a
+      // different test. Guarded: a private window throws on the first touch.
+      const sets = entries
+        .map(([k, v]) => `localStorage.setItem(${JSON.stringify(String(k))}, ${JSON.stringify(String(v))});`)
+        .join(' ');
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `try { ${sets} } catch (e) {}` });
+      console.log(`seeded ${entries.length} localStorage key(s): ${entries.map(([k]) => k).join(', ')}`);
+    }
     const matched = await (async () => {
       const target = a.scene.startsWith('mock:')
         ? `${ORIGIN}/?mock=1&scene=${a.scene.slice(5)}`
-        : ORIGIN;
+        : (a.path ? ORIGIN + a.path : ORIGIN);
       await cdp.send('Page.navigate', { url: target });
       await cdp.until(`document.readyState === 'complete'`, { what: 'load' });
       return cdp.eval(`matchMedia('(prefers-reduced-motion: reduce)').matches`);
@@ -359,7 +389,10 @@ async function main() {
     if (a.reduced && !matched) throw new Error('reduced-motion emulation did not take — the capture would be an invalid control');
     console.log(`chrome ${a.w}x${a.h}@${a.dsf}x  reduced-motion=${matched}`);
 
-    await driveTo(cdp, a.scene, a.bots);
+    // `none` is the page as it loads itself: driving it would destroy the
+    // very behaviour a boot-time probe is there to watch.
+    if (a.scene === 'none') await cdp.until(`document.readyState === 'complete'`, { what: 'page load' });
+    else await driveTo(cdp, a.scene, a.bots);
 
     if (a.probe) {
       const v = await cdp.eval(a.probe);
