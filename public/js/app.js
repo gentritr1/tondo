@@ -281,7 +281,7 @@ const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', game: 'game-tit
  * Returns true when the screen changed, so a caller can hang first-entry
  * behaviour off it.
  */
-function setScreen(name) {
+function setScreen(name, opts) {
   if (document.body.dataset.screen === name) return false;
   document.body.dataset.screen = name;
   const title = document.getElementById(SCREEN_TITLE[name]);
@@ -297,12 +297,20 @@ function setScreen(name) {
   const line = name === 'home' ? 'Home.'
     : name === 'lobby' ? (code ? `Lobby for table ${code}.` : 'Lobby.')
       : 'Game started.';
-  nodes['live-polite'].textContent = line;
+  /* One arrival, one announcement. Arriving at the table and "Your turn" land
+     in the SAME synchronous snapshot, and #live-now is role="alert"
+     aria-live="assertive": it preempts the polite region, so the orientation
+     line loses a race it started (both regions were observed mutating on the
+     same tick, 103ms after "Deal the cards"). When the assertive turn alert is
+     going to carry the arrival, this line stands down rather than competing. */
   /* renderGame writes this same region from the game log, and it runs later in
      the very same repaint — without this the orientation line was overwritten
      (usually with '') before a screen reader ever saw it. The line owns one
-     repaint; the next snapshot's event takes the region back. */
-  app.screenLine = line;
+     repaint; the next snapshot's event takes the region back. A silent swap
+     owes nothing, and says so, or a line left pending from an earlier screen
+     would eat the next game event's turn at the region. */
+  app.screenLine = (opts && opts.silent) ? '' : line;
+  if (app.screenLine) nodes['live-polite'].textContent = line;
   return true;
 }
 
@@ -644,12 +652,16 @@ function applySnapshot(snap) {
     return;
   }
 
-  setScreen('game');
+  // Computed before the screen swap, because it decides whether the swap
+  // announces itself at all (see setScreen): the turn alert below is
+  // assertive and would preempt the polite line in the same tick.
+  const yourTurnNow = g && snap.phase === 'playing' && g.turnPlayerId === snap.youId;
+  const alertsTurn = !!(snap.phase !== 'roundOver' && yourTurnNow && app.lastTurn !== g.turnPlayerId);
+  setScreen('game', { silent: alertsTurn });
   if (snap.phase === 'playing') app.quickPie = null;
   if (snap.phase !== 'roundOver') app.celebratedWinner = '';
   if (!prev || prev.phase === 'lobby') { setMessage('', 'info'); app.handMoved = false; }
 
-  const yourTurnNow = g && snap.phase === 'playing' && g.turnPlayerId === snap.youId;
   document.title = yourTurnNow ? '● Your turn — TONDO' : 'TONDO';
 
   if (snap.phase === 'roundOver' && g) {
@@ -1487,6 +1499,8 @@ function renderSeatList(snap) {
   const host = nodes['seat-list'];
   const focused = document.activeElement;
   const focusedKey = (focused && host.contains(focused) && focused.dataset.remove) || '';
+  const focusedIndex = focusedKey
+    ? [...host.children].findIndex((n) => n.contains(focused)) : -1;
   const live = new Map([...host.children].map((n) => [n.dataset.seat, n]));
 
   snap.seats.forEach((seat, i) => {
@@ -1550,10 +1564,24 @@ function renderSeatList(snap) {
   live.forEach((n) => n.remove());
 
   // Belt and braces: the node is normally the same one, but if a seat's row
-  // was rebuilt the keyboard still goes back to it rather than to <body>.
-  if (focusedKey && document.activeElement === document.body) {
+  // was rebuilt the keyboard still goes back to it — and if the seat you were
+  // standing on is the one that LEFT (you removed that bot), it walks outwards
+  // to the nearest row that still has a control, then to the button that
+  // fills the table. Removing a bot used to drop the keyboard on <body>.
+  if (focusedKey && focusLost()) {
+    const usable = (n) => !!n && !n.disabled && (n.offsetParent || n.getClientRects().length);
     const again = host.querySelector(`[data-remove="${CSS.escape(focusedKey)}"]`);
-    if (again && !again.disabled) again.focus({ preventScroll: true });
+    let target = usable(again) ? again : null;
+    const kids = [...host.children];
+    const start = Math.min(Math.max(focusedIndex, 0), Math.max(kids.length - 1, 0));
+    for (let d = 0; d < kids.length && !target; d++) {
+      for (const row of [kids[start - d], kids[start + d]]) {
+        const btn = row && row.querySelector('[data-remove]');
+        if (usable(btn)) { target = btn; break; }
+      }
+    }
+    if (!target && usable(nodes['addbot-btn'])) target = nodes['addbot-btn'];
+    if (target) target.focus({ preventScroll: true });
   }
 }
 
@@ -1670,7 +1698,7 @@ function renderCalloutButtons(targets, targetKey) {
 
   live.forEach((n) => n.remove());
 
-  if (focusedKey && document.activeElement === document.body) {
+  if (focusedKey && focusLost()) {
     const again = focusedKey === CALLOUT_SKIP
       ? skip : host.querySelector(`[data-callout="${CSS.escape(focusedKey)}"]`);
     if (again && !again.disabled) again.focus({ preventScroll: true });
@@ -1778,6 +1806,13 @@ function renderGame(snap) {
   const targetKey = targets.join(',');
   const showCallout = !over && targets.length > 0 && app.calloutDismissed !== targetKey;
   const drawnCard = drawnId ? g.hand.find((c) => c.id === drawnId) : null;
+  /* The bar is about to close under whoever pressed a button in it: "Let it
+     pass" hides it in this very repaint, "Call out X" on the snapshot that
+     answers. Either way the focused node goes with it and the keyboard lands
+     on <body> — the same shape the suit picker had, so it takes the same
+     landing, applied after the hand below has been rebuilt. */
+  const leavingCallout = !nodes['callout-bar'].hidden && !showCallout
+    && !!document.activeElement && nodes['callout-bar'].contains(document.activeElement);
   nodes['callout-bar'].hidden = !showCallout;
   nodes.stage.classList.toggle(
     'is-compressed',
@@ -1834,7 +1869,7 @@ function renderGame(snap) {
           /* The button that was just pressed is inside a bar this render has
              hidden, so the browser drops focus to <body> and a keyboard player
              is left nowhere. Same landing as cancelWild's Escape path. */
-          focusAfterWild(cardId);
+          focusHandOrDraw(cardId);
         });
       });
       nodes['wild-grid'].querySelector('[data-wild-cancel]')
@@ -1883,6 +1918,10 @@ function renderGame(snap) {
   const liveLabel = yourTurn && !drawnCard && !wildOpen && !over;
   nodes['playable-label'].classList.toggle('is-live', liveLabel);
   nodes['playable-label'].classList.toggle('is-drawn', !liveLabel && !!drawnCard);
+
+  // The callout bar has closed under the keyboard (see `leavingCallout`): the
+  // hand is rendered now, so there is somewhere real to land.
+  if (leavingCallout) focusHandOrDraw();
 
   /* --- action row */
   nodes['draw-btn'].disabled = app.offline || !yourTurn || !!drawnCard || wildOpen;
@@ -3023,7 +3062,7 @@ function renderHand(g, yourTurn, playable, drawnId) {
     if (rising.length) releaseWhenRising(rising);
   }
 
-  if (focusedId && document.activeElement === document.body && row.children.length) {
+  if (focusedId && focusLost() && row.children.length) {
     // The focused card left the hand (it was played): land on its neighbour.
     // A card that has not started rising yet is `inert` and cannot take focus
     // — focusing it is a silent no-op that leaves the player on <body> — so
@@ -3149,11 +3188,24 @@ function refuse(cardId) {
 }
 
 /**
- * Where the keyboard goes when the suit picker closes, either way it can:
- * the card itself if it is still in the hand (Escape put it back), else the
- * nearest card that survived the play, else the Draw button. Never <body>.
+ * Has the keyboard been dropped? A removed node leaves <body> focused, but a
+ * node that is merely hidden can keep `document.activeElement` pointing at it
+ * for a while (measured on the help dialog: still #help-close one microtask,
+ * one rAF and one timeout after close), so "is it still connected and in the
+ * document" is the question, not "is it <body>".
  */
-function focusAfterWild(cardId) {
+function focusLost() {
+  const a = document.activeElement;
+  return !a || a === document.body || !a.isConnected || !document.body.contains(a);
+}
+
+/**
+ * Where the keyboard goes when a tray bar closes under it — the suit picker,
+ * either way it can close, and the callout bar. The card the bar was about if
+ * it is still in the hand (Escape put a Wild back), else the nearest card that
+ * survived, else the Draw button. Never <body>.
+ */
+function focusHandOrDraw(cardId) {
   const row = nodes['hand-row'];
   const handUp = !nodes['hand-wrap'].hidden;
   const usable = (n) => n && !n.inert && !n.disabled && (n.offsetParent || n.getClientRects().length);
@@ -3170,7 +3222,7 @@ function cancelWild() {
   app.pendingWild = null;
   if (!app.snap) return;
   renderGame(app.snap);
-  focusAfterWild(cardId);
+  focusHandOrDraw(cardId);
 }
 
 /* Escape is the help dialog's OWN key: a native <dialog> closes on it, and

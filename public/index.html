@@ -155,11 +155,15 @@
       <div id="plaque" class="plaque" role="group" aria-label="Match requirement">
         <div class="plaque-head">
           <span id="match-label" class="plaque-label">Match</span>
-          <span id="dir-badge" class="dir-badge">&#8635;</span>
+          <!-- Glyphs, not words: #match-suit and #dir-label say the same
+               things in text, and naming the group does not hide its
+               children — unhidden, the plaque read "Topping / ↻ / ≈ /
+               Anchovy". -->
+          <span id="dir-badge" class="dir-badge" aria-hidden="true">&#8635;</span>
         </div>
         <div class="plaque-row">
           <div class="plaque-pair">
-            <span id="match-glyph" class="match-glyph"></span>
+            <span id="match-glyph" class="match-glyph" aria-hidden="true"></span>
             <span id="match-suit" class="match-suit"></span>
           </div>
           <div id="match-or-wrap" class="plaque-pair fx-tight">
@@ -192,7 +196,7 @@
       </div>
 
       <div class="dir">
-        <span id="dir-glyph" class="dir-glyph">&#8635;</span>
+        <span id="dir-glyph" class="dir-glyph" aria-hidden="true">&#8635;</span>
         <span id="dir-label" class="dir-label">Clockwise</span>
       </div>
     </div>

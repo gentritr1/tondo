@@ -41,7 +41,10 @@
   const $ = (id) => document.getElementById(id);
   const rm = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const help = $('help-dialog');
-  const vis = (n) => !!n && !!(n.offsetParent || (n.getClientRects && n.getClientRects().length));
+  // <body> has a box, so vis(document.body) was truthy and "it landed
+  // somewhere visible" said nothing at all next to "it is not <body>".
+  const vis = (n) => !!n && n !== document.body
+    && !!(n.offsetParent || (n.getClientRects && n.getClientRects().length));
   /** A stable name for whoever holds focus, so RED and GREEN print the same shape. */
   const who = (a) => {
     if (!a) return 'none';
@@ -56,6 +59,27 @@
     return a.id ? '#' + a.id : a.tagName;
   };
   const seatRows = () => document.querySelectorAll('#seat-list .seat-row:not(.seat-ghost)').length;
+  /* Both live regions, watched together. A post-hoc textContent read cannot
+     see a clobber: #live-now is role="alert" aria-live="assertive" and
+     preempts the polite region, so what matters is WHICH regions mutated in
+     the same tick, not what one of them says afterwards. Timestamps are
+     relative to the trigger. */
+  const watchRegions = () => {
+    const hits = [];
+    const t0 = performance.now();
+    const obs = ['live-polite', 'live-now'].map((id) => {
+      const node = $(id);
+      node.textContent = '';
+      const o = new MutationObserver(() => hits.push({
+        region: id, at: Math.round(performance.now() - t0), text: node.textContent,
+      }));
+      o.observe(node, { childList: true, characterData: true, subtree: true });
+      return o;
+    });
+    return {
+      stop: () => { obs.forEach((o) => { o.takeRecords().forEach(() => {}); o.disconnect(); }); return hits; },
+    };
+  };
   const seenHelp = (on) => {
     try {
       if (on) localStorage.setItem('tondo.seenHelp', '1');
@@ -64,6 +88,9 @@
     } catch { return false; }
   };
   if (!m || !m.goto) return JSON.stringify({ valid: false, reason: 'no window.__mock — run with --scene mock:<name>' });
+  // The probe drives this key both ways; whatever it found goes back at the end.
+  let seenHelpWas = false;
+  try { seenHelpWas = !!localStorage.getItem('tondo.seenHelp'); } catch { seenHelpWas = false; }
 
   const out = { viewport: `${innerWidth}x${innerHeight}`, reducedMotion: rm };
 
@@ -87,6 +114,24 @@
       && callout.deckAfter === String(g.drawPileCount);
     callout.buttonsStill = document.querySelectorAll('#callout-buttons [data-callout]').length;
     callout.activeAfter = who(document.activeElement);
+
+    // And when the bar closes UNDER the keyboard. "Let it pass" is the
+    // synchronous half of that transition (the same `leavingCallout` branch
+    // the answering snapshot takes after "Call out X"), so it is the one a
+    // probe can watch without arming a scene timer.
+    const pass = document.querySelector('#callout-buttons [data-callout-skip]');
+    callout.skipButton = !!pass;
+    if (pass) {
+      pass.focus();
+      callout.skipHeldFocus = document.activeElement === pass;
+      pass.click();
+      await sleep(350);
+      const a = document.activeElement;
+      callout.barHiddenAfterPass = $('callout-bar').hidden;
+      callout.activeAfterPass = who(a);
+      callout.passLandsOnHandOrDraw = !!(a && ((a.classList && a.classList.contains('card')) || a.id === 'draw-btn'));
+      callout.passLandsVisible = vis(a);
+    }
   }
 
   /* ---- (a) the top card names a Wild's topping; the plaque has a name ---- */
@@ -110,9 +155,11 @@
   // The auto-open is tested on its own below; suppress it here so the modal
   // cannot sit inert over the seat-list test.
   const suppressed = seenHelp(true);
+  const lobbyWatch = watchRegions();
   m.goto('lobby');
   await sleep(400);
   const lobbyShown = document.body.dataset.screen === 'lobby';
+  const lobbyRegions = lobbyWatch.stop();
   const lobbyLine = $('live-polite').textContent;
   const helpBtn = document.querySelector('#screen-lobby [data-help-open]');
   const lobbyHelp = { present: !!helpBtn, text: helpBtn ? helpBtn.textContent.trim() : null, opened: false, afterClose: null };
@@ -151,20 +198,66 @@
     lobby.activeAfter = who(document.activeElement);
     const a = document.activeElement;
     lobby.stillInList = !!(a && a.closest && a.closest('#seat-list'));
+
+    // The other half of the same rescue: the seat you are standing on is the
+    // one that leaves. There is no surviving node to go back to, so it has to
+    // walk to a neighbour.
+    const last = [...document.querySelectorAll('#seat-list [data-remove]')].pop();
+    lobby.departing = last ? 'remove:' + last.dataset.remove : null;
+    if (last) {
+      last.focus();
+      lobby.departingHeldFocus = document.activeElement === last;
+      lobby.seatsBeforeRemove = seatRows();
+      last.click();
+      await sleep(500);
+      lobby.seatsAfterRemove = seatRows();
+      lobby.seatDeparted = lobby.seatsAfterRemove === lobby.seatsBeforeRemove - 1
+        && !document.querySelector(`#seat-list [data-remove="${last.dataset.remove}"]`);
+      const b = document.activeElement;
+      lobby.activeAfterRemove = who(b);
+      lobby.removeLandsSomewhereReal = vis(b) && !!(b.dataset.remove || b.id === 'addbot-btn');
+    }
   }
 
-  /* ---- (c1) focus after "Deal the cards" ---- */
+  /* ---- (c1) focus and the arrival announcement after "Deal the cards" ---- */
+  // You open: the assertive turn alert fires in the same synchronous snapshot
+  // as the screen swap, so only ONE of the two regions may speak.
   const start = $('start-btn');
   const deal = { enabled: !start.disabled };
   start.focus();
   deal.heldFocus = document.activeElement === start;
+  const dealWatch = watchRegions();
   start.click();
   await sleep(600);
+  deal.regions = dealWatch.stop();
   deal.screen = document.body.dataset.screen;
   deal.activeAfter = who(document.activeElement);
   deal.activeVisible = vis(document.activeElement);
   deal.isBody = document.activeElement === document.body;
   deal.liveLine = $('live-polite').textContent;
+  deal.alertLine = $('live-now').textContent;
+  deal.yourTurn = m.table.game.turnPlayerId === 'p1';
+
+  /* ---- the other arrival: somebody else opens ---- */
+  // Same screen swap, no turn alert — here the polite orientation line is the
+  // only thing that can carry the arrival, so it must still fire. Built by
+  // hand out of the scene's own game rather than with a scripted scene,
+  // because those arm timers that would move the table under later steps.
+  const opener = JSON.parse(JSON.stringify(m.table.game));
+  opener.turnPlayerId = 'p2';
+  opener.playableCardIds = [];
+  m.goto('lobby');
+  await sleep(450);
+  const elsewhere = { fromLobby: document.body.dataset.screen === 'lobby' };
+  const elseWatch = watchRegions();
+  m.table.phase = 'playing';
+  m.table.game = opener;
+  m.emit(m.snapshot());
+  await sleep(500);
+  elsewhere.regions = elseWatch.stop();
+  elsewhere.screen = document.body.dataset.screen;
+  elsewhere.turnPlayerId = m.table.game.turnPlayerId;
+  elsewhere.politeLine = $('live-polite').textContent;
 
   /* ---- (b2) the auto-opened dialog must not strand focus ---- */
   const cleared = seenHelp(false);
@@ -253,6 +346,9 @@
     wild.isCardOrDraw = !!(a && ((a.classList && a.classList.contains('card')) || a.id === 'draw-btn'));
   }
 
+  // Put the player's own storage back the way this run found it.
+  seenHelp(seenHelpWas);
+
   /* ---- the accessible names/roles this run read out of the DOM ---- */
   const nameOf = (n) => (!n ? null : (n.getAttribute('aria-label') || n.textContent.replace(/\s+/g, ' ').trim()));
   const names = {
@@ -264,6 +360,12 @@
     calloutButton: callout.focusedBefore ? nameOf(document.querySelector('#callout-buttons [data-callout]')) : null,
     suitButtons: [...document.querySelectorAll('#wild-grid [data-suit]')].map(nameOf),
     lobbyHelp: lobbyHelp.present ? nameOf(document.querySelector('#screen-lobby [data-help-open]')) : null,
+    plaqueGlyphs: ['dir-badge', 'match-glyph', 'dir-glyph'].map((id) => ({
+      id, glyph: $(id).textContent, hidden: $(id).getAttribute('aria-hidden') === 'true',
+    })),
+    plaqueReads: [...$('plaque').querySelectorAll('span')]
+      .filter((n) => n.getAttribute('aria-hidden') !== 'true' && n.textContent.trim())
+      .map((n) => n.textContent.trim()),
     helpFlipLine: (() => {
       const li = [...document.querySelectorAll('.help-list li')].find((n) => /skip/i.test(n.textContent));
       return li ? li.textContent.replace(/\s+/g, ' ').trim() : null;
@@ -288,11 +390,30 @@
       && handover.activeAfter === '#game-title',
     // (c)
     dealFocusLandsSomewhereReal: deal.isBody === false && deal.activeVisible === true,
+    // One arrival, one announcement: the assertive alert speaks, the polite
+    // orientation line stands down rather than being clobbered by it.
+    arrivalAnnouncedOnce: deal.regions.length > 0
+      && deal.regions.every((r) => r.region === 'live-now')
+      && /^Your turn\. \d+ playable\.$/.test(deal.alertLine),
+    // And when nobody alerts, the polite line is still the one that carries it.
+    arrivalLineWhenNotYours: elsewhere.regions.length > 0
+      && elsewhere.regions.every((r) => r.region === 'live-polite')
+      && elsewhere.politeLine === 'Game started.',
     wildFocusLandsOnHand: wild.isCardOrDraw === true && wild.activeVisible === true,
-    screenLinesAnnounced: lobbyLine === 'Lobby for table BASIL-4821.' && deal.liveLine === 'Game started.',
+    calloutBarLandsOnHand: callout.barHiddenAfterPass === true
+      && callout.passLandsOnHandOrDraw === true && callout.passLandsVisible === true,
+    // The lobby has no assertive line of its own, so the polite orientation
+    // line is the arrival — and it must be the only thing that speaks.
+    lobbyLineAnnounced: lobbyRegions.length > 0
+      && lobbyRegions.every((r) => r.region === 'live-polite')
+      && lobbyLine === 'Lobby for table BASIL-4821.',
     // (d)
     calloutKeepsFocus: callout.activeAfter === callout.focusedBefore,
     seatListKeepsFocus: lobby.activeAfter === lobby.focusedBefore && lobby.stillInList === true,
+    departedSeatHandsFocusOn: lobby.removeLandsSomewhereReal === true,
+    // The plaque names the group; the glyphs inside it are decoration that the
+    // words beside them already carry.
+    plaqueGlyphsHidden: names.plaqueGlyphs.every((g) => g.hidden === true),
     // titles have to be focusable for (c) to have anywhere to land
     titlesFocusable: names.titles.every((t) => t.tabindex === '-1'),
   };
@@ -304,7 +425,13 @@
     && suppressed && lobbyShown
     && lobby.button && lobby.heldFocus === true && lobby.addEnabled === true
     && lobby.listRebuilt === true && lobby.survivorStillListed === true
+    && callout.skipButton === true && callout.skipHeldFocus === true
     && deal.enabled === true && deal.heldFocus === true && deal.screen === 'game'
+    && deal.yourTurn === true
+    && elsewhere.fromLobby === true && elsewhere.screen === 'game'
+    && elsewhere.turnPlayerId === 'p2'
+    && lobby.departing !== null && lobby.departingHeldFocus === true
+    && lobby.seatDeparted === true
     && auto.cleared === true && auto.wasGame === true && auto.screen === 'lobby'
     && orphan.focusBefore === 'BODY'
     && handover.cleared === true && handover.screen === 'game'
@@ -313,7 +440,8 @@
     && wild.heldFocus === true && wild.handShown === true && wild.cardsInHand > 0;
 
   return JSON.stringify(Object.assign(out, {
-    callout, topCard, plaque, lobbyShown, lobbyLine, lobbyHelp, lobby, deal, auto, orphan, handover, wild, names,
+    callout, topCard, plaque, lobbyShown, lobbyLine, lobbyRegions, lobbyHelp, lobby, deal, elsewhere,
+    auto, orphan, handover, wild, names,
     checks,
     pass: valid && Object.values(checks).every(Boolean),
     valid,
