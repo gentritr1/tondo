@@ -91,6 +91,25 @@ test('names are title-cased the same way the on-screen scoreboard cases them', (
   assert(!text.includes('carmela'), text);
 });
 
+test('a multi-word name is title-cased PER WORD, not as one string', () => {
+  // server/bot.js:26 BOT_NAMES includes 'Chef Bot' — the fourth bot at a
+  // full table. A whole-string title-case (charAt(0).toUpperCase() + rest
+  // .toLowerCase()) turns it into "Chef bot", and would do the same to a
+  // human-typed "JO ANNE" -> "Jo anne". This runs the real bot name through
+  // the real pieResultText output, not just the helper in isolation, because
+  // that is the artifact that leaves the app and cannot be corrected once
+  // pasted.
+  const withChefBot = [
+    { id: 'p1', name: 'Gent', isBot: false, points: 10, roundsWon: 1 },
+    { id: 'p2', name: 'Carmela', isBot: true, points: 5, roundsWon: 0 },
+    { id: 'p3', name: 'Dominic', isBot: true, points: 0, roundsWon: 0 },
+    { id: 'p4', name: 'Chef Bot', isBot: true, points: 0, roundsWon: 0 },
+  ];
+  const text = pieResultText({ complete: true, championIds: ['p1'], standings: withChefBot }, { origin: 'x' });
+  assert(text.includes('Chef Bot'), `expected "Chef Bot" in: ${text}`);
+  assert(!text.includes('Chef bot'), `must not read "Chef bot": ${text}`);
+});
+
 if (failures.length) {
   for (const f of failures) console.error(`\n  FAIL  ${f.name}\n        ${f.err && f.err.message}`);
   console.error(`\n${passed} passed, ${failures.length} failed\n`);

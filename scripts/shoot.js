@@ -50,6 +50,12 @@
  *                     `navigator.clipboard.readText()` and get back what a
  *                     click actually wrote, not just that the click happened.
  *                     Grant, not stub: this exercises the real Clipboard API.
+ *                     Also calls `Page.bringToFront` right before the probe
+ *                     runs: the Clipboard API throws `NotAllowedError:
+ *                     Document is not focused` on a freshly-navigated
+ *                     headless page otherwise, permissions granted or not —
+ *                     this bit an early run of --clipboard and is worth not
+ *                     rediscovering.
  *                     To prove the ABSENT-clipboard fallback instead, delete
  *                     `navigator.clipboard` from inside the --probe itself,
  *                     before it clicks — that is a page-side condition, not a

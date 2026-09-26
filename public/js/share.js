@@ -16,10 +16,16 @@ const listNames = (names) => (names.length <= 2
    duplicated here rather than imported, since share.js has no DOM and app.js
    imports FROM share.js. A name typed or stored in any case reads the same
    way in the pasted text as it already does on the screen the player is
-   looking at. */
+   looking at.
+   Per WORD, not per string: title-casing the whole string turned the bot
+   name "Chef Bot" (server/bot.js's own BOT_NAMES) into "Chef bot", and does
+   the same to a human-typed "JO ANNE" -> "Jo anne". Splitting on spaces
+   before capitalising each word fixes that. It still flattens a capital
+   INSIDE a single word ("McDonald" -> "Mcdonald") — recovering that needs a
+   name dictionary and is not worth it here. */
 const nicely = (name) => {
   const s = String(name || '');
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  return s.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 };
 
 /* Words for the small pie lengths the game could plausibly ship (server/
