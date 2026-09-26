@@ -30,7 +30,7 @@
       <span class="home-mini-card back-face"></span>
       <span class="home-mini-card back-face"></span>
     </div>
-    <h1 id="home-title" class="wordmark">TONDO</h1>
+    <h1 id="home-title" class="wordmark" tabindex="-1">TONDO</h1>
     <p class="tagline">A pizza card game for 2&ndash;4 players.</p>
     <p class="home-hook">Match toppings, flip the order, and catch your friends forgetting TONDO.</p>
     <div class="home-facts" role="group" aria-label="Two to four players. Quick rounds. No account needed.">
@@ -80,7 +80,7 @@
 <section id="screen-lobby" class="screen lobby" role="main" aria-labelledby="lobby-title">
   <div class="lobby-card">
     <div class="lobby-head">
-      <h1 id="lobby-title" class="lobby-mark">TONDO</h1>
+      <h1 id="lobby-title" class="lobby-mark" tabindex="-1">TONDO</h1>
       <div class="field-label">Table code</div>
       <div class="code-row">
         <span id="room-code" class="code">&mdash;</span>
@@ -98,6 +98,10 @@
     <p id="lobby-wait" class="msg fx-panel">Waiting for the host to start&hellip;</p>
 
     <p id="lobby-msg" class="msg" role="status" aria-live="polite"></p>
+    <!-- The lobby is where a new player sits waiting with nothing to do, and it
+         was the one screen with no way into the rules. Same quiet register as
+         the home card's. -->
+    <button type="button" class="btn btn-tiny" data-help-open>How to play</button>
     <button id="leave-btn" type="button" class="btn btn-ghost btn-block">Leave table</button>
   </div>
 </section>
@@ -107,7 +111,7 @@
 
   <div class="strip">
     <div class="strip-inner">
-      <h1 id="game-title" class="strip-mark">TONDO</h1>
+      <h1 id="game-title" class="strip-mark" tabindex="-1">TONDO</h1>
       <div id="queue" class="queue"></div>
       <div id="slice-chip" class="slice-chip" hidden></div>
       <div id="strip-code" class="strip-code"></div>
@@ -145,7 +149,10 @@
     </div>
 
     <div class="center">
-      <div id="plaque" class="plaque">
+      <!-- The plaque is the answer to "what may I play?": a named group, so a
+           screen reader reads the topping and the number as one requirement
+           rather than as three loose words in the middle of the table. -->
+      <div id="plaque" class="plaque" role="group" aria-label="Match requirement">
         <div class="plaque-head">
           <span id="match-label" class="plaque-label">Match</span>
           <span id="dir-badge" class="dir-badge">&#8635;</span>
@@ -322,7 +329,7 @@
   <ul class="help-list">
     <li><b>Match the top card</b> by topping (colour) or by number — or play a Wild and pick the next topping.</li>
     <li>Nothing to play? <b>Draw one card.</b> If it fits you may play it at once; otherwise keep it and pass.</li>
-    <li><b>⊘ Skip</b> makes the next player lose their turn. <b>+2</b> makes them draw two and lose their turn. <b>↻ Reverse</b> flips the play order.</li>
+    <li><b>⊘ Skip</b> makes the next player lose their turn. <b>+2</b> makes them draw two and lose their turn. <b>⇄ Flip</b> reverses the play order (with two players it acts as a Skip).</li>
     <li>Down to <b>two cards</b>? Call <b>TONDO</b> before playing one of them. Forget, and anyone who catches you makes you draw two.</li>
     <li><b>First to zero cards wins</b> the round.</li>
   </ul>

@@ -231,6 +231,7 @@ const app = {
   refuseTimer: 0,
   flashTimer: 0,
   lastTurn: undefined,
+  screenLine: '',          // setScreen's orientation line, owed one repaint
   wildWasOpen: false,      // so the picker steals focus once, not per snapshot
   drawnWasOpen: false,
   handMoved: false,      // the player has scrolled the hand at least once
@@ -263,7 +264,47 @@ const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus })
 
 /* --------------------------------------------------------------- helpers */
 
-function setScreen(name) { document.body.dataset.screen = name; }
+/* The heading of each screen, made focusable (`tabindex="-1"` in the markup)
+   so there is somewhere real to put focus when a screen is swapped. */
+const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', game: 'game-title' };
+
+/**
+ * Swap the visible screen — and take the keyboard with it.
+ *
+ * Every snapshot calls this, so it moves focus ONLY when the screen actually
+ * changed: otherwise a bot's snapshot would yank focus off whatever the
+ * player was standing on, twice a second. On a real change the outgoing
+ * screen is display:none'd, which drops focus to <body> (that is where
+ * "Deal the cards" left it), so focus goes to the new screen's <h1> and one
+ * orientation line goes to #live-polite.
+ *
+ * Returns true when the screen changed, so a caller can hang first-entry
+ * behaviour off it.
+ */
+function setScreen(name) {
+  if (document.body.dataset.screen === name) return false;
+  document.body.dataset.screen = name;
+  const title = document.getElementById(SCREEN_TITLE[name]);
+  if (title) title.focus({ preventScroll: true });
+  /* The lobby's auto-opened rules are not a decision the player made, and the
+     table does not wait for them: the host can deal while they are still
+     reading. A modal nobody asked for must not end up covering a dealt hand
+     on somebody's turn — measured on a `--scene game` capture, which is
+     exactly what it did. Focus goes to the heading this swap just gave it,
+     not back to a "How to play" button on the screen they have left. */
+  closeAutoHelp(title);
+  const code = String(app.roomCode || '').toUpperCase();
+  const line = name === 'home' ? 'Home.'
+    : name === 'lobby' ? (code ? `Lobby for table ${code}.` : 'Lobby.')
+      : 'Game started.';
+  nodes['live-polite'].textContent = line;
+  /* renderGame writes this same region from the game log, and it runs later in
+     the very same repaint — without this the orientation line was overwritten
+     (usually with '') before a screen reader ever saw it. The line owns one
+     repaint; the next snapshot's event takes the region back. */
+  app.screenLine = line;
+  return true;
+}
 
 /* A label swapping its words is something appearing on screen too, and a hard
  * swap reads exactly as jarring as a hard appearance. `setText` fades the old
@@ -576,8 +617,10 @@ function applySnapshot(snap) {
     app.glowRot = null;
     app.glowDir = null;
     app.celebratedWinner = '';
-    setScreen('lobby');
+    const enteredLobby = setScreen('lobby');
     renderLobby(snap);
+    // First time at a table: the rules, once, before anyone is waiting on you.
+    if (enteredLobby) maybeAutoHelp();
     // One tap asked for a dealt table, so the lobby fills itself: one bot per
     // snapshot (each addBot answers with one), then deal. Driven off the
     // snapshot rather than a timer, so a dropped message stalls instead of
@@ -1535,7 +1578,10 @@ function renderGame(snap) {
   setText(nodes['event-ribbon'], eventText);
   nodes['event-ribbon'].hidden = !eventText || redundantStatus;
   const politeEvent = redundantStatus ? '' : eventText;
-  if (nodes['live-polite'].textContent !== politeEvent) {
+  // setScreen has just written "Game started." into this region for the screen
+  // the player has only now arrived on; it keeps this one repaint.
+  if (app.screenLine) app.screenLine = '';
+  else if (nodes['live-polite'].textContent !== politeEvent) {
     nodes['live-polite'].textContent = politeEvent;
   }
 
@@ -1635,6 +1681,10 @@ function renderGame(snap) {
           app.pendingWild = null;
           send({ type: 'play', cardId, suit: btn.dataset.suit });
           if (app.snap) renderGame(app.snap);
+          /* The button that was just pressed is inside a bar this render has
+             hidden, so the browser drops focus to <body> and a keyboard player
+             is left nowhere. Same landing as cancelWild's Escape path. */
+          focusAfterWild(cardId);
         });
       });
       nodes['wild-grid'].querySelector('[data-wild-cancel]')
@@ -2511,7 +2561,13 @@ function renderCenter(snap, g, over) {
   paintUnder(nodes['under-2'], app.pile[2]);
 
   paintStock(nodes['top-card'], top);
-  nodes['top-card'].setAttribute('aria-label', `Top card: ${prettyCard(top)}`);
+  /* A Wild's chosen topping is the single most consequential fact on the
+     board, and #top-card is the only labelled element that exists to state
+     it: "Top card: Wild" alone leaves a screen-reader player unable to know
+     what they may play. The plaque shows the same thing to everyone else. */
+  nodes['top-card'].setAttribute('aria-label', isWild(top)
+    ? `Top card: Wild, topping is ${SUITS[activeSuitOf(g)].label.toLowerCase()}`
+    : `Top card: ${prettyCard(top)}`);
   paintFace(top, {
     index: nodes['top-index'], glyph: nodes['top-glyph'],
     suit: nodes['top-suit'], ghost: nodes['top-ghost'],
@@ -2819,9 +2875,21 @@ function renderHand(g, yourTurn, playable, drawnId) {
 
   if (focusedId && document.activeElement === document.body && row.children.length) {
     // The focused card left the hand (it was played): land on its neighbour.
+    // A card that has not started rising yet is `inert` and cannot take focus
+    // — focusing it is a silent no-op that leaves the player on <body> — so
+    // the search walks outwards from where the played card was to the nearest
+    // card that can actually hold focus.
     const again = row.querySelector(`[data-card="${CSS.escape(focusedId)}"]`);
-    const fallback = row.children[Math.min(Math.max(focusedIndex, 0), row.children.length - 1)];
-    (again || fallback).focus({ preventScroll: true });
+    const takesFocus = (n) => !!n && !n.inert && !n.disabled;
+    const kids = [...row.children];
+    const start = Math.min(Math.max(focusedIndex, 0), kids.length - 1);
+    let near = null;
+    for (let d = 0; d < kids.length && !near; d++) {
+      if (takesFocus(kids[start - d])) near = kids[start - d];
+      else if (takesFocus(kids[start + d])) near = kids[start + d];
+    }
+    const target = takesFocus(again) ? again : near;
+    if (target) target.focus({ preventScroll: true });
   }
   /* Measured, not deferred on principle: reading the row here — straight after
      rebuilding the hand, the seats and the centre — was the single forced
@@ -2930,14 +2998,29 @@ function refuse(cardId) {
   app.flashTimer = setTimeout(() => nodes.plaque.classList.remove('flash'), MS.flash);
 }
 
+/**
+ * Where the keyboard goes when the suit picker closes, either way it can:
+ * the card itself if it is still in the hand (Escape put it back), else the
+ * nearest card that survived the play, else the Draw button. Never <body>.
+ */
+function focusAfterWild(cardId) {
+  const row = nodes['hand-row'];
+  const handUp = !nodes['hand-wrap'].hidden;
+  const usable = (n) => n && !n.inert && !n.disabled && (n.offsetParent || n.getClientRects().length);
+  const card = (handUp && cardId) ? row.querySelector(`[data-card="${CSS.escape(cardId)}"]`) : null;
+  const target = (usable(card) && card)
+    || (handUp ? [...row.children].find(usable) : null)
+    || (usable(nodes['draw-btn']) ? nodes['draw-btn'] : null);
+  if (target) target.focus({ preventScroll: true });
+}
+
 function cancelWild() {
   const cardId = app.pendingWild;
   if (!cardId) return;
   app.pendingWild = null;
   if (!app.snap) return;
   renderGame(app.snap);
-  const card = nodes['hand-row'].querySelector(`[data-card="${CSS.escape(cardId)}"]`);
-  if (card) card.focus({ preventScroll: true });
+  focusAfterWild(cardId);
 }
 
 /* Escape is the help dialog's OWN key: a native <dialog> closes on it, and
@@ -3030,9 +3113,78 @@ paintSoundButton();
 /* ------------------------------------------------------------- how to play */
 
 const helpDialog = document.getElementById('help-dialog');
-document.querySelectorAll('[data-help-open]').forEach((btn) => {
-  btn.addEventListener('click', () => helpDialog.showModal());
+/* Delegated, not a one-shot querySelectorAll at boot: a `[data-help-open]`
+   button that is added to the page after that line has run is a dead control
+   that still looks like a live one. */
+document.addEventListener('click', (e) => {
+  const opener = e.target instanceof Element ? e.target.closest('[data-help-open]') : null;
+  if (opener) openHelp(opener);
 });
+
+/** The control focus should return to when the dialog closes, when the
+ *  browser has none of its own (an auto-open has no opener). */
+let helpReturn = null;
+/** This dialog was opened by the app, not by the player. */
+let helpAuto = false;
+
+function openHelp(opener) {
+  // Seeing the rules once is the whole gate on the lobby's auto-open.
+  try { localStorage.setItem('tondo.seenHelp', '1'); } catch { /* private mode */ }
+  helpReturn = opener || null;
+  helpAuto = !opener;
+  if (!helpDialog.open) helpDialog.showModal();
+}
+
+/** Takes an auto-opened dialog down when the screen under it changes. A
+ *  dialog the player opened themselves is theirs and stays. */
+function closeAutoHelp(landOn) {
+  if (!helpDialog.open || !helpAuto) return;
+  helpReturn = landOn || null;
+  helpDialog.close();
+}
+
+/** A real control on the screen the player is actually looking at. */
+function helpFallbackControl() {
+  const screen = document.getElementById('screen-' + (document.body.dataset.screen || 'home'));
+  if (!screen) return null;
+  const shown = (n) => !!(n.offsetParent || n.getClientRects().length);
+  const help = [...screen.querySelectorAll('[data-help-open]')].find(shown);
+  if (help) return help;
+  return [...screen.querySelectorAll('button:not([disabled])')].find(shown) || null;
+}
+
+/* A native <dialog> restores focus to whatever opened it — but the lobby's
+   first-visit auto-open has no opener, so the browser has nothing to restore
+   to and focus falls to <body>: defect (c) again, inside the flow (b) adds.
+   So the landing is placed here rather than waited for. Measured in headless
+   Chrome 1280x800: at `close` time, and still one microtask, one rAF and one
+   timeout later, document.activeElement is #help-close — a node inside a
+   dialog that is already display:none — and only afterwards does the browser
+   quietly reset it to <body>. Reading focus to decide whether to intervene
+   therefore always reads the wrong answer; setting it does not. Where the
+   browser would have a restore target of its own (a button the player
+   pressed) this lands on that same button. */
+helpDialog.addEventListener('close', () => {
+  const back = helpReturn;
+  helpReturn = null;
+  helpAuto = false;
+  const shown = (n) => !!(n && n.isConnected && (n.offsetParent || n.getClientRects().length));
+  const target = shown(back) ? back : helpFallbackControl();
+  if (target) target.focus({ preventScroll: true });
+});
+
+/** The lobby, on a first visit: the rules, once, unasked. */
+function maybeAutoHelp() {
+  if (helpDialog.open) return;
+  // "One quick pie" passes through the lobby in two snapshots on its way to a
+  // dealt table; a modal opened there would land on top of the game.
+  if (app.quickPie) return;
+  let seen = '';
+  try { seen = localStorage.getItem('tondo.seenHelp') || ''; } catch { seen = ''; }
+  if (seen) return;
+  openHelp(null);
+}
+
 document.getElementById('help-close').addEventListener('click', () => helpDialog.close());
 helpDialog.addEventListener('click', (e) => {
   if (e.target === helpDialog) helpDialog.close(); // backdrop tap closes
