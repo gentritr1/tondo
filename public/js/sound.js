@@ -294,10 +294,13 @@ export function playForEvents(events, { impactAt = 0 } = {}) {
   if (!events || !events.length || muted) return null;
   const has = (t) => events.find((e) => e.type === t);
 
-  // A win or a deal has no card in flight to wait for.
+  // A win has no card in flight to wait for. A deal does have a moment to
+  // wait for: a new round's cards only start leaving the deck once the finished
+  // pie has been swept off (app.js passes that delay as `impactAt`; 0 when
+  // there is nothing to wait for).
   const win = has('win');
   if (win) { play(win.youWon ? 'win' : 'lose', 0, true); return win.youWon ? 'win' : 'lose'; }
-  if (has('deal')) { play('deal'); return 'deal'; }
+  if (has('deal')) { play('deal', impactAt); return 'deal'; }
 
   // Loudest consequence first: what happened TO someone outranks what was
   // played, and what was played outranks whose turn it now is.
