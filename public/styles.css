@@ -817,11 +817,19 @@ body[data-screen="game"] { background: var(--page); }
 .strip-inner { display: flex; align-items: center; gap: 13px; width: 100%; max-width: var(--measure); min-width: 0; margin-inline: auto; }
 .strip-mark { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: .14em; color: var(--gold); flex: 0 0 auto; }
 .strip-code { font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .18em; color: var(--ink-2); flex: 0 0 auto; }
-/* The 30px circle is the VISUAL; the target is 44x44. Growing the circle
-   itself would put a fat button next to a 15px wordmark, so the hit area is a
-   centred pseudo-element instead — it costs no layout and no pixels. The two
-   neighbours it reaches into (.strip-code, a text span, and the flex gap) are
-   not interactive, so nothing can be hit by accident. */
+/* The 30px circle is the VISUAL; the ::before below is coded to a 44x44
+   target, centred so growing it costs no layout and no pixels. It does NOT
+   land at 44x44 for every button that shares this shape — see the measured
+   note on .strip-sound below. This one (.strip-help) is the LAST of the three
+   utility buttons in DOM order (sound, then haptics, then this "?"), so
+   nothing sits to its right, and in the flex gap on its left, hit-testing
+   (elementFromPoint) resolves to whichever sibling is LATER in DOM order —
+   this one. Measured at 390x844: .strip-help's delivered hit target is the
+   full 44x44 (340.5–384.5 horizontally), taken out of its left neighbour's
+   would-be target. Its left neighbour (haptics-btn, or sound-btn when
+   haptics is hidden) IS an interactive button, not inert text — this
+   used to be true back when this button sat alone next to .strip-code, before
+   the sound/haptics toggles were inserted between them. */
 .strip-help {
   position: relative;
   width: 30px; height: 30px; min-height: 30px; padding: 0; flex: 0 0 auto;
@@ -835,8 +843,18 @@ body[data-screen="game"] { background: var(--page); }
 .strip-help:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
 
 /* The mute control wears the help button's geometry — same 30px circle, same
-   44x44 hit area — so the two read as one pair of utilities rather than two
-   unrelated controls. */
+   ::before coded to 44x44 — so the two read as one pair of utilities rather
+   than two unrelated controls. That geometry does NOT deliver the same
+   DELIVERED hit area for #sound-btn or #haptics-btn, though: each has an
+   interactive sibling immediately after it in DOM order (the next toggle,
+   or .strip-help), and elementFromPoint hit-testing resolves the overlap in
+   their shared flex gap (13px normally, 9px at ≤719px width — both narrower
+   than the 14px the two 44px pseudo-elements try to claim) to whichever
+   sibling is LATER in the DOM, not to this one. Measured at 390x844 with an
+   elementFromPoint scan: #sound-btn and #haptics-btn each deliver 38.5x44,
+   not 44x44 — only .strip-help, last in the row, keeps the full width. Both
+   truncated targets are still comfortably tappable; this comment just must
+   not claim a guarantee the layout doesn't keep. */
 .strip-sound {
   position: relative;
   width: 30px; height: 30px; min-height: 30px; padding: 0; flex: 0 0 auto;

@@ -25,7 +25,17 @@
   // An empty part list would make Math.max() return -Infinity and every gap
   // read as a pass, so the count is part of `valid`, not an afterthought.
   const parts = [...top.querySelectorAll('.seat-status, .seat-tile, .fan')].map((n) => n.getBoundingClientRect());
-  const finite = parts.length > 0 && parts.every((r) => Number.isFinite(r.bottom)) && Number.isFinite(plaque.top);
+  // A hidden seat (`display: none`) still has DOM nodes for querySelectorAll to
+  // find, and still returns a rect for each — a zero-size one at (0,0). That
+  // used to read as "finite" and pass, the same shape of bug round-boundary.js
+  // already guards against with `atRoundOver.seats === SEATS`: a hidden actor
+  // means the scene was never set up, not that the geometry is fine. So the
+  // premise here is a VISIBLE box, not just a numeric one — every part and the
+  // plaque itself must have real area, or `valid` is false, not `pass`.
+  const hasArea = (r) => r.width > 0 && r.height > 0;
+  const finite = parts.length > 0
+    && parts.every((r) => Number.isFinite(r.bottom) && hasArea(r))
+    && Number.isFinite(plaque.top) && hasArea(plaque);
   const lowestBottom = finite ? Math.max(...parts.map((r) => r.bottom)) : null;
   const gapY = finite ? Math.round((plaque.top - lowestBottom) * 10) / 10 : null;
   return JSON.stringify({

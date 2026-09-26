@@ -618,6 +618,14 @@ async function runCheck(a) {
       tray.scrollTop = tray.scrollHeight;
       window.scrollTo(0, document.body.scrollHeight);   // belt-and-braces; a no-op today
       const r = leave.getBoundingClientRect();
+      // A display:none #game-leave still returns a rect -- a zero-size one at
+      // (0,0), whose bottom (0) always clears innerHeight and reads as
+      // "reachable". An invisible button is not a reachable one, so a real box
+      // is the PREMISE (valid), not folded into pass: seat-plaque-gap.js and
+      // round-boundary.js's atRoundOver.seats === SEATS make the same call.
+      if (!(r.width > 0 && r.height > 0)) {
+        return JSON.stringify({ valid: false, reason: '#game-leave has no visible box (' + r.width + 'x' + r.height + ') -- hidden?' });
+      }
       return JSON.stringify({
         valid: true, container: '.tray', scrollableAmount,
         trayScrollTop: Math.round(tray.scrollTop * 10) / 10,
@@ -704,12 +712,24 @@ async function runCheck(a) {
     // one per banner-clear viewport. Anything else Chrome or the app logs
     // still fails this assertion.
     const VIBRATE_BLOCKED = /^Blocked call to navigator\.vibrate because user hasn't tapped/;
+    // Exactly one of these per banner-clear viewport (the `for (const [w, h] of
+    // [[390, 844], [1280, 800], [1440, 900]])` loop above this one, each of
+    // which drives round-boundary.js's own synthetic `.click()` once). This is
+    // a count of a KNOWN, bounded artifact, not a wildcard: an unbounded
+    // exclusion here is exactly how a regression that fires `haptics.tap()` on
+    // every render would slip past this gate. If you add or remove a
+    // banner-clear viewport, update this number in the same commit.
+    const EXPECTED_VIBRATE_EXCLUSIONS = 3;
     const allErrors = cdp.pageErrors();
     const errors = allErrors.filter((e) => !VIBRATE_BLOCKED.test(e));
     const excludedCount = allErrors.length - errors.length;
-    record('no-page-errors', 'every page this run loaded', errors.length === 0,
+    const excludedCountOk = excludedCount === EXPECTED_VIBRATE_EXCLUSIONS;
+    record('no-page-errors', 'every page this run loaded', errors.length === 0 && excludedCountOk,
       `errors=${errors.length}`
-      + (excludedCount ? ` (excluded ${excludedCount} known synthetic-tap vibrate-policy message(s))` : '')
+      + ` excluded=${excludedCount} (expected ${EXPECTED_VIBRATE_EXCLUSIONS} known synthetic-tap vibrate-policy message(s), one per banner-clear viewport)`
+      + (excludedCountOk ? '' : ` — MISMATCH: excluded count changed from the expected ${EXPECTED_VIBRATE_EXCLUSIONS}`
+        + ' to ' + excludedCount + '; either a banner-clear viewport was added/removed (update EXPECTED_VIBRATE_EXCLUSIONS)'
+        + ' or something new is calling navigator.vibrate() without a trusted tap')
       + (errors.length ? ` first="${errors[0]}"` : ''));
   } catch (err) {
     hardError = err;

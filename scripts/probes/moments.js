@@ -39,8 +39,8 @@
 
   // Mirrors mock.js transition(): at four seats p1 is you, p2 Carmela, p4 Pina.
   const PLAN = [
-    { kind: 'wild', victim: 'bot', note: 'you play it, no flight', delivered: () => /Wild$/.test(label()) },
-    { kind: 'wild', victim: 'you', note: 'Pina plays it, with a flight', delivered: () => /Wild$/.test(label()) },
+    { kind: 'wild', victim: 'bot', note: 'you play it, no flight', delivered: () => /Wild(,|$)/.test(label()) },
+    { kind: 'wild', victim: 'you', note: 'Pina plays it, with a flight', delivered: () => /Wild(,|$)/.test(label()) },
     { kind: 'tondo', victim: 'bot', who: 'p2', delivered: () => /declared TONDO/i.test(polite.textContent) },
     { kind: 'tondo', victim: 'you', who: 'p1', delivered: () => /declared TONDO/i.test(polite.textContent) },
     { kind: 'callout', victim: 'bot', caller: 'p1', target: 'p2', delivered: () => /called out/i.test(polite.textContent) },
