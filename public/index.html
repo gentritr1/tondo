@@ -304,6 +304,13 @@
       <ol id="score-rows" class="score-rows"></ol>
       <div id="slice-pips" class="slice-pips" aria-hidden="true"></div>
       <button id="share-btn" type="button" class="btn btn-quiet score-share" hidden>Copy result</button>
+      <!-- Its own node, never touched by renderMatch: #score-sub is
+           rewritten on every snapshot (someone leaving, a bot added, a
+           hold, even a resize), which was silently erasing the share
+           result — the FAILURE case worst of all, since that left a
+           readonly textarea on screen with the sentence explaining it
+           gone. -->
+      <p id="score-share-msg" class="score-share-msg"></p>
     </div>
 
     <div class="hand-dock">

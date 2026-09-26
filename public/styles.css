@@ -2528,12 +2528,24 @@ body[data-screen="game"] { background: var(--page); }
    sits centred under the pips, in the scoreboard's own type. */
 .score-share { align-self: center; min-height: 44px; padding: 10px 20px; }
 
+/* The share button's own feedback line — never #score-sub, which renderMatch
+   rewrites on every snapshot and would erase this the moment anything else
+   changes at the table. */
+.score-share-msg {
+  margin: 0; text-align: center;
+  font-family: var(--font-voice); font-style: italic; font-size: 14px;
+  color: rgba(255,247,232,.5);
+}
+.score-share-msg:empty { display: none; }
+
 /* Shown only when the clipboard write did not land (absent, denied, or a
    non-secure LAN origin). Read-only and pre-selected so a long-press on a
-   phone copies it without the player having to find the start of the text. */
+   phone copies it without the player having to find the start of the text.
+   Font-size left at .input's own 16px on purpose: anything smaller can
+   trigger an iOS zoom-on-focus. */
 .score-share-fallback {
   min-height: 44px; resize: none; text-align: center;
-  font-family: var(--font-body); font-size: 13px;
+  font-family: var(--font-body);
 }
 
 @media (max-width: 560px) {

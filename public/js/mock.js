@@ -22,10 +22,17 @@
  */
 
 const CODE = 'BASIL-4821';
+/* Properly cased, matching server/bot.js's real BOT_NAMES — not ALL CAPS.
+   A real bot's `.name` off the wire is never shouty (game.js's `up()` only
+   uppercases LOG lines, a separate derived string, never the seat name
+   itself); ALL-CAPS seat names here would be testing a shape the app never
+   actually receives. The hardcoded log lines below (`'CARMELA IS PLAYING'`
+   etc.) are correctly independent strings, not derived from `.name`, so
+   they stay ALL CAPS on purpose, matching that same deliberate convention. */
 const BOTS = [
-  { id: 'p2', name: 'CARMELA', isBot: true, connected: true },
-  { id: 'p3', name: 'DOMINIC', isBot: true, connected: true },
-  { id: 'p4', name: 'PINA', isBot: true, connected: true },
+  { id: 'p2', name: 'Carmela', isBot: true, connected: true },
+  { id: 'p3', name: 'Dominic', isBot: true, connected: true },
+  { id: 'p4', name: 'Pina', isBot: true, connected: true },
 ];
 const c = (id, suit, value) => ({ id, suit, value });
 

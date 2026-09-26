@@ -181,7 +181,7 @@ const nodes = {};
  'drawn-msg', 'drawn-play', 'drawn-keep',
  'wild-bar', 'wild-corner', 'wild-centre', 'wild-ghost', 'wild-grid',
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
- 'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips', 'share-btn',
+ 'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips', 'share-btn', 'score-share-msg',
  'action-row', 'draw-btn', 'newround-btn', 'hold-btn', 'message', 'hint', 'game-leave', 'net-banner',
  'celebration',
 ].forEach((id) => { nodes[id] = el(id); });
@@ -204,7 +204,7 @@ fx.init({
   youId: () => app.youId,
   setSeatNote, announce,
   // A seat's display name, as the table shows it ("Carmela", not "CARMELA").
-  playerName: (id) => nicely(playerName(id)),
+  playerName: (id) => nicelyName(playerName(id)),
   // The Wild wash's colour: the chosen topping's light stop at 34%. Its own
   // layer and alpha, so the resting .sauce-tint (10%) stays subtle.
   washColor: (suit) => (SUITS[suit] ? tint(SUITS[suit].c, .34) : ''),
@@ -531,13 +531,38 @@ function playerName(id) {
 
 function nicely(name) {
   const s = String(name || '');
-  // Per WORD, not per string: title-casing the whole string turned the bot
-  // name "Chef Bot" (server/bot.js's own BOT_NAMES) into "Chef bot", and does
-  // the same to a human-typed "JO ANNE" -> "Jo anne". Splitting on spaces
-  // before capitalising each word fixes that. It still flattens a capital
-  // INSIDE a single word ("McDonald" -> "Mcdonald") — recovering that needs a
-  // name dictionary and is not worth it here.
+  // Per WORD, not per string: title-casing the whole string turned
+  // "PEPPERONI" into "Pepperoni" correctly, but also turned "Chef Bot" into
+  // "Chef bot". Splitting on spaces before capitalising each word fixes
+  // both — for a string whose casing carries no meaning of its own, such as
+  // a hardcoded ALL-CAPS suit or card-value label (SUITS[...].label,
+  // ACTIONS[...]), which is what this function is for. For a NAME, whose
+  // casing a person or the game chose on purpose, use nicelyName() below —
+  // this function would flatten "AJ" to "Aj".
   return s.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
+
+/**
+ * Same per-word title-casing as nicely(), for every PLAYER/SEAT name in the
+ * UI — with one more guard a suit label does not need: a word that already
+ * carries a capital past its first letter (McDonald, eBay, DeAndre, AJ) is
+ * left exactly as typed, never lowercased into it. A name is something a
+ * person chose the casing of on purpose, or the game did for "Chef Bot"
+ * (server/bot.js's own BOT_NAMES); a suit label never was. This still
+ * normalizes a plain-lowercase or ALL-CAPS-typed name a word at a time
+ * ("gent" -> "Gent"), since neither carries an interior capital to protect.
+ * It does NOT recover a capital buried inside an otherwise-uppercase word
+ * ("MCDONALD" -> "Mcdonald", not "McDonald") — that needs a name dictionary
+ * and is not attempted here.
+ * Duplicated in share.js (identical body), not imported: share.js has no
+ * DOM and app.js already imports pieResultText FROM it, so importing this
+ * back would be circular.
+ */
+function nicelyName(name) {
+  const s = String(name || '');
+  return s.split(' ').map((w) => (/[A-Z]/.test(w.slice(1))
+    ? w
+    : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())).join(' ');
 }
 
 /* --------------------------------------------------------------- network */
@@ -685,11 +710,11 @@ function applySnapshot(snap) {
     } else if (champions.length === 1) {
       text = champions[0] === snap.youId
         ? 'YOU TAKE THE PIE'
-        : `${nicely(playerName(champions[0]))} TAKES THE PIE`.toUpperCase();
+        : `${nicelyName(playerName(champions[0]))} TAKES THE PIE`.toUpperCase();
     } else {
       text = g.winnerId === snap.youId
         ? 'YOU WIN'
-        : `${nicely(playerName(g.winnerId))} WINS`.toUpperCase();
+        : `${nicelyName(playerName(g.winnerId))} WINS`.toUpperCase();
     }
     showBanner(text, 'win', 0);
     // Keyed on the pie as well as the round, so the champion gets their own
@@ -1289,7 +1314,7 @@ const LAST_TABLE_MS = 12 * 60 * 60 * 1000;
 function rosterOf(snap) {
   return ((snap && snap.seats) || [])
     .filter((s) => s.id !== snap.youId)
-    .map((s) => (s.isBot ? nicely(s.name) : s.name))
+    .map((s) => (s.isBot ? nicelyName(s.name) : s.name))
     .filter(Boolean);
 }
 
@@ -1522,7 +1547,7 @@ function renderSeatList(snap) {
     // The same tile the player will wear at the table, so the seat they take
     // here is recognisably theirs once the game starts.
     const tone = TONES[SEAT_TONES[i % SEAT_TONES.length]];
-    const name = seat.isBot ? nicely(seat.name) : seat.name;
+    const name = seat.isBot ? nicelyName(seat.name) : seat.name;
     const initial = (String(name).trim().charAt(0) || '?').toUpperCase();
     let row = live.get(seat.id);
     if (!row || row.classList.contains('seat-ghost')) row = buildSeatRow(seat.id, false);
@@ -1639,6 +1664,7 @@ let shareFallbackEl = null;
 function hideShareBtn() {
   nodes['share-btn'].hidden = true;
   if (shareFallbackEl) { shareFallbackEl.remove(); shareFallbackEl = null; }
+  setText(nodes['score-share-msg'], '');
 }
 
 /**
@@ -1665,23 +1691,35 @@ nodes['share-btn'].addEventListener('click', async () => {
   const m = app.snap && app.snap.match;
   if (!m) return;
   const origin = location.origin + location.pathname.replace(/index\.html$/, '');
-  const text = pieResultText(m, { origin });
+  const text = pieResultText(m, { origin, resolveName: playerName });
   if (!text) return;
   const copied = await copyToClipboard(text);
   if (shareFallbackEl) { shareFallbackEl.remove(); shareFallbackEl = null; }
   if (copied) {
-    setText(nodes['score-sub'], 'Result copied — paste it anywhere.');
+    // Its own node (#score-share-msg), not #score-sub: renderMatch rewrites
+    // #score-sub on every snapshot, which would erase this the moment
+    // anything else changes at the table — a bot added, someone leaving,
+    // even a resize. Announced too, since neither outcome otherwise reaches
+    // a screen reader (WCAG 4.1.3), and the announcement survives that same
+    // clobber independently of this node.
+    setText(nodes['score-share-msg'], 'Result copied — paste it anywhere.');
+    announce('Result copied — paste it anywhere.');
     return;
   }
-  setText(nodes['score-sub'], 'Copy failed — select the text below.');
+  setText(nodes['score-share-msg'], 'Copy failed — select the text below.');
+  announce('Copy failed — select the text below.');
   const ta = document.createElement('textarea');
   ta.className = 'score-share-fallback input';
   ta.readOnly = true;
   ta.rows = 3;
   ta.value = text;
+  ta.setAttribute('aria-label', 'Pie result — select and copy');
   nodes['share-btn'].insertAdjacentElement('afterend', ta);
   ta.focus();
-  ta.select();
+  // setSelectionRange, not select(): the durable idiom on the one platform
+  // this fallback exists for (a non-secure-context LAN game opened on a
+  // phone) — a plain select() has a history of being unreliable there.
+  ta.setSelectionRange(0, ta.value.length);
   shareFallbackEl = ta;
 });
 nodes['game-leave'].addEventListener('click', leaveTable);
@@ -1741,7 +1779,7 @@ function renderCalloutButtons(targets, targetKey) {
       btn.addEventListener('click', () => send({ type: 'callout', targetId: btn.dataset.callout }));
     } else live.delete(id);
     if (host.children[i] !== btn) host.insertBefore(btn, host.children[i] || null);
-    setTextIfChanged(btn, `Call out ${nicely(playerName(id))}`);
+    setTextIfChanged(btn, `Call out ${nicelyName(playerName(id))}`);
     btn.disabled = app.offline;
   });
 
@@ -1784,7 +1822,7 @@ function reasonFor(g) {
   return 'Doesn’t match — need ' + (v ? s + ', ' + nicely(v) : s) + ', or a Wild';
 }
 function consequence(g, c) {
-  const nx = nicely(playerName(nextPlayerId(g)));
+  const nx = nicelyName(playerName(nextPlayerId(g)));
   if (isWild(c)) return 'Playable — wild, you pick the next topping.';
   if (c.value === 'SKIP') return `Playable — ${nx} loses their turn.`;
   if (c.value === 'PLUS2') return `Playable — ${nx} draws 2 and loses their turn.`;
@@ -1839,7 +1877,7 @@ function renderGame(snap) {
   }
 
   /* --- you strip: the reference Seat, in the tray */
-  const youName = nicely(you.name || app.name || 'You');
+  const youName = nicelyName(you.name || app.name || 'You');
   const youTone = TONES[SEAT_TONES[0]];
   nodes['you-strip'].style.setProperty('--tone-bg', youTone.bg);
   nodes['you-strip'].style.setProperty('--tone-edge', youTone.edge);
@@ -1887,7 +1925,7 @@ function renderGame(snap) {
     g.canDeclareTondo || showCallout || !!drawnCard || wildOpen || over,
   );
   if (showCallout) {
-    const who = targets.map((id) => nicely(playerName(id))).join(' and ');
+    const who = targets.map((id) => nicelyName(playerName(id))).join(' and ');
     nodes['callout-head'].textContent = `${who} forgot TONDO — call them out`;
     nodes['callout-sub'].textContent = 'One card left and never said it. Catching them costs them +2.';
     renderCalloutButtons(targets, targetKey);
@@ -2021,8 +2059,8 @@ function renderGame(snap) {
   else {
     const current = g.players.find((p) => p.id === g.turnPlayerId);
     hint = current && !current.connected
-      ? `Waiting for ${nicely(current.name)} to reconnect…`
-      : `${nicely(playerName(g.turnPlayerId))} is playing — hands off.`;
+      ? `Waiting for ${nicelyName(current.name)} to reconnect…`
+      : `${nicelyName(playerName(g.turnPlayerId))} is playing — hands off.`;
   }
   /* The between-slices clock lives in the hint slot, in the tray's own quiet
      type. Deliberately NOT a large counting digit and never a tick sound: the
@@ -2043,9 +2081,9 @@ function renderGame(snap) {
 
   let alert = '';
   if (g.canDeclareTondo) alert = 'You are down to two cards. Call TONDO before you play.';
-  else if (showCallout) alert = `${targets.map((id) => nicely(playerName(id))).join(' and ')} forgot TONDO. Call them out now.`;
+  else if (showCallout) alert = `${targets.map((id) => nicelyName(playerName(id))).join(' and ')} forgot TONDO. Call them out now.`;
   else if (drawnCard) alert = `You drew ${prettyCard(drawnCard)}. Play it, or keep it and pass.`;
-  else if (over) alert = g.winnerId === snap.youId ? 'You win the round.' : `${nicely(playerName(g.winnerId))} wins the round.`;
+  else if (over) alert = g.winnerId === snap.youId ? 'You win the round.' : `${nicelyName(playerName(g.winnerId))} wins the round.`;
   if (nodes['live-alert'].textContent !== alert) nodes['live-alert'].textContent = alert;
 
   if (!over && !yourTurn && app.messageTone !== 'bad') setMessage('', 'info');
@@ -2090,7 +2128,7 @@ function renderMatch(snap, over) {
   const last = m.lastRound;
   const champions = m.championIds || [];
   const youWon = champions.includes(snap.youId);
-  const championNames = champions.map((id) => nicely(playerName(id))).join(' & ');
+  const championNames = champions.map((id) => nicelyName(playerName(id))).join(' & ');
 
   if (m.complete) {
     setText(nodes['score-title'], champions.length > 1
@@ -2100,7 +2138,7 @@ function renderMatch(snap, over) {
       ? `${championNames} finish level after four slices.`
       : `Four slices played. Deal again for a fresh pie.`);
   } else {
-    const winner = last && last.winnerId ? nicely(playerName(last.winnerId)) : null;
+    const winner = last && last.winnerId ? nicelyName(playerName(last.winnerId)) : null;
     setText(nodes['score-title'], !winner ? 'Round over'
       : (last.winnerId === snap.youId ? `You win slice ${m.round}` : `${winner} wins slice ${m.round}`));
     setText(nodes['score-sub'], `${m.roundsPerPie - m.round} ${m.roundsPerPie - m.round === 1 ? 'slice' : 'slices'} left in the pie.`);
@@ -2126,13 +2164,13 @@ function renderMatch(snap, over) {
     const cls = `score-row${row.id === snap.youId ? ' is-you' : ''}${isChampion ? ' is-champion' : ''}`;
     if (li.className !== cls) li.className = cls;
     li.querySelector('.score-rank').textContent = String(i + 1);
-    li.querySelector('.score-name').textContent = nicely(row.name);
+    li.querySelector('.score-name').textContent = nicelyName(row.name);
     // The points just banked are the story of the round; a zero is left blank
     // rather than shown as "+0", which reads as a failure the player caused.
     li.querySelector('.score-delta').textContent = gained ? `+${gained}` : '';
     li.querySelector('.score-total').textContent = String(row.points);
     li.setAttribute('aria-label',
-      `${nicely(row.name)}, ${row.points} points${gained ? `, ${gained} this round` : ''}`);
+      `${nicelyName(row.name)}, ${row.points} points${gained ? `, ${gained} this round` : ''}`);
   });
   live.forEach((n) => n.remove());
 
@@ -2227,11 +2265,11 @@ function renderQueue(snap, g, over) {
   let verb;
   if (champions.length > 1) verb = 'Pie shared';
   else if (champions.length === 1) {
-    verb = champions[0] === snap.youId ? 'You take the pie!' : `${nicely(playerName(champions[0]))} takes the pie!`;
-  } else if (over) verb = (g.winnerId === snap.youId ? 'You win!' : nicely(playerName(g.winnerId)) + ' wins!');
+    verb = champions[0] === snap.youId ? 'You take the pie!' : `${nicelyName(playerName(champions[0]))} takes the pie!`;
+  } else if (over) verb = (g.winnerId === snap.youId ? 'You win!' : nicelyName(playerName(g.winnerId)) + ' wins!');
   else if (g.turnPlayerId === snap.youId) verb = 'Your turn';
-  else if (active && !active.connected) verb = 'Waiting for ' + nicely(active.name) + '…';
-  else verb = nicely(active ? active.name : '') + ' is playing';
+  else if (active && !active.connected) verb = 'Waiting for ' + nicelyName(active.name) + '…';
+  else verb = nicelyName(active ? active.name : '') + ' is playing';
   const leadId = champions.length === 1 ? champions[0] : (over ? g.winnerId : g.turnPlayerId);
   // The pill is the header's turn chip: a dot in the holder's tone, then the
   // verb. Whoever is next follows in the serif voice, not a second chip.
@@ -2240,7 +2278,7 @@ function renderQueue(snap, g, over) {
       <span class="txt">${esc(verb)}</span></span>`;
   if (!over && next) {
     html += `<span class="chip chip-next">
-      <span class="txt">then ${esc(next.id === snap.youId ? 'you' : nicely(next.name))}</span></span>`;
+      <span class="txt">then ${esc(next.id === snap.youId ? 'you' : nicelyName(next.name))}</span></span>`;
   }
   // Identical repaints are skipped so the chips are not torn down on every
   // unrelated snapshot; turn-change motion itself is the token's job.
@@ -2913,7 +2951,7 @@ function renderSeats(snap, g, over) {
     const tone = TONES[SEAT_TONES[offset % SEAT_TONES.length]];
     const acting = !over && p.id === g.turnPlayerId && p.connected;
     const isNext = p.id === nextId && !acting;
-    const name = nicely(p.name);
+    const name = nicelyName(p.name);
 
     let status = '', loud = false, alarm = false;
     if (over && g.winnerId === p.id) { status = 'wins!'; loud = true; }
@@ -3213,7 +3251,7 @@ function tapCardId(id) {
   if (node && node.inert) return;
 
   if (g.turnPlayerId !== s.youId) {
-    setMessage(`${nicely(playerName(g.turnPlayerId))} is playing — you can look, but not play yet.`, 'info');
+    setMessage(`${nicelyName(playerName(g.turnPlayerId))} is playing — you can look, but not play yet.`, 'info');
     return;
   }
   if (!(g.playableCardIds || []).includes(id)) {
