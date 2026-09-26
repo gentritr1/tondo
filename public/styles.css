@@ -2125,6 +2125,41 @@ body[data-screen="game"] { background: var(--page); }
   .stage.is-compressed .seat-top .seat-status { max-width: 170px; }
 }
 
+/* The vertical half of the same trade, at every width. Narrowing the pill is
+   what the band above does, but the top seat's pill is centred DIRECTLY above
+   the plaque, so width buys nothing once the stage is short enough and the
+   overlap is vertical: the pill's bottom sits 8.1px into the plaque at
+   1024x768, 8.7px at 1280x800 and 7.4px at 375x812 in the TONDO and callout
+   scenes (measured, every animation finished, via
+   scripts/probes/seat-plaque-gap.js). The 375x812 figure is why this is not
+   scoped to desktop: the note above records that size as clearing by 1.5px,
+   and it no longer does.
+
+   Moving the seat is not available. `top` here is decided by the
+   `max(..., --seat-tile)` floor, never by the circumference term — 50% of the
+   stage minus half the table is 7.7px against a 50.2px floor at 1024x768 — so
+   a `--min-orbit`-style clamp on `.seat-top` is inert, and the 10px of
+   headroom left above the tile is less than the 8.7px overlap plus any
+   clearance worth having. The plaque cannot move either: 7px below it is the
+   top card.
+
+   So the pill tucks over the bottom of its own tile, the way a badge sits on
+   an avatar. It moves with `position: relative`, NOT a negative margin: the
+   plate is centred on its anchor point, so a margin that shrinks the plate
+   gives back half the shift as re-centring — measured, a -.34 margin bought
+   only 0.4px of clearance at 1024x768 instead of 8.5px. Offsetting a
+   still-static box moves the pill and nothing else, and it leaves the seat's
+   own rect the size every other probe already measures.
+
+   .34 of the tile scales with the seat instead of being re-tuned per band, and
+   it clears every measured row: +4.8px at 375x812 (the tightest), +8.9px at
+   1024x768, +10.1px at 1280x800, +12.1px at 390x844, +19.8px at 414x896,
+   +26.3px at 1440x900. It costs the bottom ~27% of the tile, and only on the
+   top seat, only while a decision bar is open. */
+.stage.is-compressed .seat-top .seat-status {
+  position: relative; top: calc(var(--seat-tile) * -.34);
+}
+
 /* A side seat's card fan sits BESIDE its tile, so the plate's centre is the
    pair's centre and the tile itself is carried ~22px toward the middle of the
    table (measured at 360x700: tile at 241.9-280.9 for a seat point of 281.2).
