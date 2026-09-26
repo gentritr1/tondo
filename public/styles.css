@@ -2241,6 +2241,24 @@ body[data-screen="game"] { background: var(--page); }
   .stage.is-compressed .fan { display: none; }
 }
 
+/* ...and where that trade has already been made, the pill must NOT tuck.
+   The tuck above lifts the status pill over the bottom of its own tile, which
+   also puts it over the `.count-badge` — measured 81.3% of the badge at
+   360x640 and 320x568, with `document.elementFromPoint` at the badge's centre
+   returning `.seat-verb`. In this band the fan is gone by the rule directly
+   above, whose own comment promises "the count badge still carries the
+   number", so the tuck would leave the top opponent's card count with no
+   carrier at all — at the exact moment a decision bar is asking the player to
+   act on it.
+
+   And it buys nothing here: the gap the tuck exists to open is already +9.8px
+   at both sizes before it applies (measured, scripts/probes/seat-plaque-gap.js,
+   TONDO and callout). The tuck was justified at 375x812 (-7.4px) and 390x844
+   (-0.4px), both of which are TALLER than 780px and so keep it. */
+@media (max-width: 719px) and (max-height: 780px) {
+  .stage.is-compressed .seat-top .seat-status { position: static; top: auto; }
+}
+
 /* On short portrait/tablet screens, contextual trays scroll internally rather
    than pushing the table or the primary controls out of the viewport. */
 /* (band raised from 700px to 780px: a 360x740 phone has the same problem the
