@@ -884,9 +884,15 @@ body[data-screen="game"] { background: var(--page); }
 .strip-sound.is-off { color: rgba(255,247,232,.32); }
 .strip-sound.is-off .sound-glyph::after {
   border: 0; border-radius: 0;
-  left: 78%; top: 50%; width: 9px; height: 1.6px;
+  /* Crosses the cone rather than sitting beside it: a slash THROUGH the icon
+     is the universal muted grammar, and a short tick to the right of a speaker
+     reads as decoration or as part of the speaker. Geometrically identical to
+     .strip-haptics.is-off .haptics-glyph::after, so the two strip toggles say
+     "off" the same way. (This only became a visible question once the clip
+     above stopped eating the mark; before that it painted nothing at all.) */
+  left: 50%; top: 50%; width: 19px; height: 1.6px;
   background: currentColor; clip-path: none;
-  transform: translateY(-50%) rotate(-45deg);
+  transform: translate(-50%, -50%) rotate(-45deg);
 }
 
 /* The vibration toggle wears .strip-sound as well as this class, so the 30px

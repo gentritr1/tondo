@@ -256,18 +256,40 @@
       clipRightPx = Math.round(clipRightPx * 100) / 100;
     }
     const left = parseFloat(mark.left);
+    const top = parseFloat(mark.top);
     const width = parseFloat(mark.width);
-    const right = Number.isFinite(left) && Number.isFinite(width)
-      ? Math.round((left + width) * 100) / 100 : null;
+    const height = parseFloat(mark.height);
+    /* `left + width` is NOT the painted span once a transform is involved, and
+       the muted slash is both translated and rotated: a 19px bar turned 45deg
+       occupies ~13.4px, centred somewhere else entirely. Reading the resolved
+       matrix and walking the four corners is the only way these numbers mean
+       what they say. The engine has already resolved the translate's
+       percentages and the transform-origin into px, so nothing is re-derived
+       here. */
+    let xs = (Number.isFinite(left) && Number.isFinite(width)) ? [left, left + width] : [];
+    const tm = (mark.transform || 'none').match(/matrix\(([^)]+)\)/);
+    if (tm && xs.length && Number.isFinite(top) && Number.isFinite(height)) {
+      const [a, , c, , e] = tm[1].split(',').map(Number);
+      const [ox, oy] = (mark.transformOrigin || '0px 0px').split(' ').map((v) => parseFloat(v));
+      if ([a, c, e, ox, oy].every(Number.isFinite)) {
+        xs = [[0, 0], [width, 0], [0, height], [width, height]]
+          .map(([px, py]) => left + ox + e + a * (px - ox) + c * (py - oy));
+      }
+    }
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const markLeftPx = xs.length ? r2(Math.min(...xs)) : null;
+    const markRightPx = xs.length ? r2(Math.max(...xs)) : null;
     return {
-      hostWidthPx: Math.round(box.width * 100) / 100,
+      hostWidthPx: r2(box.width),
       hostClipPath: clip,
       clipRightPx,
-      markLeftPx: Number.isFinite(left) ? Math.round(left * 100) / 100 : null,
-      markWidthPx: Number.isFinite(width) ? Math.round(width * 100) / 100 : null,
-      markRightPx: right,
+      // The painted span, transform included — not the untransformed box.
+      markLeftPx,
+      markWidthPx: Number.isFinite(width) ? r2(width) : null,
+      markRightPx,
+      markTransform: mark.transform,
       // The whole mark is inside the clip region — or there is no clip at all.
-      insideClip: clipRightPx === null ? true : (right !== null && right <= clipRightPx),
+      insideClip: clipRightPx === null ? true : (markRightPx !== null && markRightPx <= clipRightPx),
     };
   };
 
