@@ -1087,8 +1087,9 @@ body[data-screen="game"] { background: var(--page); }
 /* --- the pie: stone rim → cartoon crust → sauce ------------------------
    Full cartoon: flat saturated shapes with chunky edges, built entirely from
    CSS so every part squashes, ripples and scales with --table-d. The old
-   photographed pie (assets/pizza-*.webp, assets/pizza-table-v2.webp) is
-   unwired — the files stay on disk, nothing references them. */
+   photographed pie is unwired. Its files moved to art/ on 2026-09-27: nothing
+   referenced them, and 1.5MB of dead weight sitting in the web root is 1.5MB
+   anyone can fetch. They are still in the repo and in git history. */
 .ring {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
   height: var(--table-d); width: var(--table-d); border-radius: 50%;
