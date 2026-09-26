@@ -16,6 +16,7 @@ import { deriveEvents } from './events.js';
 import * as sound from './sound.js';
 import * as haptics from './haptics.js';
 import * as fx from './fx.js';
+import { pieResultText } from './share.js';
 
 /* ------------------------------------------------------------- constants */
 
@@ -180,7 +181,7 @@ const nodes = {};
  'drawn-msg', 'drawn-play', 'drawn-keep',
  'wild-bar', 'wild-corner', 'wild-centre', 'wild-ghost', 'wild-grid',
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
- 'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips',
+ 'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips', 'share-btn',
  'action-row', 'draw-btn', 'newround-btn', 'hold-btn', 'message', 'hint', 'game-leave', 'net-banner',
  'celebration',
 ].forEach((id) => { nodes[id] = el(id); });
@@ -1624,6 +1625,59 @@ nodes['copy-btn'].addEventListener('click', async () => {
 nodes['addbot-btn'].addEventListener('click', () => send({ type: 'addBot' }));
 nodes['start-btn'].addEventListener('click', () => send({ type: 'startGame' }));
 nodes['leave-btn'].addEventListener('click', leaveTable);
+
+/* The readonly textarea shown after the share button when the clipboard
+   write did not land. Tracked so a later render (a new round, a new pie)
+   can clear a stale one instead of leaving it behind under the wrong text. */
+let shareFallbackEl = null;
+function hideShareBtn() {
+  nodes['share-btn'].hidden = true;
+  if (shareFallbackEl) { shareFallbackEl.remove(); shareFallbackEl = null; }
+}
+
+/**
+ * `navigator.clipboard` is undefined outside a secure context — and Tondo is
+ * a LAN game people open at `http://192.168.x.x` from another phone, which is
+ * not one. Reading `.writeText` off `undefined` there throws a TypeError
+ * SYNCHRONOUSLY, before any promise exists; a `.then().catch()` chained onto
+ * that call never runs, because there is no promise to chain onto. The
+ * try/catch below is what actually catches it — the same catch also covers
+ * `writeText` rejecting (permission denied). A resolved `writeText` is
+ * trusted as "copied"; whether the clipboard is later readABLE is never
+ * checked here.
+ */
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+nodes['share-btn'].addEventListener('click', async () => {
+  const m = app.snap && app.snap.match;
+  if (!m) return;
+  const origin = location.origin + location.pathname.replace(/index\.html$/, '');
+  const text = pieResultText(m, { origin });
+  if (!text) return;
+  const copied = await copyToClipboard(text);
+  if (shareFallbackEl) { shareFallbackEl.remove(); shareFallbackEl = null; }
+  if (copied) {
+    setText(nodes['score-sub'], 'Result copied — paste it anywhere.');
+    return;
+  }
+  setText(nodes['score-sub'], 'Copy failed — select the text below.');
+  const ta = document.createElement('textarea');
+  ta.className = 'score-share-fallback input';
+  ta.readOnly = true;
+  ta.rows = 3;
+  ta.value = text;
+  nodes['share-btn'].insertAdjacentElement('afterend', ta);
+  ta.focus();
+  ta.select();
+  shareFallbackEl = ta;
+});
 nodes['game-leave'].addEventListener('click', leaveTable);
 
 function leaveTable() {
@@ -2011,7 +2065,7 @@ function renderMatch(snap, over) {
   const m = snap.match;
   const chip = nodes['slice-chip'];
   const board = nodes.scoreboard;
-  if (!m) { chip.hidden = true; board.hidden = true; return; }
+  if (!m) { chip.hidden = true; board.hidden = true; hideShareBtn(); return; }
 
   // Slice N of 4 — `round` counts slices FINISHED, so the one being played is
   // the next one up, capped so a finished pie does not read "slice 5 of 4".
@@ -2020,7 +2074,12 @@ function renderMatch(snap, over) {
   if (!over) setText(chip, `Slice ${playing}/${m.roundsPerPie}`);
 
   board.hidden = !over;
-  if (!over) return;
+  if (!over) { hideShareBtn(); return; }
+
+  // The share button only ever describes a FINISHED pie — a mid-pie round
+  // boundary has nothing worth pasting into a group chat yet.
+  if (!m.complete) hideShareBtn();
+  else nodes['share-btn'].hidden = false;
 
   const last = m.lastRound;
   const champions = m.championIds || [];

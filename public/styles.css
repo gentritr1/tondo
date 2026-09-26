@@ -2523,6 +2523,19 @@ body[data-screen="game"] { background: var(--page); }
 }
 .slice-pip.is-done { background: var(--gold); border-color: var(--gold); }
 
+/* The share button reuses the .btn.btn-quiet species as-is (no new colour,
+   radius or font size — the deliverable here is a string, not a surface) and
+   sits centred under the pips, in the scoreboard's own type. */
+.score-share { align-self: center; min-height: 44px; padding: 10px 20px; }
+
+/* Shown only when the clipboard write did not land (absent, denied, or a
+   non-secure LAN origin). Read-only and pre-selected so a long-press on a
+   phone copies it without the player having to find the start of the text. */
+.score-share-fallback {
+  min-height: 44px; resize: none; text-align: center;
+  font-family: var(--font-body); font-size: 13px;
+}
+
 @media (max-width: 560px) {
   .scoreboard { padding: 14px 14px 12px; border-radius: 15px; }
   .score-title { font-size: 19px; }

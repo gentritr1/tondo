@@ -13,7 +13,8 @@
  * Deterministic entry points for screenshots:
  *   ?mock=1&scene=<name>   jump straight into a scene
  *   window.__mock.goto('<name>')
- * Scene names: lobby, yourTurn, opponents, tondo, callout, drawn, wild, roundOver.
+ * Scene names: lobby, yourTurn, opponents, tondo, callout, drawn, wild, roundOver,
+ * pieComplete.
  *
  * Mock convenience (not a protocol claim): `createRoom` seats you alone, while
  * `joinRoom` drops you into a table already filled with three bots so the lobby
@@ -61,6 +62,10 @@ function seatsWithYou() {
  */
 function matchBlock() {
   const over = table.phase === 'roundOver';
+  // `pieComplete` reuses roundOver's table (same seats, same game-over banner)
+  // but is the FOURTH slice, not a mid-pie boundary — the one state the share
+  // button exists for.
+  const pieDone = table.scene === 'pieComplete';
   const winnerId = table.game && table.game.winnerId;
   const points = 107;
   const scores = { p1: 81, p2: 166, p3: 0, p4: 0 };
@@ -75,9 +80,9 @@ function matchBlock() {
   const best = standings[0];
   return {
     roundsPerPie: 4,
-    round: over ? 2 : 1,
-    complete: false,
-    championIds: [],
+    round: pieDone ? 4 : (over ? 2 : 1),
+    complete: pieDone,
+    championIds: pieDone ? ['p2'] : [],
     leaderIds: best && best.points ? [best.id] : [],
     standings,
     lastRound: over && winnerId
@@ -273,6 +278,13 @@ const SCENES = {
       calloutTargets: [],
       log: ['YOU PLAYED WILD → CHEESE', 'CARMELA PLAYED CHEESE 3', 'CARMELA IS OUT OF CARDS'],
     };
+  },
+
+  /* Same table and banner as roundOver — this IS the round-over screen, just
+     on the pie's fourth slice, with `matchBlock()` reading `table.scene` to
+     mark the match complete and name Carmela (p2) champion. */
+  pieComplete() {
+    SCENES.roundOver();
   },
 };
 

@@ -17,6 +17,7 @@
  *   node scripts/shoot.js --out /tmp/shots --scene mock:yourTurn --probe "…" --no-settle --wait 480
  *   node scripts/shoot.js --scene none --path "/?code=BASIL-4821" --storage-json '{"tondo.name":"Gent"}'
  *   node scripts/shoot.js --scene mock:yourTurn --prelude scripts/probes/haptics-stub.js --query novibrate
+ *   node scripts/shoot.js --scene mock:pieComplete --clipboard --probe "…navigator.clipboard.readText()…"
  *
  * Scenes: home, lobby, game, roundOver, pieComplete, mock:<name>, none.
  *   `none` loads the page and stops — no driving at all, for the screens that
@@ -43,6 +44,16 @@
  *                     A mock scene already carries `?mock=1&scene=…`, so it is
  *                     joined with `&`; any other target gets `?` unless it has
  *                     one already.
+ * --clipboard         grants `clipboardReadWrite` + `clipboardSanitizedWrite`
+ *                     for the target origin (CDP Browser.grantPermissions)
+ *                     before navigating, so a probe can call
+ *                     `navigator.clipboard.readText()` and get back what a
+ *                     click actually wrote, not just that the click happened.
+ *                     Grant, not stub: this exercises the real Clipboard API.
+ *                     To prove the ABSENT-clipboard fallback instead, delete
+ *                     `navigator.clipboard` from inside the --probe itself,
+ *                     before it clicks — that is a page-side condition, not a
+ *                     CDP one, so there is no separate flag for it.
  *
  * The server must already be running (npm start on :4600, or TONDO_URL).
  */
@@ -65,7 +76,7 @@ const ORIGIN = process.env.TONDO_URL || 'http://localhost:4600';
 
 // --------------------------------------------------------------------- args
 function parseArgs(argv) {
-  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0, path: null, storage: null, prelude: null, query: null };
+  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0, path: null, storage: null, prelude: null, query: null, clipboard: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--out') a.out = argv[++i];
@@ -77,6 +88,7 @@ function parseArgs(argv) {
     else if (k === '--bots') a.bots = Number(argv[++i]);
     else if (k === '--reduced') a.reduced = true;
     else if (k === '--keep') a.keep = true;
+    else if (k === '--clipboard') a.clipboard = true;
     else if (k === '--probe') a.probe = argv[++i];
     // A specific URL, and storage that exists before the first line of app.js
     // runs: the two things a "what does this page do on load" probe needs.
@@ -393,6 +405,17 @@ async function main() {
         features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
       });
     }
+    if (a.clipboard) {
+      // Headless Chrome otherwise prompts (and hangs) on the first real
+      // clipboard write; granting it up front is what lets a probe read back
+      // the TEXT that reached the clipboard instead of only observing that a
+      // click occurred.
+      await cdp.send('Browser.grantPermissions', {
+        origin: ORIGIN,
+        permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'],
+      });
+      console.log(`clipboard permissions granted for ${ORIGIN}`);
+    }
     if (a.storage) {
       let entries;
       try { entries = Object.entries(JSON.parse(a.storage)); }
@@ -433,6 +456,12 @@ async function main() {
     if (a.scene === 'none') await cdp.until(`document.readyState === 'complete'`, { what: 'page load' });
     else await driveTo(cdp, a.scene, a.bots);
 
+    if (a.clipboard) {
+      // The Clipboard API refuses readText/writeText on an unfocused document
+      // ("Document is not focused"), and a freshly-navigated headless page is
+      // not focused by default.
+      await cdp.send('Page.bringToFront').catch(() => { /* older builds lack it */ });
+    }
     if (a.probe) {
       const v = await cdp.eval(a.probe);
       console.log(JSON.stringify(v, null, 2));
