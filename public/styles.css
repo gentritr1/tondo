@@ -893,6 +893,13 @@ body[data-screen="game"] { background: var(--page); }
   left: 50%; top: 50%; width: 19px; height: 1.6px;
   background: currentColor; clip-path: none;
   transform: translate(-50%, -50%) rotate(-45deg);
+  /* Knockout. The cone is filled and the slash is the same currentColor, so
+     without this the two merge and the crossing reads as a notch cut out of
+     the speaker rather than as a bar laid over it. The ring rotates with the
+     element, so it stays 1px on both long edges. --page is the colour the
+     strip actually sits on: sampled off a capture behind this very button at
+     #0b0908, not assumed from the token name. */
+  box-shadow: 0 0 0 1px var(--page);
 }
 
 /* The vibration toggle wears .strip-sound as well as this class, so the 30px
