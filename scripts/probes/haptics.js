@@ -224,6 +224,86 @@
     toggle.ariaPressedAfterOn = btn.getAttribute('aria-pressed');
   }
 
+  /* ---------------------------------------------------- glyphs that paint --
+   * Both strip toggles promise the same thing: OFF is a different SHAPE, not
+   * just a dimmer colour, because a player who cannot see the dimming still
+   * has to be able to read the control.
+   *
+   * That promise is easy to make and easy to break silently, because a
+   * `clip-path` on an element clips its ::before and ::after as well. A mark
+   * positioned outside the clip region — a slash drawn past the edge of a
+   * speaker cone, say — has a perfectly ordinary computed box, sits in the
+   * accessibility tree, and paints nothing at all. Nothing but geometry can
+   * catch it, so measure the geometry: the mark's own horizontal span in px
+   * against the right edge of the clip region on the element that hosts it.
+   * Both numbers are printed, for both glyphs, in the state that shows each
+   * mark.
+   */
+  const spanOf = (el, pseudo) => {
+    const box = el.getBoundingClientRect();
+    const host = getComputedStyle(el);
+    const mark = getComputedStyle(el, pseudo);
+    /* The clip region's right edge, in px from the host's own left edge.
+       Percentages in a polygon resolve against that host's box. */
+    const clip = host.clipPath;
+    let clipRightPx = null;
+    if (clip && clip !== 'none') {
+      clipRightPx = 0;
+      for (const m of clip.matchAll(/(-?[\d.]+)(px|%)\s+(-?[\d.]+)(?:px|%)/g)) {
+        const x = m[2] === '%' ? (box.width * parseFloat(m[1])) / 100 : parseFloat(m[1]);
+        if (x > clipRightPx) clipRightPx = x;
+      }
+      clipRightPx = Math.round(clipRightPx * 100) / 100;
+    }
+    const left = parseFloat(mark.left);
+    const width = parseFloat(mark.width);
+    const right = Number.isFinite(left) && Number.isFinite(width)
+      ? Math.round((left + width) * 100) / 100 : null;
+    return {
+      hostWidthPx: Math.round(box.width * 100) / 100,
+      hostClipPath: clip,
+      clipRightPx,
+      markLeftPx: Number.isFinite(left) ? Math.round(left * 100) / 100 : null,
+      markWidthPx: Number.isFinite(width) ? Math.round(width * 100) / 100 : null,
+      markRightPx: right,
+      // The whole mark is inside the clip region — or there is no clip at all.
+      insideClip: clipRightPx === null ? true : (right !== null && right <= clipRightPx),
+    };
+  };
+
+  const soundBtn = $('sound-btn');
+  const glyph = soundBtn && soundBtn.querySelector('.sound-glyph');
+  const glyphs = { soundButton: !!soundBtn, soundGlyph: !!glyph };
+  if (glyph) {
+    /* Driven through the real control, not by pushing a class on: the state
+       this measures has to be the one a player can actually reach. Sound
+       starts unmuted, so the first click is OFF and the second puts the page
+       back the way this run found it. */
+    glyphs.mutedAtEntry = soundBtn.classList.contains('is-off');
+    glyphs.soundOnArc = spanOf(glyph, '::after');
+    soundBtn.click();
+    await sleep(150);
+    glyphs.mutedAfterClick = soundBtn.classList.contains('is-off');
+    glyphs.soundOffSlash = spanOf(glyph, '::after');
+    soundBtn.click();
+    await sleep(150);
+    glyphs.mutedRestored = soundBtn.classList.contains('is-off');
+  }
+  /* The vibration toggle's off-state slash, through the same ruler. The two
+     buttons are supposed to share one grammar — the haptics brief said
+     "exactly as the sound button does" — and the only way to know they do is
+     to measure both rather than to read both. */
+  const hGlyph = btn && btn.querySelector('.haptics-glyph');
+  glyphs.hapticsGlyph = !!hGlyph;
+  if (hGlyph && toggle.visible) {
+    btn.click();                                    // → off
+    await sleep(150);
+    glyphs.hapticsOffAtMeasure = btn.classList.contains('is-off');
+    glyphs.hapticsOffSlash = spanOf(hGlyph, '::after');
+    btn.click();                                    // → back on
+    await sleep(150);
+    glyphs.hapticsRestored = !btn.classList.contains('is-off');
+  }
   /* ----------------------------------------------------------------- tap --
    * The press feedback, through the real path: tapCardId → send('play'). A
    * coarse pointer arms on the first tap and commits on the second, and
@@ -285,6 +365,16 @@
     // Arming a card is not playing one, so it must not buzz. On a fine
     // pointer the first tap IS the play, and then it must.
     armingDoesNotBuzz: eq(tapRun.afterFirst, tapRun.playedOnFirst ? want.tap : []),
+    /* Both toggles carry OFF as a shape, which means the shape has to be able
+       to paint: every mark fully inside its host's clip region, or a host with
+       no clip at all. The sound button's slash and its radiating arc are both
+       marks on the same host, so both are measured. Independent of haptics
+       support, so this holds in all three runs of the matrix. */
+    mutedSlashCanPaint: !!(glyphs.soundOffSlash && glyphs.soundOffSlash.insideClip),
+    soundArcCanPaint: !!(glyphs.soundOnArc && glyphs.soundOnArc.insideClip),
+    hapticsSlashCanPaint: supported
+      ? !!(glyphs.hapticsOffSlash && glyphs.hapticsOffSlash.insideClip)
+      : glyphs.hapticsOffSlash === undefined,
   };
 
   /* Premises only — nothing below reads a check. */
@@ -305,13 +395,22 @@
     && calloutOnBot.victimCards === 3 && /^YOU CALLED OUT /.test(calloutOnBot.log || '')
     && [plus2OnYou, plus2OnBot, calloutOnYou, calloutOnBot].every((r) => r.pointerdownsDelivered === 1)
     // the tap path really played a card
-    && tapRun.card === true && tapRun.ready === true && tapRun.played === true;
+    && tapRun.card === true && tapRun.ready === true && tapRun.played === true
+    /* The glyph measurements were taken in the states they claim to describe,
+       reached through the real controls, and the page was put back. A state
+       that was never entered would make the numbers below meaningless. */
+    && glyphs.soundButton === true && glyphs.soundGlyph === true
+    && glyphs.mutedAtEntry === false && glyphs.mutedAfterClick === true
+    && glyphs.mutedRestored === false
+    && glyphs.soundOffSlash.markWidthPx > 0 && glyphs.soundOnArc.markWidthPx > 0
+    && (!supported || (glyphs.hapticsOffAtMeasure === true && glyphs.hapticsRestored === true
+      && glyphs.hapticsOffSlash.markWidthPx > 0));
 
   return JSON.stringify(Object.assign(out, {
     idleAtStart,
     turnWhenIdle, turnAfterTouch,
     plus2OnYou, plus2OnBot, calloutOnYou, calloutOnBot,
-    toggle, toggleOffSilencesHit, toggleOnBuzz, tapRun,
+    toggle, toggleOffSilencesHit, toggleOnBuzz, glyphs, tapRun,
     recorded: {
       plus2OnYou: plus2OnYou.recorded, plus2OnBot: plus2OnBot.recorded,
       calloutOnYou: calloutOnYou.recorded, calloutOnBot: calloutOnBot.recorded,

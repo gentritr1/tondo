@@ -851,9 +851,20 @@ body[data-screen="game"] { background: var(--page); }
 .strip-sound:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
 /* A speaker cone plus two arcs, drawn rather than typed: a glyph font would
    render this differently on every platform, and it sits next to a "?" whose
-   weight it has to match. */
+   weight it has to match.
+   The cone lives on ::before and NOT on this element, which looks like an
+   extra node for nothing and is the whole reason the rest of the glyph is
+   visible at all: `clip-path` clips an element's pseudo-element children too.
+   With the polygon on .sound-glyph itself, the arc (left: 74% = 11.1px) and
+   the muted slash (11.7px to 20.7px) both sat entirely outside a clip region
+   that ends at 68% = 10.2px, so neither ever painted — the arc was missing
+   and the muted state was carried by the dimming alone. Anything positioned
+   against .sound-glyph must stay off the clipped layer. */
 .sound-glyph {
   width: 15px; height: 13px; position: relative; display: block;
+}
+.sound-glyph::before {
+  content: ""; position: absolute; inset: 0;
   background: currentColor;
   clip-path: polygon(0 33%, 32% 33%, 68% 4%, 68% 96%, 32% 67%, 0 67%);
 }
@@ -864,9 +875,12 @@ body[data-screen="game"] { background: var(--page); }
   /* Only the right half of the ring shows, which reads as radiating sound. */
   clip-path: polygon(50% 0, 100% 0, 100% 100%, 50% 100%);
 }
-/* Muted: the arcs go, a slash arrives. The state is carried by SHAPE, not by
-   colour alone — the control has to be readable to a player who cannot see the
-   dimming. */
+/* Muted: the arc goes and a slash arrives, on the same pseudo-element, so only
+   one mark is ever drawn. The state is carried by SHAPE as well as by the
+   dimming — the control has to be readable to a player who cannot see colour
+   change. That is only true while ::after stays off the clipped layer (see
+   .sound-glyph::before above); scripts/probes/haptics.js measures the slash's
+   span against the clip region and fails if it drifts back inside it. */
 .strip-sound.is-off { color: rgba(255,247,232,.32); }
 .strip-sound.is-off .sound-glyph::after {
   border: 0; border-radius: 0;
