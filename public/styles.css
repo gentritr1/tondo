@@ -874,6 +874,34 @@ body[data-screen="game"] { background: var(--page); }
   background: currentColor; clip-path: none;
   transform: translateY(-50%) rotate(-45deg);
 }
+
+/* The vibration toggle wears .strip-sound as well as this class, so the 30px
+   circle and the 44x44 ::before hit area come from one place and cannot drift
+   apart. It is `hidden` in the markup until app.js confirms
+   `navigator.vibrate` exists — the global `[hidden] { display:none !important }`
+   at the top of this file beats .strip-sound's `display:flex`, which is the
+   only reason it may inherit that rule at all. */
+/* A phone outline with a short tick either side: the ticks are ONE
+   pseudo-element with a left and a right border and no background, so the
+   middle stays empty without a second node. */
+.haptics-glyph {
+  width: 9px; height: 14px; position: relative; display: block;
+  border: 1.6px solid currentColor; border-radius: 2.5px;
+}
+.haptics-glyph::before {
+  content: ""; position: absolute; box-sizing: border-box;
+  left: -6.6px; right: -6.6px; top: 50%; height: 1.6px;
+  transform: translateY(-50%);
+  border-left: 3px solid currentColor; border-right: 3px solid currentColor;
+}
+/* Off: the ticks go, a slash arrives — the same grammar the mute button uses,
+   so the state is carried by SHAPE and not by the dimming alone. */
+.strip-haptics.is-off .haptics-glyph::before { display: none; }
+.strip-haptics.is-off .haptics-glyph::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 19px; height: 1.6px; background: currentColor;
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
 .queue { display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .chip {
   display: flex; align-items: center; gap: 7px; flex: 0 0 auto;

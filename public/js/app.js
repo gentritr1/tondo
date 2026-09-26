@@ -14,6 +14,7 @@
 import { Connection } from './net.js';
 import { deriveEvents } from './events.js';
 import * as sound from './sound.js';
+import * as haptics from './haptics.js';
 import * as fx from './fx.js';
 
 /* ------------------------------------------------------------- constants */
@@ -763,6 +764,13 @@ function applySnapshot(snap) {
     // the finished pie has been swept — not while the sweep is still running.
     const heardAt = (travel && travel.roundDeal) ? (travel.startDelay || 0) / 1000 : impactAt;
     sound.playForEvents(events, { impactAt: heardAt });
+    // The same moment in the third channel, for the one player it happened to.
+    // Silent on iOS and on any phone without a motor, so it only ever ADDS to
+    // the sound and the animation — nothing above is conditional on it, and
+    // the catch is what keeps that true in the other direction: fx.js's half
+    // of this moment runs a few lines below, and must not be reachable only
+    // through a channel half the devices here do not have.
+    try { haptics.forEvents(events, { impactAt: heardAt }); } catch { /* never breaks a repaint */ }
   }
   // The table's half of the same moment: a skipped seat ducks, a reversal
   // sweeps the sauce, a Wild washes it, a TONDO stamps the declaring seat, a
@@ -3167,6 +3175,9 @@ function tapCardId(id) {
     renderGame(s);
     return;
   }
+  // Press feedback for the commit, not for the arming tap above: the buzz
+  // says "that went", which is only true of this branch.
+  haptics.tap();
   send({ type: 'play', cardId: id });
 }
 
@@ -3311,6 +3322,28 @@ soundBtn.addEventListener('click', () => {
   if (!nowMuted) sound.play('turn');
 });
 paintSoundButton();
+
+/* ---------------------------------------------------------------- haptics */
+
+/* The toggle only exists where the capability does. `navigator.vibrate` has
+   never shipped in Safari on iOS, so on roughly half the phones this game is
+   played on the button stays `hidden` rather than sitting there doing nothing
+   — and every other channel carries the same information regardless. */
+const hapticsBtn = document.getElementById('haptics-btn');
+function paintHapticsButton() {
+  const on = haptics.isEnabled();
+  hapticsBtn.hidden = !haptics.isSupported();
+  hapticsBtn.setAttribute('aria-pressed', String(on));
+  hapticsBtn.setAttribute('aria-label', on ? 'Vibration on — turn off' : 'Vibration off — turn on');
+  hapticsBtn.classList.toggle('is-off', !on);
+}
+hapticsBtn.addEventListener('click', () => {
+  const on = haptics.setEnabled(!haptics.isEnabled());
+  paintHapticsButton();
+  // Turning it on proves itself in the only way this channel can be proven.
+  if (on) haptics.tap();
+});
+paintHapticsButton();
 
 /* ------------------------------------------------------------- how to play */
 

@@ -119,6 +119,14 @@
         <span class="sound-glyph" aria-hidden="true"></span>
         <span class="sr-only">Sound</span>
       </button>
+      <!-- `hidden` until app.js confirms navigator.vibrate exists. A toggle
+           that does nothing on an iPhone is worse than no toggle, and the
+           default is the wrong way round on purpose: nothing is offered until
+           the capability is proven. -->
+      <button id="haptics-btn" type="button" class="btn btn-tiny strip-sound strip-haptics" aria-pressed="false" hidden>
+        <span class="haptics-glyph" aria-hidden="true"></span>
+        <span class="sr-only">Vibration</span>
+      </button>
       <button type="button" class="btn btn-tiny strip-help" data-help-open aria-label="How to play">?</button>
     </div>
   </div>

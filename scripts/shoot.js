@@ -16,6 +16,7 @@
  *   node scripts/shoot.js --probe "document.getAnimations().length"
  *   node scripts/shoot.js --out /tmp/shots --scene mock:yourTurn --probe "…" --no-settle --wait 480
  *   node scripts/shoot.js --scene none --path "/?code=BASIL-4821" --storage-json '{"tondo.name":"Gent"}'
+ *   node scripts/shoot.js --scene mock:yourTurn --prelude scripts/probes/haptics-stub.js --query novibrate
  *
  * Scenes: home, lobby, game, roundOver, pieComplete, mock:<name>, none.
  *   `none` loads the page and stops — no driving at all, for the screens that
@@ -30,6 +31,18 @@
  *                     wrapped in try/catch. Values are stored as strings, so a
  *                     JSON value goes in as a JSON string:
  *                     '{"tondo.name":"Gent","tondo.lastTable":"{\"code\":…}"}'
+ * --prelude <file>    a JS file evaluated on the NEW document, before the first
+ *                     line of app.js runs (Page.addScriptToEvaluateOnNewDocument).
+ *                     `--storage-json` seeds VALUES the app will read; this
+ *                     replaces APIs the app will call — a recording stub for
+ *                     `navigator.vibrate` has to be installed before the module
+ *                     that captures it is even fetched, so a stub written after
+ *                     navigation is not the same test.
+ * --query <q>         a raw query fragment appended to the target URL, so a
+ *                     prelude can branch on `location.search` ("novibrate").
+ *                     A mock scene already carries `?mock=1&scene=…`, so it is
+ *                     joined with `&`; any other target gets `?` unless it has
+ *                     one already.
  *
  * The server must already be running (npm start on :4600, or TONDO_URL).
  */
@@ -52,7 +65,7 @@ const ORIGIN = process.env.TONDO_URL || 'http://localhost:4600';
 
 // --------------------------------------------------------------------- args
 function parseArgs(argv) {
-  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0, path: null, storage: null };
+  const a = { out: null, scene: 'game', w: 1440, h: 900, dsf: 2, tag: '', reduced: false, probe: null, bots: 3, keep: false, settle: true, wait: 0, path: null, storage: null, prelude: null, query: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--out') a.out = argv[++i];
@@ -73,6 +86,16 @@ function parseArgs(argv) {
       a.path = (v && !v.startsWith('/')) ? '/' + v : v;
     }
     else if (k === '--storage-json') a.storage = argv[++i];
+    // The other half of "before the app boots": code, not values. A stub for a
+    // browser API the app captures at import time has to exist on the new
+    // document or the app never sees it.
+    else if (k === '--prelude') a.prelude = argv[++i];
+    else if (k === '--query') {
+      // A leading ?/& is tolerated; the separator is decided against the real
+      // target below, not guessed here.
+      const v = argv[++i];
+      a.query = v ? v.replace(/^[?&]+/, '') : v;
+    }
     // A mid-animation frame: skip the finish-every-animation settle, and hold
     // for a fixed time after the probe so the capture lands at a known moment.
     else if (k === '--no-settle') a.settle = false;
@@ -383,11 +406,22 @@ async function main() {
       await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `try { ${sets} } catch (e) {}` });
       console.log(`seeded ${entries.length} localStorage key(s): ${entries.map(([k]) => k).join(', ')}`);
     }
+    if (a.prelude) {
+      // Read here rather than passed as a string: a stub is a file that can be
+      // reviewed and diffed, and a typo in it should fail the run loudly.
+      let source;
+      try { source = fs.readFileSync(a.prelude, 'utf8'); }
+      catch (err) { throw new Error(`--prelude cannot be read: ${err.message}`); }
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source });
+      console.log(`prelude installed on new document: ${a.prelude} (${source.length} bytes)`);
+    }
     const matched = await (async () => {
-      const target = a.scene.startsWith('mock:')
+      let target = a.scene.startsWith('mock:')
         ? `${ORIGIN}/?mock=1&scene=${a.scene.slice(5)}`
         : (a.path ? ORIGIN + a.path : ORIGIN);
+      if (a.query) target += (target.includes('?') ? '&' : '?') + a.query;
       await cdp.send('Page.navigate', { url: target });
+      console.log(`navigating to ${target}`);
       await cdp.until(`document.readyState === 'complete'`, { what: 'load' });
       return cdp.eval(`matchMedia('(prefers-reduced-motion: reduce)').matches`);
     })();
