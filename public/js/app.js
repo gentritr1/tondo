@@ -1439,39 +1439,130 @@ nodes['name-input'].addEventListener('keydown', (e) => { if (e.key === 'Enter') 
 
 /* ----------------------------------------------------------------- lobby */
 
-function renderLobby(snap) {
-  nodes['room-code'].textContent = snap.roomCode || '—';
-  // lobby-msg is left alone: "Invite link copied." must not vanish the moment
-  // someone else's join triggers a repaint.
+/* One tag per kind, so a row's tags can be compared as a list rather than as
+   a blob of markup. */
+const TAG_TEXT = { you: 'You', host: 'Host', bot: 'Bot', away: 'Away' };
 
-  nodes['seat-list'].innerHTML = snap.seats.map((seat, i) => {
+/** The empty shell of one seat row; everything inside is updated in place. */
+function buildSeatRow(key, ghost) {
+  const li = document.createElement('li');
+  li.className = ghost ? 'seat-row seat-ghost' : 'seat-row';
+  li.dataset.seat = key;
+  if (ghost) {
+    li.setAttribute('aria-hidden', 'true');
+    li.innerHTML = '<span class="ghost-plus">+</span><span class="who">Open seat</span>';
+  } else {
+    li.innerHTML = '<span class="seat-chip" aria-hidden="true"><span class="initial"></span></span>'
+      + '<span class="who"></span>';
+  }
+  return li;
+}
+
+/** Puts `kinds` on the row, in order, before `anchor`. Tags are not focusable,
+ *  so the cheap path is to compare the whole list and rebuild only on a change. */
+function syncTags(row, kinds, anchor) {
+  const live = [...row.querySelectorAll('.tag')];
+  if (live.map((n) => n.dataset.tag).join(',') === kinds.join(',')) return;
+  live.forEach((n) => n.remove());
+  kinds.forEach((k) => {
+    const el = document.createElement('span');
+    el.className = 'tag tag-' + k;
+    el.dataset.tag = k;
+    el.textContent = TAG_TEXT[k];
+    row.insertBefore(el, anchor);
+  });
+}
+
+/**
+ * Keyed reconciliation, for the same reason renderSeats and renderHand are:
+ * this list is repainted by every snapshot, and someone else joining, a bot
+ * being added or a name changing used to throw away the "Remove" button the
+ * keyboard was standing on. A seat keeps its node for as long as it is at the
+ * table; the empty chairs are keyed by position.
+ *
+ * Classes are toggled rather than assigned wholesale, so a transient class a
+ * helper puts on a row survives the next snapshot.
+ */
+function renderSeatList(snap) {
+  const host = nodes['seat-list'];
+  const focused = document.activeElement;
+  const focusedKey = (focused && host.contains(focused) && focused.dataset.remove) || '';
+  const live = new Map([...host.children].map((n) => [n.dataset.seat, n]));
+
+  snap.seats.forEach((seat, i) => {
     // The same tile the player will wear at the table, so the seat they take
     // here is recognisably theirs once the game starts.
     const tone = TONES[SEAT_TONES[i % SEAT_TONES.length]];
     const name = seat.isBot ? nicely(seat.name) : seat.name;
     const initial = (String(name).trim().charAt(0) || '?').toUpperCase();
-    const tags = [];
-    if (seat.id === snap.youId) tags.push('<span class="tag tag-you">You</span>');
-    if (seat.id === snap.hostId) tags.push('<span class="tag tag-host">Host</span>');
-    if (seat.isBot) tags.push('<span class="tag tag-bot">Bot</span>');
-    if (!seat.connected) tags.push('<span class="tag tag-away">Away</span>');
-    const remove = (snap.isHost && seat.isBot)
-      ? `<button type="button" class="btn btn-tiny" data-remove="${esc(seat.id)}" aria-label="Remove ${esc(name)}"${app.offline ? ' disabled' : ''}>Remove</button>` : '';
-    return `<li class="seat-row">
-      <span class="seat-chip" style="--tone-bg:${tone.bg};--tone-edge:${tone.edge}" aria-hidden="true"><span class="initial">${esc(initial)}</span></span>
-      <span class="who">${esc(name)}</span>
-      ${tags.join('')}${remove}
-    </li>`;
-  }).join('') +
-    // The empty chairs are drawn too, so the table's capacity is visible and
-    // the card does not jump in height as seats fill.
-    Array.from({ length: Math.max(0, 4 - snap.seats.length) }, () =>
-      '<li class="seat-row seat-ghost" aria-hidden="true"><span class="ghost-plus">+</span><span class="who">Open seat</span></li>'
-    ).join('');
+    let row = live.get(seat.id);
+    if (!row || row.classList.contains('seat-ghost')) row = buildSeatRow(seat.id, false);
+    else live.delete(seat.id);
+    if (host.children[i] !== row) host.insertBefore(row, host.children[i] || null);
 
-  nodes['seat-list'].querySelectorAll('[data-remove]').forEach((btn) => {
-    btn.addEventListener('click', () => send({ type: 'removeSeat', seatId: btn.dataset.remove }));
+    const chip = row.querySelector('.seat-chip');
+    if (chip.style.getPropertyValue('--tone-bg') !== tone.bg) {
+      chip.style.setProperty('--tone-bg', tone.bg);
+      chip.style.setProperty('--tone-edge', tone.edge);
+    }
+    setTextIfChanged(chip.querySelector('.initial'), initial);
+    setTextIfChanged(row.querySelector('.who'), name);
+
+    // The one focusable control in the row: kept, not rebuilt, and its
+    // listener reads the seat id off the node so it outlives every repaint.
+    let remove = row.querySelector('[data-remove]');
+    const wantRemove = !!(snap.isHost && seat.isBot);
+    if (wantRemove && !remove) {
+      remove = document.createElement('button');
+      remove.type = 'button';
+      remove.classList.add('btn', 'btn-tiny');
+      remove.dataset.remove = seat.id;
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => send({ type: 'removeSeat', seatId: remove.dataset.remove }));
+      row.appendChild(remove);
+    } else if (!wantRemove && remove) { remove.remove(); remove = null; }
+    if (remove) {
+      remove.dataset.remove = seat.id;
+      const label = `Remove ${name}`;
+      if (remove.getAttribute('aria-label') !== label) remove.setAttribute('aria-label', label);
+      remove.disabled = app.offline;
+    }
+
+    const tags = [];
+    if (seat.id === snap.youId) tags.push('you');
+    if (seat.id === snap.hostId) tags.push('host');
+    if (seat.isBot) tags.push('bot');
+    if (!seat.connected) tags.push('away');
+    syncTags(row, tags, remove);
   });
+
+  // The empty chairs are drawn too, so the table's capacity is visible and the
+  // card does not jump in height as seats fill.
+  const ghosts = Math.max(0, 4 - snap.seats.length);
+  for (let k = 0; k < ghosts; k++) {
+    const key = 'ghost:' + k;
+    const at = snap.seats.length + k;
+    let row = live.get(key);
+    if (!row) row = buildSeatRow(key, true);
+    else live.delete(key);
+    if (host.children[at] !== row) host.insertBefore(row, host.children[at] || null);
+  }
+  live.forEach((n) => n.remove());
+
+  // Belt and braces: the node is normally the same one, but if a seat's row
+  // was rebuilt the keyboard still goes back to it rather than to <body>.
+  if (focusedKey && document.activeElement === document.body) {
+    const again = host.querySelector(`[data-remove="${CSS.escape(focusedKey)}"]`);
+    if (again && !again.disabled) again.focus({ preventScroll: true });
+  }
+}
+
+function renderLobby(snap) {
+  nodes['room-code'].textContent = snap.roomCode || '—';
+  // lobby-msg is left alone: "Invite link copied." must not vanish the moment
+  // someone else's join triggers a repaint.
+
+  renderSeatList(snap);
 
   nodes['host-controls'].hidden = !snap.isHost;
   nodes['lobby-wait'].hidden = snap.isHost;
@@ -1519,6 +1610,72 @@ function leaveTable() {
 }
 
 /* ------------------------------------------------------------ game: read */
+
+/* The key the "Let it pass" button is stored under, so one map holds both it
+   and the targets without an id ever colliding with it. */
+const CALLOUT_SKIP = '\u0000skip';
+
+/**
+ * Keyed reconciliation, like renderSeats and renderHand.
+ *
+ * This bar is open at the one moment the table is busiest: a bot's snapshot
+ * lands every second or two, and rebuilding these buttons threw away the node
+ * the keyboard was standing on — "Call out Dominic" could not be reached
+ * before it was replaced, a race a keyboard player cannot win. The button for
+ * a target keeps its node for as long as that target is callable, and its
+ * listener reads the id off the node so it survives every repaint.
+ *
+ * Classes are toggled, never assigned wholesale, so a transient class a helper
+ * owns is not stripped by the next snapshot.
+ */
+function renderCalloutButtons(targets, targetKey) {
+  const host = nodes['callout-buttons'];
+  const keyOf = (n) => (n.dataset.calloutSkip ? CALLOUT_SKIP : (n.dataset.callout || ''));
+  const focused = document.activeElement;
+  const focusedKey = (focused && host.contains(focused)) ? keyOf(focused) : '';
+  const live = new Map([...host.children].map((n) => [keyOf(n), n]));
+
+  targets.forEach((id, i) => {
+    let btn = live.get(id);
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.classList.add('btn', 'btn-cta');
+      btn.dataset.callout = id;
+      btn.addEventListener('click', () => send({ type: 'callout', targetId: btn.dataset.callout }));
+    } else live.delete(id);
+    if (host.children[i] !== btn) host.insertBefore(btn, host.children[i] || null);
+    setTextIfChanged(btn, `Call out ${nicely(playerName(id))}`);
+    btn.disabled = app.offline;
+  });
+
+  let skip = live.get(CALLOUT_SKIP);
+  if (!skip) {
+    skip = document.createElement('button');
+    skip.type = 'button';
+    skip.classList.add('btn', 'btn-quiet');
+    skip.dataset.calloutSkip = '1';
+    skip.textContent = 'Let it pass';
+    // The key is read off the node at click time: the button outlives the
+    // render that made it, and the targets it is dismissing can change.
+    skip.addEventListener('click', () => {
+      app.calloutDismissed = skip.dataset.key || '';
+      renderGame(app.snap);
+    });
+  } else live.delete(CALLOUT_SKIP);
+  skip.dataset.key = targetKey;
+  // Only move it when it is not already last: relocating a node blurs it.
+  if (host.lastElementChild !== skip) host.appendChild(skip);
+  skip.disabled = app.offline;
+
+  live.forEach((n) => n.remove());
+
+  if (focusedKey && document.activeElement === document.body) {
+    const again = focusedKey === CALLOUT_SKIP
+      ? skip : host.querySelector(`[data-callout="${CSS.escape(focusedKey)}"]`);
+    if (again && !again.disabled) again.focus({ preventScroll: true });
+  }
+}
 
 function activeSuitOf(g) { return g.activeSuit || (g.topCard && g.topCard.suit) || 'cheese'; }
 function matchValueText(g) {
@@ -1630,14 +1787,7 @@ function renderGame(snap) {
     const who = targets.map((id) => nicely(playerName(id))).join(' and ');
     nodes['callout-head'].textContent = `${who} forgot TONDO — call them out`;
     nodes['callout-sub'].textContent = 'One card left and never said it. Catching them costs them +2.';
-    nodes['callout-buttons'].innerHTML = targets.map((id) =>
-      `<button type="button" class="btn btn-cta" data-callout="${esc(id)}"${app.offline ? ' disabled' : ''}>Call out ${esc(nicely(playerName(id)))}</button>`
-    ).join('') + `<button type="button" class="btn btn-quiet" data-callout-skip="1"${app.offline ? ' disabled' : ''}>Let it pass</button>`;
-    nodes['callout-buttons'].querySelectorAll('[data-callout]').forEach((btn) => {
-      btn.addEventListener('click', () => send({ type: 'callout', targetId: btn.dataset.callout }));
-    });
-    const skip = nodes['callout-buttons'].querySelector('[data-callout-skip]');
-    if (skip) skip.addEventListener('click', () => { app.calloutDismissed = targetKey; renderGame(app.snap); });
+    renderCalloutButtons(targets, targetKey);
   }
 
   /* Playing a DRAWN wild opens the suit picker while the server still holds a
