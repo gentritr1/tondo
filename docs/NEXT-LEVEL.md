@@ -131,7 +131,7 @@ consolation prize, not the main loop, and it should not be oversold.
 | **The warm ground** | A *blue* glow sitting behind a warm pizza | **Built** |
 | **Nobody waits for the host** | A table stalled on one person's phone | **Built** |
 
-### Tier 2 — make it worth talking about
+### Tier 2 — make it worth talking about *(built; see §6)*
 
 Ordered by the judged roadmap. Each names the audit finding it answers.
 
@@ -172,7 +172,7 @@ top card `'Top card: ' + prettyCard(top)`, and `prettyCard` of a WILD returns
 just "Wild" — the chosen suit lives in `g.activeSuit`, so after a Wild the single
 most important element on the board tells a screen-reader user nothing.
 
-### Tier 3 — later
+### Tier 3 — later *(haptics, share and the shoot gate built; see §6)*
 
 - **Haptics** as pure enhancement (`navigator.vibrate`; iOS Safari does not
   support it — that is fine, it degrades to nothing).
@@ -233,7 +233,7 @@ them. `scripts/measure-scoring.js` is why the pie is four rounds.
 
 ---
 
-## 5. What was applied in this pass
+## 5. What was applied in the Tier 1 pass
 
 ### The pie — a round now matters
 
@@ -500,25 +500,109 @@ repeatable rather than a one-off claim.
 
 ---
 
-## 6. Still open
+## 6. What was applied in the Tier 2/3 pass
 
-- **Tier 2 motion is specified but not built.** `events.js` is the hard part and
-  it is done; the animations are not.
-- **iOS audio is UNVERIFIED.** Unlock and resume are written to the documented
-  pattern and verified in headless Chrome. Neither Safari nor a real iPhone has
-  run this. It needs a device before anyone claims sound works on iOS.
-- **Sound character is UNVERIFIED by ear.** Synthesis parameters were reasoned,
-  and node scheduling was measured — but nobody has *listened* to it. It needs
-  someone to press the speaker button and say whether it sounds warm or cheap.
-  Tuning is a matter of editing numbers in one table in `sound.js`.
-- **Keyboard play has gaps.** Not yet traced end to end.
-- **Two latent rules issues**, both **READ**, neither fixed: a missed TONDO can
-  be erased by drawing at a two-player table, and the bot's rank tie-break is a
-  biased comparator rather than the coin toss its comment claims.
-- **The warm-ground palette is captured but not shipped.** Side-by-side renders
-  exist; the change is four `:root` tokens plus two hard-coded fade stops, and
-  the contrast maths was checked as neutral. It is a taste call and is waiting on
-  a decision. The narrower version — fixing only `--page-glow`, a *blue* glow
-  sitting behind a warm pizza — is the recommended first step either way.
-- **The win banner still covers the top seat.** Visible in every round-over
-  capture. Tier 2.5.
+Eleven tasks, 28 commits, executed with a subagent per task and an independent
+reviewer per diff. Every task carries a probe that had to fail on the old code
+before it was allowed to pass on the new. The full ledger — every ruling, every
+deferred minor, every reviewer verdict — is in
+`.superpowers/sdd/2026-09-16-tondo-tier2-tier3/progress.md`.
+
+| # | What shipped | The measurement that closed it |
+|---|---|---|
+| 1 | Rules: a voluntary draw no longer erases a missed TONDO; round end clears both flags; the opener rotates by seat | Engine tests; PROTOCOL v1.2 |
+| 2 | Bots that can be caught — four personalities with miss rates and think times | **0.50 callout windows per round** against a ≥0.30 target, 2000 rounds |
+| 3 | Action cards read at every table size: skip duck, thrown +2, reverse sweep, seat notes | Sealed legibility probe, 6/6 kinds |
+| 4 | The silent moments get motion and words: wild wash, TONDO stamp, callout lunge | `moments.js`, per-effect animation ids |
+| 5 | The round boundary: deal around the table from the opener, the finished pie sweeps away, banners keep off the seats | Lobby deal miss **117.7px → 0.0px**; hand up at 2275ms, not 3100ms; deal voice on the impact frame, not 520ms early |
+| 6 | The top seat's pill never lands on the MATCH plaque | 4 failing rows → 31 of 32 viewport×scene rows clear (the 32nd is the known 320x568 defect) |
+| 7 | One tap to a table: invite links seat you, One quick pie, rejoin last table, forget this device | Quick pie **68ms** against a 2000ms budget; auto-join recovers at 7722ms of an 8000ms deadline where it previously hung forever |
+| 8 | Four accessibility defects: the top card names a wild's topping, help reaches the lobby, focus lands somewhere real, keyed lists survive snapshots | 19 checks, normal and reduced motion |
+| 9 | Haptics on phones that support them, gated so they stay meaningful | Consequences buzz; a turn buzzes only after 4s of no touch; `--reduced` and unsupported are silent |
+| 10 | Share the finished pie as plain text | 116 tests; a departed champion can no longer produce "Nobody took the pie" |
+| 11 | `npm run shoot` fails on regression, and `docs/qa/` is current | 26 assertions; proven to fail by sabotage before being trusted to pass |
+
+### Decisions worth remembering
+
+- **The turn buzz is gated on idleness.** A buzz on every turn is 15–30 a round;
+  over-feedback trains people to ignore all of it, including the two buzzes that
+  are the point. It fires only when you have not touched the screen for 4s —
+  the case where you looked up at your friends and the screen cannot tell you.
+- **The share text asks the reader for nothing.** No reward, no room code (dead
+  in 60 seconds), no "join my table". A test enforces the words; the property
+  itself stays a human gate, and the test says so in a comment.
+- **A comment that guarantees a property the code lacks is worse than no
+  comment.** This pass found three: a mute slash that had never rendered behind
+  a `clip-path`, a 44x44 touch target that measures 38.5x44, and a phone band
+  recorded as clearing by 1.5px that had drifted to −7.4px. All three had been
+  believed *because* they were written down.
+- **A check that cannot fail is decoration.** Four vacuous assertions were caught
+  before shipping — including one in the plan's own list, which tested DOM
+  sibling order and stayed green while the CSS rule it guarded was broken.
+
+### The chef profile was not built
+
+Twice proposed, twice rejected, and rejected again here. A solo consolation
+ledger is the thin end of the progression systems §3 already refused, and the
+research could not name a retention mechanism it provides that the pie does not.
+
+## 7. Still open
+
+Everything below needs a human, a device, or a decision. Nothing here is
+blocked on more code being written.
+
+- **Nobody has watched any of it move.** Every motion claim on this branch comes
+  from headless Chrome measuring rects, animation ids and frame counts. The deal
+  ceremony, the pie sweep, the wild wash, the TONDO stamp, the callout lunge and
+  both banner placements have never been seen by a person. Frames for eyeballing
+  are in `docs/qa/` (8 curated) and `.superpowers/sdd/frames/`.
+- **Sound character is UNVERIFIED by ear.** Synthesis was reasoned and node
+  scheduling measured; nobody has listened. Tuning is one table in `sound.js`.
+- **iOS is UNVERIFIED in three places**, and they are the three that matter on
+  the platform: audio unlock/resume, Safari's gesture-gated clipboard behind the
+  share button, and the readonly-textarea fallback the share flow uses on a
+  non-secure LAN origin. All are written to the documented patterns and verified
+  in Chrome only.
+- **Haptics are UNVERIFIED on a device.** Every recorded pattern comes from a
+  stub that proves the app *asked* for a vibration — never that a motor spun or
+  a human felt one. No duration is measured: 20ms is a reasoned floor for ERM
+  spin-up, not a number anyone has felt. `navigator.vibrate` has never shipped in
+  Safari on iOS, so roughly half the target phones get nothing by design.
+  Chrome also blocks `vibrate` until the frame has been tapped, so the stub can
+  over-report; the idle-gated turn buzz is by construction the most exposed.
+- **Screen-reader output is UNVERIFIED.** No VoiceOver or NVDA in this
+  environment. Every accessible name on this branch is the DOM's account — the
+  harness exposes `Runtime.evaluate`, not the computed accessibility tree.
+- **Keyboard play still has gaps.** Focus now lands somewhere real after a wild
+  pick, a screen change, a callout bar closing and a seat being removed, and
+  keyed lists survive snapshots — but a full end-to-end keyboard trace has not
+  been run.
+- **One latent rules issue remains READ, not fixed:** the bot's rank tie-break is
+  a biased comparator rather than the coin toss its comment claims. (The other
+  one — a missed TONDO erased by drawing at a two-player table — was closed in
+  this pass.)
+
+### Known defects, measured
+
+- **`wild` scene at 320x568: the top seat overlaps the MATCH plaque by 12.6px.**
+  Pre-existing, unchanged by this pass, and confirmed identical before and after.
+  It is not fixable by the tuck that solved the other viewports: at that size the
+  stage is at its 180px floor, with the plaque 3px above the top card, the card
+  5px above the stage bottom and the tile 4px below the stage top. Measured
+  alternatives — hiding the seat's pill leaves the *tile* overlapping by 1.8px;
+  shrinking `--seat-tile` to 27px buys 1.6px with the tile 0.8px off the strip.
+  The honest reading is that 320x568 is over-subscribed and wants a deliberate
+  small-phone layout pass, not a nudge. Decided with the user: ship as known.
+- **`wild` at 1280x800 clears the plaque by 1.4px** (2.4px at 1024x768). The wild
+  picker does not compress the stage, so the tuck never fires there. Live in
+  `npm run shoot`, so any font or padding change turns the suite red.
+- **The strip's toggles are 38.5x44, not 44x44.** `#sound-btn` and `#haptics-btn`
+  each lose width to an interactive neighbour whose 44px hit area overlaps across
+  a 9px gap; the later one in DOM order wins. Pre-dates the haptics toggle. The
+  comment now states the measured truth instead of the intended one.
+- **`docs/design/ring-table.dc.html` has broken images** — it points at
+  `ref/regulars/*.png`, a directory that does not exist. Unrelated to this pass.
+- **At 390x844 with a stored last table, the home card needs one short scroll**
+  to reach `Forget this device`. Nothing is unreachable; `#screen-home` is the
+  scroll container and the card top stays reachable.
+
