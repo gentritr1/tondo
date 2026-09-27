@@ -20,6 +20,12 @@ const TICK_MS = 250;
 const BOT_FOLLOWUP_MS = 900; // a shout does not end the turn; a beat, then the move
 const BOT_CALLOUT_MS = 1400; // a human gets a beat to remember TONDO first
 const AWAY_TURN_MS = 10000; // resolve the turn of a player whose socket went
+/* How long the table gets to read the scoreboard before the next slice deals
+   itself. Ten seconds is a taste value, not a measured one — it is the beat for
+   reading the standings and groaning about them, and it is deliberately shown
+   as a quiet line rather than a counting digit. It never arms on a FINISHED
+   pie: that is the one boundary that has earned a pause. */
+const NEXT_SLICE_MS = 10000;
 const EMPTY_ROOM_TTL_MS = 60000;
 const MAX_NAME_LENGTH = 16;
 const MAX_ROOMS = 500;
@@ -37,6 +43,32 @@ function cleanName(raw) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * A match is a "pie" of four rounds — four slices.
+ *
+ * A fixed length rather than a race to a points target, because a round is
+ * worth wildly different amounts at different table sizes: measured over 2000
+ * complete bot rounds each (scripts/measure-scoring.js), the winner banks a
+ * median of 51 points at two players, 85 at three and 137 at four. Any single
+ * "first to N" target therefore runs 4 rounds at one table size and 8 at
+ * another, and at four players it is usually decided by whoever wins first.
+ * Four slices is the same promise at every table, and the measured spread
+ * (p25 105 -> p75 170 at four players) is wide enough that the last round can
+ * still turn the result over.
+ */
+const PIE_ROUNDS = 4;
+
+function freshPie() {
+  return {
+    roundsPerPie: PIE_ROUNDS,
+    round: 0,            // slices finished
+    scores: {},          // seatId -> { points, roundsWon }
+    complete: false,
+    championIds: [],
+    lastRound: null,     // what the round just finished was worth
+  };
+}
+
 class Room {
   constructor(code) {
     this.code = code;
@@ -52,6 +84,89 @@ class Room {
     this.calloutPlans = [];
     this.emptySince = 0;
     this.roundCount = 0;
+    // Who opened the last round, by seat id. Rotating by index broke whenever
+    // a seat joined or left between rounds, because the modulus base moved.
+    this.lastStarterId = null;
+    this.lastStarterIndex = 0;
+    this.pie = freshPie();
+    /* The round-boundary clock. A round used to end and wait for one specific
+       person; everyone else read "waiting for the host" and had no button.
+       `nextDueAt` is when the next slice deals itself, and `held` is a human
+       having said "not yet" — sticky, because a hold that expired on its own
+       would be worse than no hold at all. */
+    this.nextDueAt = 0;
+    this.held = false;
+  }
+
+  /** True while the table is between slices with a deal actually pending. */
+  canAutoDeal() {
+    return this.phase === 'roundOver'
+      && !this.pie.complete
+      && this.seats.length >= game.MIN_PLAYERS
+      && this.connectedHumanSeats().length > 0;
+  }
+
+  /** Arms the between-slices countdown, unless somebody has held it. */
+  armNextSlice(now = Date.now()) {
+    this.nextDueAt = (!this.held && this.canAutoDeal()) ? now + NEXT_SLICE_MS : 0;
+  }
+
+  /** A human asks the table to wait. Sticky until somebody deals. */
+  holdNextSlice() {
+    this.held = true;
+    this.nextDueAt = 0;
+  }
+
+  // -- the pie -------------------------------------------------------------
+
+  /** The running score for a seat, created on first use. */
+  scoreFor(seatId) {
+    if (!this.pie.scores[seatId]) this.pie.scores[seatId] = { points: 0, roundsWon: 0 };
+    return this.pie.scores[seatId];
+  }
+
+  /**
+   * Everyone still at the table, richest first. A seat that has left keeps its
+   * points but stops being listed: the scoreboard describes the table as it is
+   * now, and a ghost row for someone who walked out reads as a bug.
+   */
+  standings() {
+    return this.seats
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        isBot: s.isBot,
+        points: this.scoreFor(s.id).points,
+        roundsWon: this.scoreFor(s.id).roundsWon,
+      }))
+      .sort((a, b) => b.points - a.points || b.roundsWon - a.roundsWon);
+  }
+
+  /** Everyone tied at the top. Points first, round wins as the tie-break. */
+  leaders() {
+    const table = this.standings();
+    if (!table.length) return [];
+    const best = table[0];
+    if (best.points === 0 && best.roundsWon === 0) return [];
+    return table
+      .filter((r) => r.points === best.points && r.roundsWon === best.roundsWon)
+      .map((r) => r.id);
+  }
+
+  /** Banks the finished round and closes the pie if that was the last slice. */
+  recordRound() {
+    const result = this.game && this.game.roundResult;
+    this.pie.round += 1;
+    this.pie.lastRound = result || null;
+    if (result && result.winnerId) {
+      const score = this.scoreFor(result.winnerId);
+      score.points += result.points;
+      score.roundsWon += 1;
+    }
+    if (this.pie.round >= this.pie.roundsPerPie) {
+      this.pie.complete = true;
+      this.pie.championIds = this.leaders();
+    }
   }
 
   // -- seats ---------------------------------------------------------------
@@ -134,12 +249,29 @@ class Room {
     if (this.seats.length > game.MAX_PLAYERS) {
       return { ok: false, error: `A table holds at most ${game.MAX_PLAYERS} players.` };
     }
+    // The finished pie stays on screen through `roundOver`; dealing again is
+    // what starts a new one.
+    if (this.pie.complete) this.pie = freshPie();
+    // The lead rotates round by round so the host does not open every deal,
+    // tracked by seat identity rather than a modulus: a seat count that
+    // changes between rounds must not skip or repeat anyone.
+    const ids = this.seats.map((s) => s.id);
+    const previous = ids.indexOf(this.lastStarterId);
+    let startIndex = 0;
+    if (previous >= 0) startIndex = (previous + 1) % ids.length;
+    // The last opener left: whoever now sits in their place is next.
+    else if (this.lastStarterId) startIndex = this.lastStarterIndex % ids.length;
+    this.lastStarterId = ids[startIndex];
+    this.lastStarterIndex = startIndex;
+    this.roundCount++;
     this.game = game.createGame(
       this.seats.map((s) => ({ id: s.id, name: s.name, isBot: s.isBot })),
-      // The lead rotates round by round so the host does not open every deal.
-      { startIndex: this.roundCount++ % this.seats.length }
+      { startIndex }
     );
     this.phase = 'playing';
+    // A new slice is dealt: the boundary clock and any hold are spent.
+    this.nextDueAt = 0;
+    this.held = false;
     this.rolledFor.clear();
     this.calloutPlans = [];
     this.syncConnectionFlags();
@@ -150,6 +282,8 @@ class Room {
   finishRoundIfOver() {
     if (this.phase === 'playing' && this.game && this.game.status === 'roundOver') {
       this.phase = 'roundOver';
+      this.recordRound();
+      this.armNextSlice();
     }
   }
 
@@ -187,7 +321,7 @@ class Room {
     // seconds an away player has left, or postpone a bot forever.
     const wantBot = Boolean(seat && seat.isBot);
     const wantAway = Boolean(seat && !seat.isBot && !seat.connected);
-    this.botDueAt = wantBot ? (serialChanged || !this.botDueAt ? now + bot.thinkMs() : this.botDueAt) : 0;
+    this.botDueAt = wantBot ? (serialChanged || !this.botDueAt ? now + bot.thinkMs(seat.name, game.viewFor(this.game, seat.id)) : this.botDueAt) : 0;
     this.awayDueAt = wantAway ? (serialChanged || !this.awayDueAt ? now + AWAY_TURN_MS : this.awayDueAt) : 0;
   }
 
@@ -204,7 +338,7 @@ class Room {
     }
     const vulnerable = new Set(
       this.game.players
-        .filter((p) => !p.left && p.vulnerable && p.hand.length === 1)
+        .filter((p) => !p.left && p.vulnerable)
         .map((p) => p.id)
     );
     for (const id of [...this.rolledFor]) if (!vulnerable.has(id)) this.rolledFor.delete(id);
@@ -215,7 +349,7 @@ class Room {
       this.rolledFor.add(targetId);
       for (const seat of this.seats) {
         if (!seat.isBot || seat.id === targetId) continue;
-        if (bot.wantsCallout()) {
+        if (bot.wantsCallout(seat.name)) {
           this.calloutPlans.push({ targetId, botId: seat.id, dueAt: now + BOT_CALLOUT_MS });
         }
       }
@@ -239,6 +373,19 @@ class Room {
         connected: s.connected,
       })),
       game: this.game ? game.viewFor(this.game, seatId) : null,
+      match: {
+        roundsPerPie: this.pie.roundsPerPie,
+        round: this.pie.round,
+        complete: this.pie.complete,
+        championIds: this.pie.championIds,
+        standings: this.standings(),
+        leaderIds: this.leaders(),
+        lastRound: this.pie.lastRound,
+        // When the next slice deals itself, as an absolute epoch ms so the
+        // client can render a countdown without the server ticking at it.
+        nextDueAt: this.nextDueAt || null,
+        held: this.held,
+      },
     };
   }
 
@@ -426,6 +573,21 @@ class RoomManager {
       if (this.rooms.get(room.code) === room) this.rooms.delete(room.code);
       return;
     }
+    /* The between-slices clock runs while the room is NOT live, so it has to
+       be handled above the `isLive()` gate below. Re-arming here rather than
+       only at round end means a table whose last human dropped and came back
+       starts counting again instead of sitting dead. */
+    if (room.phase === 'roundOver') {
+      if (!room.nextDueAt && room.canAutoDeal() && !room.held) room.armNextSlice(now);
+      if (room.nextDueAt && !room.canAutoDeal()) room.nextDueAt = 0;
+      if (room.nextDueAt && now >= room.nextDueAt) {
+        room.nextDueAt = 0;
+        const started = room.startRound();
+        if (started.ok) room.broadcast();
+        return;
+      }
+    }
+
     if (!room.isLive()) return;
 
     let changed = false;
@@ -449,7 +611,7 @@ class RoomManager {
       room.botDueAt = 0;
       const current = game.currentPlayer(room.game);
       const before = room.game.turnSerial;
-      const move = bot.decide(game.viewFor(room.game, current.id));
+      const move = bot.decide(game.viewFor(room.game, current.id), current.name);
       if (move) this.applyAction(room, current.id, { type: move.action, ...move });
       else game.drawCard(room.game, current.id);
       room.finishRoundIfOver();
@@ -481,6 +643,7 @@ module.exports = {
   RoomManager,
   CODE_WORDS,
   TICK_MS,
+  NEXT_SLICE_MS,
   AWAY_TURN_MS,
   EMPTY_ROOM_TTL_MS,
   BOT_CALLOUT_MS,

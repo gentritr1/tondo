@@ -60,11 +60,22 @@
      cannot animate anything by accident. */
   interpolate-size: allow-keywords;
 
-  /* ---- Stone Oven palette ------------------------------------------- */
-  --page: #070C16;
-  --page-glow: #121B2E;
-  --shell: #0E1729;
-  --tray-bg: #0A1120;
+  /* ---- Stone Oven palette -------------------------------------------
+     The ground is WARM, not navy. It used to be #070C16 with a #121B2E glow —
+     a BLUE light source placed directly behind a warm pizza, which is the one
+     place the design spent extra light and it spent it cold, desaturating the
+     crust halo it was meant to lift. The board is a pie on a table in a room;
+     the room should be lit like one.
+
+     Contrast was measured, not assumed: `node scripts/check-contrast.js`
+     composites the whole translucent ink ladder against every surface here.
+     Worst case is --ink-3 on the glow at 5.58:1 (it was 6.18:1 on the old
+     glow), against a 4.5:1 floor — every word-carrying rung still clears AA.
+     Re-run that script after touching any of these four. */
+  --page: #0B0908;
+  --page-glow: #3A2413;
+  --shell: #14100D;
+  --tray-bg: #100C0A;
   --hair: rgba(255,247,232,.08);
   --hair-2: rgba(255,247,232,.16);
   --ink: #FFF7E8;          /* cream ink — card borders, letters */
@@ -99,9 +110,11 @@
   /* ---- the ink alpha ladder --------------------------------------------
      Muted cream had no ladder: `rgba(255,247,232, a)` appeared on 50 lines
      with 22 distinct alphas, and eight of those steps failed WCAG AA. These
-     four are now the only steps allowed to carry words. Ratios are measured
-     composited against --shell (#0E1729) — the darkest surface muted text
-     sits on, so every other surface in the app measures better:
+     four are now the only steps allowed to carry words. Ratios below were
+     measured against the ORIGINAL navy --shell (#0E1729). The ground is warm
+     now, and the worst surface is no longer --shell but --page-glow, where
+     --ink-3 measures 5.58:1. `node scripts/check-contrast.js` recomputes every
+     rung against every live surface — run it, do not trust these numbers:
        --ink-1  .92   loud secondary text        (~15:1)
        --ink-2  .72   10-11px caps labels        (~10:1; small type needs the
                                                   headroom, so labels never
@@ -409,8 +422,22 @@ body { height: 100dvh; }
   0%   { transform:rotate(-2deg) scale(.972) }
   100% { transform:rotate(-2deg) scale(1) }
 }
-/* A picked Wild washes its colour outward across the sauce. */
-@keyframes sauce-sweep { 0%{opacity:0;transform:scale(.5)} 45%{opacity:1} 100%{opacity:1;transform:scale(1)} }
+/* A Wild washes its chosen colour outward across the sauce (fx.js), on its own
+   .sauce-wash layer: from a small bright pool to past the rim, gone by the end. */
+@keyframes sauce-wash { 0% { opacity: 0; transform: scale(.42); } 30% { opacity: 1; } 100% { opacity: 0; transform: scale(1.08); } }
+/* The TONDO stamp (fx.js): a wind-up — squash and a counter-lean — then the
+   seat slams big and settles. The wind-up (0-22%) runs on the rule's `linear`;
+   the slam and the overshooting settle carry their own curves, set on the
+   keyframe each segment starts from. */
+@keyframes tondo-stamp {
+  0%   { transform: scale(1) rotate(0deg); }
+  22%  { transform: scale(.92) rotate(-3deg); animation-timing-function: cubic-bezier(.33,0,.67,1); }
+  52%  { transform: scale(1.14) rotate(2deg); animation-timing-function: cubic-bezier(.34,1.56,.64,1); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+/* The stamp's ring shouting outward once. Its own keyframe, deliberately not
+   tondo-ring-pulse: that one is shared by the plaque flash and the alarm. */
+@keyframes tondo-ring-shout { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.34); } }
 /* A topping landing in its owner's wedge. From the concept's `tondoDrop`: it
    falls in oversized, flattens on impact, then settles into shape. The fall
    height is written in --tp-u so it scales with the pie exactly as the topping
@@ -440,6 +467,15 @@ body { height: 100dvh; }
   0%   { transform: scale(.3); opacity: .85 }
   100% { transform: scale(2.4); opacity: 0 }
 }
+/* (The skip duck is not here: it is a WAAPI animation in public/js/fx.js,
+   composed on top of whatever the seat is running — see DUCK_FRAMES there.) */
+/* The count badge taking a +2. `scale` (the property) composes with any
+   transform the badge already has, so it never replaces one. */
+@keyframes badge-punch { 0% { scale: 1; } 40% { scale: 1.34; } 100% { scale: 1; } }
+/* A reversal: one bright band sweeps the sauce once, in the NEW play order's
+   direction (`is-cw` for direction 1, which #dir-label calls "Clockwise"). */
+@keyframes dir-sweep-cw  { 0% { transform: rotate(0deg); opacity: 0; } 12% { opacity: .22; } 100% { transform: rotate(360deg); opacity: 0; } }
+@keyframes dir-sweep-ccw { 0% { transform: rotate(0deg); opacity: 0; } 12% { opacity: .22; } 100% { transform: rotate(-360deg); opacity: 0; } }
 /* Reduced motion keeps the fade that explains the change, drops the travel. */
 @keyframes rm-fade { 0%{opacity:0} 100%{opacity:1} }
 
@@ -484,8 +520,19 @@ body { height: 100dvh; }
   .banner.is-leaving { animation: rm-fade 140ms linear 1 reverse !important; }
   /* Pure attention-getters carry no information a fade can't: silence them. */
   .card.refuse, .turn-token.hop::after, .stage.is-turn-change .ring::after,
-  .plaque.is-pop, .plaque.flash::after, .plate.is-loud::after,
-  .sauce-tint.is-sweeping { animation: none !important; }
+  .plaque.is-pop, .plaque.flash::after, .plate.is-loud::after { animation: none !important; }
+  /* The consequence effects move; their meaning rides the seat verb ("skipped",
+     "+2") and the live region instead, which fx.js writes under every
+     preference. (fx.js does not start the WAAPI skip duck at all under reduced
+     motion, so it has no entry here.) */
+  .count-badge.is-punched, .you-count.is-punched,
+  .dir-sweep { animation: none !important; }
+  /* The Wild wash and the TONDO stamp move; the plaque names the new topping,
+     and the seat's "TONDO!" and the live region carry the declaration. (fx.js
+     does not start the WAAPI callout lunge under reduced motion; the seat notes
+     and "Caught!" carry the callout.) */
+  .sauce-wash, .plate.is-tondo, .you-seat.is-tondo,
+  .plate.is-tondo::after, .you-seat.is-tondo::after { animation: none !important; }
   /* A topping still has to APPEAR — that is the state change. It just does not
      fall, squash or throw a ripple; the grease ring is pure decoration. */
   .tp-drop { animation: rm-fade 160ms linear both !important; }
@@ -588,13 +635,13 @@ body.is-offline #newround-btn { opacity: .55; cursor: wait; }
 
 /* ==========================================================================
    HOME + LOBBY — Stone Oven
-   The same page ground as the game screen (radial glow over #070C16) with the
+   The same page ground as the game screen (radial glow over --page) with the
    shell panel floating on it, so the three screens read as one product.
    ========================================================================== */
 
 body[data-screen="home"] #screen-home,
 body[data-screen="lobby"] #screen-lobby {
-  background: radial-gradient(ellipse 90% 46% at 50% 0%, var(--page-glow), var(--page) 72%);
+  background: radial-gradient(ellipse 62% 48% at 50% 38%, var(--page-glow), var(--page) 78%);
 }
 
 .home-card, .lobby-card {
@@ -662,6 +709,21 @@ body[data-screen="lobby"] #screen-lobby {
 .rule::before, .rule::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--hair); }
 .join-row { display: flex; gap: 10px; align-items: flex-end; }
 .join-row > .btn { min-height: 48px; flex: 0 0 auto; }
+
+/* ------------------------------------------------- one tap to a table
+   Layout only. Every one of these controls is an existing button species
+   (.btn, .btn-block, .btn-tiny) wearing its own colour, radius, shadow and
+   size — a fourth species on the home card would be a design-system change,
+   not a feature. The card's own 14px row gap already clears the 8px minimum
+   between adjacent tappable controls, so nothing here tightens it.
+
+   No entrance animation on either block: both are decided before first paint
+   and the home screen is a surface people see many times a day. */
+.quick-hint { margin: -7px 0 0; }
+.last-table { display: flex; flex-direction: column; gap: 8px; }
+.last-table-sub { max-width: none; margin: 0; }
+.last-table-sub:empty { display: none; }
+.home-card > .btn-forget { align-self: center; }
 
 /* ------------------------------------------------------------------ lobby */
 .lobby-head { display: flex; flex-direction: column; gap: 7px; }
@@ -744,7 +806,7 @@ body[data-screen="lobby"] #screen-lobby {
    ========================================================================== */
 
 body[data-screen="game"] { background: var(--page); }
-#screen-game { background: radial-gradient(ellipse 90% 46% at 50% 0%, var(--page-glow), var(--page) 72%); }
+#screen-game { background: radial-gradient(ellipse 62% 48% at 50% 38%, var(--page-glow), var(--page) 78%); }
 
 /* ------------------------------------------------------------ header bar */
 .strip {
@@ -755,11 +817,19 @@ body[data-screen="game"] { background: var(--page); }
 .strip-inner { display: flex; align-items: center; gap: 13px; width: 100%; max-width: var(--measure); min-width: 0; margin-inline: auto; }
 .strip-mark { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: .14em; color: var(--gold); flex: 0 0 auto; }
 .strip-code { font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .18em; color: var(--ink-2); flex: 0 0 auto; }
-/* The 30px circle is the VISUAL; the target is 44x44. Growing the circle
-   itself would put a fat button next to a 15px wordmark, so the hit area is a
-   centred pseudo-element instead — it costs no layout and no pixels. The two
-   neighbours it reaches into (.strip-code, a text span, and the flex gap) are
-   not interactive, so nothing can be hit by accident. */
+/* The 30px circle is the VISUAL; the ::before below is coded to a 44x44
+   target, centred so growing it costs no layout and no pixels. It does NOT
+   land at 44x44 for every button that shares this shape — see the measured
+   note on .strip-sound below. This one (.strip-help) is the LAST of the three
+   utility buttons in DOM order (sound, then haptics, then this "?"), so
+   nothing sits to its right, and in the flex gap on its left, hit-testing
+   (elementFromPoint) resolves to whichever sibling is LATER in DOM order —
+   this one. Measured at 390x844: .strip-help's delivered hit target is the
+   full 44x44 (340.5–384.5 horizontally), taken out of its left neighbour's
+   would-be target. Its left neighbour (haptics-btn, or sound-btn when
+   haptics is hidden) IS an interactive button, not inert text — this
+   used to be true back when this button sat alone next to .strip-code, before
+   the sound/haptics toggles were inserted between them. */
 .strip-help {
   position: relative;
   width: 30px; height: 30px; min-height: 30px; padding: 0; flex: 0 0 auto;
@@ -771,6 +841,112 @@ body[data-screen="game"] { background: var(--page); }
   width: 44px; height: 44px; transform: translate(-50%, -50%); border-radius: 50%;
 }
 .strip-help:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
+
+/* The mute control wears the help button's geometry — same 30px circle, same
+   ::before coded to 44x44 — so the two read as one pair of utilities rather
+   than two unrelated controls. That geometry does NOT deliver the same
+   DELIVERED hit area for #sound-btn or #haptics-btn, though: each has an
+   interactive sibling immediately after it in DOM order (the next toggle,
+   or .strip-help), and elementFromPoint hit-testing resolves the overlap in
+   their shared flex gap (13px normally, 9px at ≤719px width — both narrower
+   than the 14px the two 44px pseudo-elements try to claim) to whichever
+   sibling is LATER in the DOM, not to this one. Measured at 390x844 with an
+   elementFromPoint scan: #sound-btn and #haptics-btn each deliver 38.5x44,
+   not 44x44 — only .strip-help, last in the row, keeps the full width. Both
+   truncated targets are still comfortably tappable; this comment just must
+   not claim a guarantee the layout doesn't keep. */
+.strip-sound {
+  position: relative;
+  width: 30px; height: 30px; min-height: 30px; padding: 0; flex: 0 0 auto;
+  border-radius: 50%; border: 1px solid rgba(255,247,232,.2);
+  color: rgba(255,247,232,.55);
+  display: flex; align-items: center; justify-content: center;
+}
+.strip-sound::before {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%); border-radius: 50%;
+}
+.strip-sound:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
+/* A speaker cone plus two arcs, drawn rather than typed: a glyph font would
+   render this differently on every platform, and it sits next to a "?" whose
+   weight it has to match.
+   The cone lives on ::before and NOT on this element, which looks like an
+   extra node for nothing and is the whole reason the rest of the glyph is
+   visible at all: `clip-path` clips an element's pseudo-element children too.
+   With the polygon on .sound-glyph itself, the arc (left: 74% = 11.1px) and
+   the muted slash (11.7px to 20.7px) both sat entirely outside a clip region
+   that ends at 68% = 10.2px, so neither ever painted — the arc was missing
+   and the muted state was carried by the dimming alone. Anything positioned
+   against .sound-glyph must stay off the clipped layer. */
+.sound-glyph {
+  width: 15px; height: 13px; position: relative; display: block;
+}
+.sound-glyph::before {
+  content: ""; position: absolute; inset: 0;
+  background: currentColor;
+  clip-path: polygon(0 33%, 32% 33%, 68% 4%, 68% 96%, 32% 67%, 0 67%);
+}
+.sound-glyph::after {
+  content: ""; position: absolute; left: 74%; top: 50%;
+  width: 7px; height: 7px; transform: translateY(-50%);
+  border: 1.6px solid currentColor; border-radius: 50%;
+  /* Only the right half of the ring shows, which reads as radiating sound. */
+  clip-path: polygon(50% 0, 100% 0, 100% 100%, 50% 100%);
+}
+/* Muted: the arc goes and a slash arrives, on the same pseudo-element, so only
+   one mark is ever drawn. The state is carried by SHAPE as well as by the
+   dimming — the control has to be readable to a player who cannot see colour
+   change. That is only true while ::after stays off the clipped layer (see
+   .sound-glyph::before above); scripts/probes/haptics.js measures the slash's
+   span against the clip region and fails if it drifts back inside it. */
+.strip-sound.is-off { color: rgba(255,247,232,.32); }
+.strip-sound.is-off .sound-glyph::after {
+  border: 0; border-radius: 0;
+  /* Crosses the cone rather than sitting beside it: a slash THROUGH the icon
+     is the universal muted grammar, and a short tick to the right of a speaker
+     reads as decoration or as part of the speaker. Geometrically identical to
+     .strip-haptics.is-off .haptics-glyph::after, so the two strip toggles say
+     "off" the same way. (This only became a visible question once the clip
+     above stopped eating the mark; before that it painted nothing at all.) */
+  left: 50%; top: 50%; width: 19px; height: 1.6px;
+  background: currentColor; clip-path: none;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  /* Knockout. The cone is filled and the slash is the same currentColor, so
+     without this the two merge and the crossing reads as a notch cut out of
+     the speaker rather than as a bar laid over it. The ring rotates with the
+     element, so it stays 1px on both long edges. --page is the colour the
+     strip actually sits on: sampled off a capture behind this very button at
+     #0b0908, not assumed from the token name. */
+  box-shadow: 0 0 0 1px var(--page);
+}
+
+/* The vibration toggle wears .strip-sound as well as this class, so the 30px
+   circle and the 44x44 ::before hit area come from one place and cannot drift
+   apart. It is `hidden` in the markup until app.js confirms
+   `navigator.vibrate` exists — the global `[hidden] { display:none !important }`
+   at the top of this file beats .strip-sound's `display:flex`, which is the
+   only reason it may inherit that rule at all. */
+/* A phone outline with a short tick either side: the ticks are ONE
+   pseudo-element with a left and a right border and no background, so the
+   middle stays empty without a second node. */
+.haptics-glyph {
+  width: 9px; height: 14px; position: relative; display: block;
+  border: 1.6px solid currentColor; border-radius: 2.5px;
+}
+.haptics-glyph::before {
+  content: ""; position: absolute; box-sizing: border-box;
+  left: -6.6px; right: -6.6px; top: 50%; height: 1.6px;
+  transform: translateY(-50%);
+  border-left: 3px solid currentColor; border-right: 3px solid currentColor;
+}
+/* Off: the ticks go, a slash arrives — the same grammar the mute button uses,
+   so the state is carried by SHAPE and not by the dimming alone. */
+.strip-haptics.is-off .haptics-glyph::before { display: none; }
+.strip-haptics.is-off .haptics-glyph::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 19px; height: 1.6px; background: currentColor;
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
 .queue { display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .chip {
   display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
@@ -911,8 +1087,9 @@ body[data-screen="game"] { background: var(--page); }
 /* --- the pie: stone rim → cartoon crust → sauce ------------------------
    Full cartoon: flat saturated shapes with chunky edges, built entirely from
    CSS so every part squashes, ripples and scales with --table-d. The old
-   photographed pie (assets/pizza-*.webp, assets/pizza-table-v2.webp) is
-   unwired — the files stay on disk, nothing references them. */
+   photographed pie is unwired. Its files moved to art/ on 2026-09-27: nothing
+   referenced them, and 1.5MB of dead weight sitting in the web root is 1.5MB
+   anyone can fetch. They are still in the repo and in git history. */
 .ring {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
   height: var(--table-d); width: var(--table-d); border-radius: 50%;
@@ -1098,10 +1275,24 @@ body[data-screen="game"] { background: var(--page); }
 }
 /* the one layer that still answers to the active topping */
 .sauce-tint { background: radial-gradient(circle at 50% 46%, var(--ring-fill, transparent) 0%, transparent 74%); }
-/* Picking a Wild's topping is rare and consequential: the new colour washes
-   outward across the sauce instead of swapping in place. Transform + opacity
-   only — the gradient colour itself is set once, before the sweep starts. */
-.sauce-tint.is-sweeping { animation: sauce-sweep 280ms var(--e-out) 1; }
+/* Picking a Wild's topping is rare and consequential: the chosen colour washes
+   outward across the sauce (fx.js). Its own layer at its own alpha (--wash-fill,
+   34%), because the resting tint above is 10% on purpose and a flourish on
+   that layer was invisible. Transform + opacity only — the colour is set
+   before each wash starts. Inside .sauce, like every centre layer that moves. */
+.sauce-wash {
+  position: absolute; inset: 0; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle closest-side, var(--wash-fill, transparent) 0%, var(--wash-fill, transparent) 55%, transparent 100%);
+}
+.sauce-wash.is-washing { animation: sauce-wash 520ms cubic-bezier(.16,1,.3,1) 1; }
+/* The reversal sweep (fx.js). Inside .sauce, like every centre layer that
+   moves, so the plaque, the pile and the direction label never animate. */
+.dir-sweep {
+  position: absolute; inset: 0; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: conic-gradient(from -20deg, transparent 0deg, rgb(245 203 92) 20deg, transparent 40deg, transparent 360deg);
+}
+.dir-sweep.is-cw  { animation: dir-sweep-cw 620ms cubic-bezier(.16,1,.3,1) 1; }
+.dir-sweep.is-ccw { animation: dir-sweep-ccw 620ms cubic-bezier(.16,1,.3,1) 1; }
 
 /* --- the ledger: one topping per card played, in its owner's wedge ------- */
 /* `overflow: visible` is deliberate and is half of the annulus floor (the
@@ -1420,6 +1611,19 @@ body[data-screen="game"] { background: var(--page); }
 .plate.is-pop { animation: tondo-pop 260ms var(--e-pop) 1; }
 .plate.is-loud { animation: tondo-pop 200ms var(--e-out) 1; }
 .plate.is-loud::after { animation: tondo-ring-pulse 220ms var(--e-out) 1; }
+/* The TONDO stamp and its ring (fx.js), for a seat plate and for your tile.
+   After the is-pop / is-loud rules on purpose: same specificity, so source order
+   gives the stamp `animation` while both are on (a turn pop landing mid-stamp
+   is swallowed, not stacked). The ring's resting `opacity: 0` is not
+   decoration: .you-seat has no ::after of its own to inherit it from, so under
+   reduced motion (animation silenced) the ring would sit there at full
+   strength for as long as the class is on. */
+.plate.is-tondo, .you-seat.is-tondo { animation: tondo-stamp 440ms linear 1; }
+.plate.is-tondo::after, .you-seat.is-tondo::after {
+  content: ""; position: absolute; inset: -6px; border-radius: 22px;
+  border: 2px solid var(--gold); pointer-events: none; opacity: 0;
+  animation: tondo-ring-shout 420ms cubic-bezier(.16,1,.3,1) 1 forwards;
+}
 
 .seat-body { display: flex; align-items: flex-end; gap: max(4px, calc(9px * var(--ss))); transition: opacity var(--t-state) var(--e-out); }
 .seat-left .seat-body { flex-direction: row-reverse; }
@@ -1511,28 +1715,46 @@ body[data-screen="game"] { background: var(--page); }
   color: rgba(255,247,232,.5); background: transparent; padding: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* The banner sat at 30% of the stage and covered 100% of the MATCH plaque at
-   1800x900, 1280x900 and 1024x768 (88.8% at 375x812) for the ~840ms at the
-   start of every one of your turns — i.e. the answer to "what am I allowed to
-   play?" was hidden behind the words YOUR TURN. It keeps its slam; it is
-   simply anchored clear of the plaque now.
+/* Where the banner hangs has been moved twice, and both moves were forced by
+   the thing it was covering.
 
-   It hangs from the TOP of the stage rather than at a fraction of it. A
-   proportional offset does not work: the clearance it needs is the plaque's
-   half-height plus the banner's own height, which are fixed px, while the
-   fraction shrinks exactly when the window gets short — a first attempt at
-   `50% - --table-fit * .34` still covered 27.8% of the plaque at 1024x768 and
-   33.7% at 1800x747. Upward, never downward: .center only ever moves DOWN from
-   50% (the short-phone bands push it to 58/60/64%), so above is the only
-   direction that is safe at every size. Measured clearance banner-bottom to
-   plaque-top: 11px at the worst size tested (320x568) and 13-115px everywhere
-   else, with 0% of the plaque covered at all of them.
-   The trade this makes: on a full table the banner covers the TOP opponent's
-   seat for its ~840ms. That is the cheaper of the two — a seat tile whose
-   information is duplicated in the header queue, against the one element that
-   answers "what am I allowed to play?". */
+   It sat at 30% of the stage and covered 100% of the MATCH plaque at 1800x900,
+   1280x900 and 1024x768 (88.8% at 375x812) for the ~840ms at the start of every
+   one of your turns. It then hung from the TOP of the stage, which cleared the
+   plaque everywhere — and on a full table covered the TOP opponent's seat
+   instead, both for that ~840ms and for the whole of round over, where the win
+   banner stays up (measured: seat p3 under it at 390x844, 1280x800 and
+   1440x900, at round over and at YOUR TURN).
+
+   It now stands on the BOTTOM of the stage. Below the side seats is the one
+   band no seat is placed in: side seats sit on the stage's vertical middle,
+   the top seat above them, and yours is in the tray, not on the stage. The
+   plaque is never down here either (.center only moves DOWN on short phones,
+   and the plaque is the top of that column). Measured, four seats, every
+   animation finished — gap from the nearest seat above / share of the top card
+   covered, round over then YOUR TURN:
+     1440x900  51px / 0%     302px / 0%
+     1280x800   8px / 22.4%  234px / 0%   (6px / 25.1% with a 15-char winner)
+     390x844   71px / 0%     116px / 0%
+   8px is the lowest the banner goes: its rotated box already reaches 0-6px from
+   the stage's clipped bottom edge, and any lower clips its own lip.
+   The trades, measured rather than hoped away:
+   - the event ribbon (also bottom: 8px) is underneath it. At round over it says
+     what the banner says louder ("Carmela is out of cards"); at YOUR TURN it is
+     covered for the banner's ~840ms.
+   - a compressed desktop stage shorter than ~260px (round over at 760-768px
+     tall) has no band left below the side seats: the banner's corner overlaps
+     a side seat's pill by 3px at 1024x768, 5px at 1366x768, 9px at 1280x760
+     (3px more for a 15-char winner) and covers 35-42% of the winning card.
+     Hung from the top, the same banner covered the top seat AND a side seat
+     and 87-100% of the MATCH plaque at those sizes; no position on that stage
+     clears every seat.
+   - short phones push the pile down to the stage's bottom edge, where the low
+     banner would sit on the top card. That is the one thing YOUR TURN may not
+     cover — it is the answer to "what can I play?" on your own turn — so there
+     it hangs from the top instead (the rule below), over the top seat. */
 .banner {
-  position: absolute; left: 50%; top: 8px; z-index: 12;
+  position: absolute; left: 50%; bottom: 8px; z-index: 12;
   transform: translate(-50%, 0) rotate(-2deg);
   font-family: var(--font-display); font-weight: 800; font-size: 30px; letter-spacing: .02em;
   /* One line, always. The longest string this ever holds is a winner's name
@@ -1544,6 +1766,26 @@ body[data-screen="game"] { background: var(--page); }
   box-shadow: 0 4px 0 rgba(96,58,14,.5), 0 16px 30px rgba(0,0,0,.5);
   animation: tondo-slam 240ms var(--e-pop) 1;
   pointer-events: none; /* never a hit-target over the table */
+}
+/* YOUR TURN goes back to the top of the stage wherever the low placement would
+   touch #top-card, in any of your turn's layouts: plain, or compressed by the
+   TONDO, callout or drawn-card bar. Measured over 123 viewports x those four
+   layouts, every animation finished (task-5 sweeps): the low banner needs ~59px
+   below the card and runs out of it
+     - on phone-width screens up to 640px tall in the plain turn, and up to
+       800px tall with a bar open (375/390/412x800: 58px, covered; x812: 62px);
+     - on narrow landscape, where .center drops to 58% (568x320: 51px).
+   Chosen by viewport, not by layout: a banner that jumped from the top to the
+   bottom because a bar closed during its 840ms would be worse than one over the
+   top seat. 820px is the last covered height plus 20px. The cost of that margin
+   and of choosing by viewport: at 801-820px tall (375x812 among them) it hangs
+   high where the low banner would have cleared the card by 3-4px, and it covers
+   the top seat there. Where the stage is at or near its 180px floor (480-568px
+   tall, 719x600-640) the high banner also clips a corner of the MATCH plaque.
+   The win banner, up while nothing can be played, stays low everywhere. */
+@media (max-width: 719px) and (min-height: 541px) and (max-height: 820px),
+       (max-width: 599px) and (max-height: 540px) {
+  .banner:not(.win) { top: 8px; bottom: auto; }
 }
 /* Asymmetric: the slam is the event, the exit is just tidying up. app.js
    waits 140ms before hiding, and this is the animation it was waiting for —
@@ -1602,6 +1844,8 @@ body[data-screen="game"] { background: var(--page); }
   background: var(--ink); border: 2px solid var(--tone-edge, var(--bas-edge));
   font-family: var(--font-display); font-weight: 800; font-size: 11px; color: var(--navy);
 }
+/* A +2 landing: the victim's count takes the punch as the last card arrives. */
+.count-badge.is-punched, .you-count.is-punched { animation: badge-punch 260ms cubic-bezier(.34,1.56,.64,1) 1; }
 .you-pill {
   display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0;
   padding: 4px 11px 5px; border-radius: 999px;
@@ -1731,8 +1975,8 @@ body[data-screen="game"] { background: var(--page); }
 .hand-row::-webkit-scrollbar { display: none; }
 .hand-row.is-overflowing { justify-content: flex-start; }
 .fade { position: absolute; top: 0; bottom: 0; width: 28px; pointer-events: none; }
-.fade-left { left: 0; background: linear-gradient(270deg, rgba(10,17,32,0), var(--tray-bg)); }
-.fade-right { right: 0; background: linear-gradient(90deg, rgba(10,17,32,0), var(--tray-bg)); }
+.fade-left { left: 0; background: linear-gradient(270deg, rgba(16,12,10,0), var(--tray-bg)); }
+.fade-right { right: 0; background: linear-gradient(90deg, rgba(16,12,10,0), var(--tray-bg)); }
 
 /* The fan: every card leans with its distance from the middle (--off, set per
    card in JS) plus a small per-card jitter, so the hand looks dealt by hand.
@@ -1970,6 +2214,41 @@ body[data-screen="game"] { background: var(--page); }
   .stage.is-compressed .seat-top .seat-status { max-width: 170px; }
 }
 
+/* The vertical half of the same trade, at every width. Narrowing the pill is
+   what the band above does, but the top seat's pill is centred DIRECTLY above
+   the plaque, so width buys nothing once the stage is short enough and the
+   overlap is vertical: the pill's bottom sits 8.1px into the plaque at
+   1024x768, 8.7px at 1280x800 and 7.4px at 375x812 in the TONDO and callout
+   scenes (measured, every animation finished, via
+   scripts/probes/seat-plaque-gap.js). The 375x812 figure is why this is not
+   scoped to desktop: the note above records that size as clearing by 1.5px,
+   and it no longer does.
+
+   Moving the seat is not available. `top` here is decided by the
+   `max(..., --seat-tile)` floor, never by the circumference term — 50% of the
+   stage minus half the table is 7.7px against a 50.2px floor at 1024x768 — so
+   a `--min-orbit`-style clamp on `.seat-top` is inert, and the 10px of
+   headroom left above the tile is less than the 8.7px overlap plus any
+   clearance worth having. The plaque cannot move either: 7px below it is the
+   top card.
+
+   So the pill tucks over the bottom of its own tile, the way a badge sits on
+   an avatar. It moves with `position: relative`, NOT a negative margin: the
+   plate is centred on its anchor point, so a margin that shrinks the plate
+   gives back half the shift as re-centring — measured, a -.34 margin bought
+   only 0.4px of clearance at 1024x768 instead of 8.5px. Offsetting a
+   still-static box moves the pill and nothing else, and it leaves the seat's
+   own rect the size every other probe already measures.
+
+   .34 of the tile scales with the seat instead of being re-tuned per band, and
+   it clears every measured row: +4.8px at 375x812 (the tightest), +8.9px at
+   1024x768, +10.1px at 1280x800, +12.1px at 390x844, +19.8px at 414x896,
+   +26.3px at 1440x900. It costs the bottom ~27% of the tile, and only on the
+   top seat, only while a decision bar is open. */
+.stage.is-compressed .seat-top .seat-status {
+  position: relative; top: calc(var(--seat-tile) * -.34);
+}
+
 /* A side seat's card fan sits BESIDE its tile, so the plate's centre is the
    pair's centre and the tile itself is carried ~22px toward the middle of the
    table (measured at 360x700: tile at 241.9-280.9 for a seat point of 281.2).
@@ -1981,6 +2260,24 @@ body[data-screen="game"] { background: var(--page); }
   .stage.is-compressed .fan { display: none; }
 }
 
+/* ...and where that trade has already been made, the pill must NOT tuck.
+   The tuck above lifts the status pill over the bottom of its own tile, which
+   also puts it over the `.count-badge` — measured 81.3% of the badge at
+   360x640 and 320x568, with `document.elementFromPoint` at the badge's centre
+   returning `.seat-verb`. In this band the fan is gone by the rule directly
+   above, whose own comment promises "the count badge still carries the
+   number", so the tuck would leave the top opponent's card count with no
+   carrier at all — at the exact moment a decision bar is asking the player to
+   act on it.
+
+   And it buys nothing here: the gap the tuck exists to open is already +9.8px
+   at both sizes before it applies (measured, scripts/probes/seat-plaque-gap.js,
+   TONDO and callout). The tuck was justified at 375x812 (-7.4px) and 390x844
+   (-0.4px), both of which are TALLER than 780px and so keep it. */
+@media (max-width: 719px) and (max-height: 780px) {
+  .stage.is-compressed .seat-top .seat-status { position: static; top: auto; }
+}
+
 /* On short portrait/tablet screens, contextual trays scroll internally rather
    than pushing the table or the primary controls out of the viewport. */
 /* (band raised from 700px to 780px: a 360x740 phone has the same problem the
@@ -1989,7 +2286,15 @@ body[data-screen="game"] { background: var(--page); }
    into the MATCH plaque. Capping the tray and letting it scroll puts that
    viewport back in the regime the rules below already solve.) */
 @media (max-width: 719px) and (min-height: 541px) and (max-height: 780px) {
-  .stage.is-compressed + .tray {
+  /* `~`, not `+`. `#celebration` sits between `#stage` and `.tray` in the
+     markup, so the adjacent-sibling form matched ZERO elements and this whole
+     block — carefully measured, and needed — never applied to anything. The
+     symptom it was written to prevent was live the entire time: at 360x640
+     with the callout bar open, the Leave button sat 104px BELOW the viewport
+     and could not be reached. A selector that silently matches nothing is
+     indistinguishable from a rule that was never written; assert the match
+     count, do not assume it. */
+  .stage.is-compressed ~ .tray {
     min-height: 0;
     max-height: calc(100dvh - 277px - env(safe-area-inset-top));
     overflow-y: auto;
@@ -2164,4 +2469,126 @@ body[data-screen="game"] { background: var(--page); }
 
 @media (max-height: 540px) and (min-width: 560px) and (max-width: 599px) {
   .center { top: 58%; }
+}
+
+/* ---------------------------------------------------------------- the pie
+   A match is four rounds. The chip is what the table sees while playing (one
+   short label, no scores — a scoreboard on screen during a decision is noise);
+   the board is what replaces the dead hand the moment a round ends. */
+
+.slice-chip {
+  flex: 0 0 auto;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .18em;
+  text-transform: uppercase; color: rgba(255,247,232,.42);
+  padding: 4px 9px; border-radius: 999px;
+  border: 1px solid rgba(255,247,232,.12);
+  white-space: nowrap;
+}
+.slice-chip[hidden] { display: none; }
+
+.scoreboard {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  padding: 18px 20px 16px;
+  border-radius: 18px;
+  background: rgba(255,247,232,.045);
+  border: 1px solid rgba(255,247,232,.12);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.scoreboard[hidden] { display: none; }
+
+.score-head { text-align: center; }
+.score-title {
+  margin: 0;
+  font-family: var(--font-display); font-weight: 800; font-size: 22px;
+  letter-spacing: .01em; color: var(--ink);
+}
+.score-sub {
+  margin: 3px 0 0;
+  font-family: var(--font-voice); font-style: italic; font-size: 15px;
+  color: rgba(255,247,232,.5);
+}
+
+.score-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.score-row {
+  display: grid;
+  /* rank | name | what they just banked | running total */
+  grid-template-columns: 22px 1fr auto 56px;
+  align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 11px;
+  border: 1px solid transparent;
+}
+.score-rank {
+  font-family: var(--font-mono); font-size: 11px;
+  color: rgba(255,247,232,.35); text-align: center;
+}
+.score-name {
+  font-family: var(--font-body); font-weight: 700; font-size: 15px;
+  color: rgba(255,247,232,.86);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The points just banked — the one number that explains the round. */
+.score-delta {
+  font-family: var(--font-display); font-weight: 800; font-size: 14px;
+  color: var(--bas-solid);
+}
+.score-total {
+  font-family: var(--font-display); font-weight: 800; font-size: 19px;
+  color: var(--ink); text-align: right; font-variant-numeric: tabular-nums;
+}
+/* Your own row is marked by a border and a tint, never by colour alone. */
+.score-row.is-you {
+  background: rgba(255,247,232,.06);
+  border-color: rgba(255,247,232,.16);
+}
+.score-row.is-champion {
+  background: rgba(245,203,92,.14);
+  border-color: rgba(245,203,92,.42);
+}
+.score-row.is-champion .score-name,
+.score-row.is-champion .score-total { color: var(--gold); }
+/* A crown the champion row wears, so the win is not carried by gold alone. */
+.score-row.is-champion .score-rank::before { content: "★"; font-size: 13px; color: var(--gold); }
+.score-row.is-champion .score-rank { font-size: 0; }
+
+/* One pip per slice of the pie, filled as it is eaten. */
+.slice-pips { display: flex; justify-content: center; gap: 7px; }
+.slice-pip {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid rgba(255,247,232,.28);
+  transition: background-color var(--t-state) ease, border-color var(--t-state) ease;
+}
+.slice-pip.is-done { background: var(--gold); border-color: var(--gold); }
+
+/* The share button reuses the .btn.btn-quiet species as-is (no new colour,
+   radius or font size — the deliverable here is a string, not a surface) and
+   sits centred under the pips, in the scoreboard's own type. */
+.score-share { align-self: center; min-height: 44px; padding: 10px 20px; }
+
+/* The share button's own feedback line — never #score-sub, which renderMatch
+   rewrites on every snapshot and would erase this the moment anything else
+   changes at the table. */
+.score-share-msg {
+  margin: 0; text-align: center;
+  font-family: var(--font-voice); font-style: italic; font-size: 14px;
+  color: rgba(255,247,232,.5);
+}
+.score-share-msg:empty { display: none; }
+
+/* Shown only when the clipboard write did not land (absent, denied, or a
+   non-secure LAN origin). Read-only and pre-selected so a long-press on a
+   phone copies it without the player having to find the start of the text.
+   Font-size left at .input's own 16px on purpose: anything smaller can
+   trigger an iOS zoom-on-focus. */
+.score-share-fallback {
+  min-height: 44px; resize: none; text-align: center;
+  font-family: var(--font-body);
+}
+
+@media (max-width: 560px) {
+  .scoreboard { padding: 14px 14px 12px; border-radius: 15px; }
+  .score-title { font-size: 19px; }
+  .score-sub { font-size: 14px; }
+  .score-row { grid-template-columns: 20px 1fr auto 48px; gap: 8px; padding: 6px 8px; }
+  .score-total { font-size: 17px; }
 }

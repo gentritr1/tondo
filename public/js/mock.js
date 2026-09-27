@@ -13,7 +13,8 @@
  * Deterministic entry points for screenshots:
  *   ?mock=1&scene=<name>   jump straight into a scene
  *   window.__mock.goto('<name>')
- * Scene names: lobby, yourTurn, opponents, tondo, callout, drawn, wild, roundOver.
+ * Scene names: lobby, yourTurn, opponents, tondo, callout, drawn, wild, roundOver,
+ * pieComplete.
  *
  * Mock convenience (not a protocol claim): `createRoom` seats you alone, while
  * `joinRoom` drops you into a table already filled with three bots so the lobby
@@ -21,10 +22,17 @@
  */
 
 const CODE = 'BASIL-4821';
+/* Properly cased, matching server/bot.js's real BOT_NAMES — not ALL CAPS.
+   A real bot's `.name` off the wire is never shouty (game.js's `up()` only
+   uppercases LOG lines, a separate derived string, never the seat name
+   itself); ALL-CAPS seat names here would be testing a shape the app never
+   actually receives. The hardcoded log lines below (`'CARMELA IS PLAYING'`
+   etc.) are correctly independent strings, not derived from `.name`, so
+   they stay ALL CAPS on purpose, matching that same deliberate convention. */
 const BOTS = [
-  { id: 'p2', name: 'CARMELA', isBot: true, connected: true },
-  { id: 'p3', name: 'DOMINIC', isBot: true, connected: true },
-  { id: 'p4', name: 'PINA', isBot: true, connected: true },
+  { id: 'p2', name: 'Carmela', isBot: true, connected: true },
+  { id: 'p3', name: 'Dominic', isBot: true, connected: true },
+  { id: 'p4', name: 'Pina', isBot: true, connected: true },
 ];
 const c = (id, suit, value) => ({ id, suit, value });
 
@@ -53,6 +61,47 @@ function seatsWithYou() {
   return [{ id: 'p1', name: table.name, isBot: false, connected: true }].concat(table.seats.slice(1));
 }
 
+/**
+ * The pie, faked at a plausible mid-match position (PROTOCOL.md v1.1). The
+ * scoreboard and the slice chip both read `match`, so a mock without one
+ * renders neither — which silently hides the thing a round-boundary scene
+ * exists to show.
+ */
+function matchBlock() {
+  const over = table.phase === 'roundOver';
+  // `pieComplete` reuses roundOver's table (same seats, same game-over banner)
+  // but is the FOURTH slice, not a mid-pie boundary — the one state the share
+  // button exists for.
+  const pieDone = table.scene === 'pieComplete';
+  const winnerId = table.game && table.game.winnerId;
+  const points = 107;
+  const scores = { p1: 81, p2: 166, p3: 0, p4: 0 };
+  if (over && winnerId) scores[winnerId] = (scores[winnerId] || 0) + points;
+  const standings = table.seats
+    .map((s) => ({
+      id: s.id, name: s.name, isBot: s.isBot,
+      points: scores[s.id] || 0,
+      roundsWon: (scores[s.id] || 0) > 0 ? 1 : 0,
+    }))
+    .sort((a, b) => b.points - a.points || b.roundsWon - a.roundsWon);
+  const best = standings[0];
+  return {
+    roundsPerPie: 4,
+    round: pieDone ? 4 : (over ? 2 : 1),
+    complete: pieDone,
+    championIds: pieDone ? ['p2'] : [],
+    leaderIds: best && best.points ? [best.id] : [],
+    standings,
+    lastRound: over && winnerId
+      ? { winnerId, points, forfeited: 0, breakdown: [] }
+      : null,
+    // The scripted table has no server to deal for it, so the boundary clock
+    // is shown at rest rather than counting toward a deal that cannot happen.
+    nextDueAt: null,
+    held: false,
+  };
+}
+
 function snapshot() {
   return {
     type: 'state',
@@ -63,6 +112,7 @@ function snapshot() {
     isHost: true,
     seats: table.seats,
     game: table.game,
+    match: matchBlock(),
   };
 }
 
@@ -236,6 +286,13 @@ const SCENES = {
       log: ['YOU PLAYED WILD → CHEESE', 'CARMELA PLAYED CHEESE 3', 'CARMELA IS OUT OF CARDS'],
     };
   },
+
+  /* Same table and banner as roundOver — this IS the round-over screen, just
+     on the pie's fourth slice, with `matchBlock()` reading `table.scene` to
+     mark the match complete and name Carmela (p2) champion. */
+  pieComplete() {
+    SCENES.roundOver();
+  },
 };
 
 const ORDER = ['yourTurn', 'opponents', 'tondo', 'callout', 'drawn', 'wild', 'roundOver'];
@@ -249,6 +306,104 @@ function go(name) {
 function next() {
   const i = ORDER.indexOf(table.scene);
   go(i < 0 || i === ORDER.length - 1 ? ORDER[0] : ORDER[i + 1]);
+}
+
+/**
+ * Emits one scripted BEFORE/AFTER pair so a check can watch exactly one event
+ * land. `seats` picks the table size (2-4). `victim: 'you'` makes a skip, +2 or
+ * callout land on you (p1), and makes a 3-4 seat reverse hand the turn to you;
+ * otherwise it lands on a bot.
+ * Resolves just after the AFTER snapshot is delivered.
+ */
+function transition(kind, { seats = 4, victim = 'bot' } = {}) {
+  table.seats = seatsWithYou().slice(0, 1).concat(BOTS.slice(0, seats - 1).map((b) => Object.assign({}, b)));
+  table.phase = 'playing';
+  const ids = table.seats.map((s) => s.id);
+  const hitsYou = victim === 'you';
+  // A reversal "on you" is the one that hands you the turn: the seat after you
+  // plays it, and the new order runs straight back to you.
+  const actor = hitsYou ? (kind === 'reverse' && seats > 2 ? ids[1] : ids[ids.length - 1]) : 'p1';
+  const target = hitsYou ? 'p1' : ids[1];
+  const hand = [c('h1', 'basil', '4'), c('h2', 'cheese', '2'), c('h3', 'anchovy', '9'), c('h4', 'basil', '6'), c('h5', 'pepperoni', '1')];
+  const counts = ids.map((id) => (id === 'p1' ? hand.length : 5));
+  const base = (over) => Object.assign({
+    direction: 1,
+    activeSuit: 'basil',
+    topCard: c('t-before', 'basil', '7'),
+    drawPileCount: 30,
+    turnPlayerId: actor,
+    winnerId: null,
+    players: playersFrom(counts),
+    hand: hand.slice(),
+    playableCardIds: actor === 'p1' ? ['h1', 'h4'] : [],
+    drawnDecisionCardId: null,
+    canDeclareTondo: false,
+    calloutTargets: [],
+    log: ['SCRIPTED BEFORE'],
+  }, over || {});
+  const after = (card, extra) => {
+    const players = playersFrom(counts.map((n, i) => (ids[i] === actor ? n - 1 : n)), extra && extra.players);
+    const handAfter = actor === 'p1' ? hand.slice(1) : hand.slice();
+    return base(Object.assign({ topCard: card, players, hand: handAfter, log: ['SCRIPTED AFTER'] }, extra && extra.game));
+  };
+  const next = (steps) => ids[((ids.indexOf(actor) + steps) % ids.length + ids.length) % ids.length];
+
+  let before = base();
+  let afterGame;
+  switch (kind) {
+    case 'number':
+      afterGame = after(c('t-num', 'basil', '3'), { game: { turnPlayerId: next(1) } });
+      break;
+    case 'skip':
+      afterGame = after(c('t-skip', 'basil', 'SKIP'), { game: { turnPlayerId: next(2) } });
+      break;
+    case 'plus2': {
+      const bumped = {};
+      bumped[target] = { cardCount: counts[ids.indexOf(target)] + 2 };
+      afterGame = after(c('t-plus2', 'basil', 'PLUS2'), { players: bumped, game: { turnPlayerId: next(2) } });
+      if (target === 'p1') afterGame.hand = afterGame.hand.concat([c('d1', 'cheese', '5'), c('d2', 'anchovy', '8')]);
+      break;
+    }
+    case 'reverse':
+      // At two seats the server treats REVERSE as a skip and leaves direction alone.
+      afterGame = seats === 2
+        ? after(c('t-rev', 'basil', 'REVERSE'), { game: { turnPlayerId: actor } })
+        : after(c('t-rev', 'basil', 'REVERSE'), { game: { direction: -1, turnPlayerId: ids[(ids.indexOf(actor) - 1 + ids.length) % ids.length] } });
+      break;
+    case 'wild':
+      afterGame = after(c('t-wild', null, 'WILD'), { game: { activeSuit: 'anchovy', turnPlayerId: next(1) } });
+      break;
+    case 'tondo': {
+      const declarer = hitsYou ? 'p1' : ids[1];
+      before = base({ players: playersFrom(counts.map((n, i) => (ids[i] === declarer ? 2 : n))) });
+      // The server's own wording (server/game.js declareTondo), so the rendered
+      // log line names the declaration and a probe can tell it was delivered.
+      afterGame = base({ players: playersFrom(counts.map((n, i) => (ids[i] === declarer ? 2 : n)), { [declarer]: { declaredTondo: true } }), log: ['SCRIPTED BEFORE', `${String(nameOf(declarer)).toUpperCase()} DECLARED TONDO`] });
+      break;
+    }
+    case 'callout': {
+      const caller = hitsYou ? ids[1] : 'p1';
+      const vuln = {};
+      vuln[target] = { cardCount: 1, vulnerable: true };
+      before = base({ players: playersFrom(counts, vuln), calloutTargets: target === 'p1' ? [] : [target] });
+      const caught = {};
+      caught[target] = { cardCount: 3, vulnerable: false };
+      // Upper-cased exactly as server/game.js writes it (`up(name)`), so the
+      // caller can be read back from this line. nameOf('p1') is "You".
+      const up = (id) => String(nameOf(id)).toUpperCase();
+      afterGame = base({ players: playersFrom(counts, caught), log: ['SCRIPTED BEFORE', `${up(caller)} CALLED OUT ${up(target)} - DRAW 2`] });
+      break;
+    }
+    default:
+      return Promise.reject(new Error('unknown transition: ' + kind));
+  }
+  table.game = before;
+  emit(snapshot());
+  return new Promise((resolve) => setTimeout(() => {
+    table.game = afterGame;
+    emit(snapshot());
+    setTimeout(resolve, 20);
+  }, 120));
 }
 
 /* --------------------------------------------------------------- routing */
@@ -363,7 +518,9 @@ function route(msg) {
       g.calloutTargets = [];
       g.players = g.players.map((p) => (p.id === msg.targetId
         ? Object.assign({}, p, { vulnerable: false, cardCount: p.cardCount + 2 }) : p));
-      g.log = g.log.slice(-3).concat(['YOU CAUGHT ' + nameOf(msg.targetId) + ' — THEY DREW 2']);
+      // server/game.js callOut()'s exact format: events.js reads the caller
+      // back out of it, so a looser wording here silently drops the lunge.
+      g.log = g.log.slice(-3).concat([`${String(table.name).toUpperCase()} CALLED OUT ${String(nameOf(msg.targetId)).toUpperCase()} - DRAW 2`]);
       emit(snapshot());
       later(1200, () => go('drawn'));
       return;
@@ -441,4 +598,4 @@ MockSocket.CLOSED = 3;
 window.WebSocket = MockSocket;
 // `emit` is exposed so a check can push a hand-written snapshot (a two- or
 // three-seat table, say) through the same path the server would use.
-window.__mock = { goto: go, next, scenes: Object.keys(SCENES), table, emit, snapshot };
+window.__mock = { goto: go, next, scenes: Object.keys(SCENES), table, emit, snapshot, transition };

@@ -4,10 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TONDO</title>
+<meta name="description" content="A pizza card game for 2–4 players. Match toppings, flip the order, and catch your friends forgetting TONDO.">
+<meta name="theme-color" content="#0B0908">
+<!-- Declaring an icon is also what STOPS the browser requesting /favicon.ico,
+     which had been 404ing on every single visit. -->
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=DM+Mono:wght@500&family=DM+Sans:wght@400;500;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./styles.css">
+<!-- The app is reached through a dynamic import() the preload scanner cannot
+     see, so without this the module request does not start until the inline
+     module runs: measured FCP 520ms against app.js responseEnd 722ms on a cold
+     profile, i.e. the home card painted ~200ms before bootHome could read
+     `tondo.lastTable`. -->
+<link rel="modulepreload" href="./js/app.js">
 </head>
 <body data-screen="home">
 
@@ -19,7 +30,7 @@
       <span class="home-mini-card back-face"></span>
       <span class="home-mini-card back-face"></span>
     </div>
-    <h1 id="home-title" class="wordmark">TONDO</h1>
+    <h1 id="home-title" class="wordmark" tabindex="-1">TONDO</h1>
     <p class="tagline">A pizza card game for 2&ndash;4 players.</p>
     <p class="home-hook">Match toppings, flip the order, and catch your friends forgetting TONDO.</p>
     <div class="home-facts" role="group" aria-label="Two to four players. Quick rounds. No account needed.">
@@ -33,7 +44,20 @@
 
     <button id="create-btn" type="button" class="btn btn-primary btn-block">Create table</button>
 
+    <!-- Secondary to "Create table": two primaries on one card means neither
+         is primary. The hint is static helper text, not a tooltip. -->
+    <button id="quickpie-btn" type="button" class="btn btn-block" aria-describedby="quickpie-hint">One quick pie</button>
+    <p id="quickpie-hint" class="tagline quick-hint">Warm up against three bots while your friends arrive.</p>
+
     <div class="rule"><span>or join one</span></div>
+
+    <!-- Present on first paint or not at all: `tondo.lastTable` is read
+         synchronously at boot, so this never appears after the card has been
+         painted and shoves "Create table" out from under a moving thumb. -->
+    <div id="last-table" class="last-table" hidden>
+      <button id="rejoin-btn" type="button" class="btn btn-block" aria-describedby="last-table-sub">Rejoin last table</button>
+      <p id="last-table-sub" class="home-hook last-table-sub"></p>
+    </div>
 
     <div class="join-row">
       <label class="field field-grow" for="code-input">
@@ -45,6 +69,10 @@
 
     <p id="home-msg" class="msg" role="status" aria-live="polite"></p>
     <button type="button" class="btn btn-tiny" data-help-open>How to play</button>
+    <!-- The card's quiet register, same species as "How to play". It arms on
+         the first tap and wipes on the second; the warning is announced by
+         #home-msg, which is already a polite live region. -->
+    <button id="forget-btn" type="button" class="btn btn-tiny btn-forget">Forget this device</button>
   </div>
 </section>
 
@@ -52,7 +80,7 @@
 <section id="screen-lobby" class="screen lobby" role="main" aria-labelledby="lobby-title">
   <div class="lobby-card">
     <div class="lobby-head">
-      <h1 id="lobby-title" class="lobby-mark">TONDO</h1>
+      <h1 id="lobby-title" class="lobby-mark" tabindex="-1">TONDO</h1>
       <div class="field-label">Table code</div>
       <div class="code-row">
         <span id="room-code" class="code">&mdash;</span>
@@ -70,6 +98,10 @@
     <p id="lobby-wait" class="msg fx-panel">Waiting for the host to start&hellip;</p>
 
     <p id="lobby-msg" class="msg" role="status" aria-live="polite"></p>
+    <!-- The lobby is where a new player sits waiting with nothing to do, and it
+         was the one screen with no way into the rules. Same quiet register as
+         the home card's. -->
+    <button type="button" class="btn btn-tiny" data-help-open>How to play</button>
     <button id="leave-btn" type="button" class="btn btn-ghost btn-block">Leave table</button>
   </div>
 </section>
@@ -79,9 +111,22 @@
 
   <div class="strip">
     <div class="strip-inner">
-      <h1 id="game-title" class="strip-mark">TONDO</h1>
+      <h1 id="game-title" class="strip-mark" tabindex="-1">TONDO</h1>
       <div id="queue" class="queue"></div>
+      <div id="slice-chip" class="slice-chip" hidden></div>
       <div id="strip-code" class="strip-code"></div>
+      <button id="sound-btn" type="button" class="btn btn-tiny strip-sound" aria-pressed="false">
+        <span class="sound-glyph" aria-hidden="true"></span>
+        <span class="sr-only">Sound</span>
+      </button>
+      <!-- `hidden` until app.js confirms navigator.vibrate exists. A toggle
+           that does nothing on an iPhone is worse than no toggle, and the
+           default is the wrong way round on purpose: nothing is offered until
+           the capability is proven. -->
+      <button id="haptics-btn" type="button" class="btn btn-tiny strip-sound strip-haptics" aria-pressed="false" hidden>
+        <span class="haptics-glyph" aria-hidden="true"></span>
+        <span class="sr-only">Vibration</span>
+      </button>
       <button type="button" class="btn btn-tiny strip-help" data-help-open aria-label="How to play">?</button>
     </div>
   </div>
@@ -102,6 +147,8 @@
           <div class="sauce-slices"></div>
           <div id="wedge-glow" class="wedge-glow"><svg class="wedge-sector" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" focusable="false"><path id="wedge-sector" d="M50 50L50 .465A49.535 49.535 0 0 1 99.535 50Z"></path></svg><span class="wedge-edge"></span></div>
           <div class="sauce-tint"></div>
+          <div class="sauce-wash" aria-hidden="true"></div>
+          <div class="dir-sweep" aria-hidden="true"></div>
           <div id="ledger" class="ledger"></div>
           <div class="sauce-vignette"></div>
           <div class="oven-mark">TONDO</div>
@@ -110,14 +157,21 @@
     </div>
 
     <div class="center">
-      <div id="plaque" class="plaque">
+      <!-- The plaque is the answer to "what may I play?": a named group, so a
+           screen reader reads the topping and the number as one requirement
+           rather than as three loose words in the middle of the table. -->
+      <div id="plaque" class="plaque" role="group" aria-label="Match requirement">
         <div class="plaque-head">
           <span id="match-label" class="plaque-label">Match</span>
-          <span id="dir-badge" class="dir-badge">&#8635;</span>
+          <!-- Glyphs, not words: #match-suit and #dir-label say the same
+               things in text, and naming the group does not hide its
+               children — unhidden, the plaque read "Topping / ↻ / ≈ /
+               Anchovy". -->
+          <span id="dir-badge" class="dir-badge" aria-hidden="true">&#8635;</span>
         </div>
         <div class="plaque-row">
           <div class="plaque-pair">
-            <span id="match-glyph" class="match-glyph"></span>
+            <span id="match-glyph" class="match-glyph" aria-hidden="true"></span>
             <span id="match-suit" class="match-suit"></span>
           </div>
           <div id="match-or-wrap" class="plaque-pair fx-tight">
@@ -150,7 +204,7 @@
       </div>
 
       <div class="dir">
-        <span id="dir-glyph" class="dir-glyph">&#8635;</span>
+        <span id="dir-glyph" class="dir-glyph" aria-hidden="true">&#8635;</span>
         <span id="dir-label" class="dir-label">Clockwise</span>
       </div>
     </div>
@@ -239,6 +293,26 @@
          was up to 900px from the nearest card on a wide screen. It follows the
          fan (or drops to the line below it when the fan needs the width), and
          the phone band swaps it for the tray's own Draw button. -->
+    <!-- The scoreboard takes the hand's place when a round ends. The hand is
+         dead at that moment, and the ten seconds after a round is the one
+         moment the table is all looking at the same thing. -->
+    <div id="scoreboard" class="scoreboard fx-panel" hidden>
+      <div class="score-head">
+        <h2 id="score-title" class="score-title">Round over</h2>
+        <p id="score-sub" class="score-sub"></p>
+      </div>
+      <ol id="score-rows" class="score-rows"></ol>
+      <div id="slice-pips" class="slice-pips" aria-hidden="true"></div>
+      <button id="share-btn" type="button" class="btn btn-quiet score-share" hidden>Copy result</button>
+      <!-- Its own node, never touched by renderMatch: #score-sub is
+           rewritten on every snapshot (someone leaving, a bot added, a
+           hold, even a resize), which was silently erasing the share
+           result — the FAILURE case worst of all, since that left a
+           readonly textarea on screen with the sentence explaining it
+           gone. -->
+      <p id="score-share-msg" class="score-share-msg"></p>
+    </div>
+
     <div class="hand-dock">
       <div id="hand-wrap" class="hand-wrap fx-panel">
         <div id="hand-row" class="hand-row"></div>
@@ -257,6 +331,7 @@
         <span>Draw a card</span>
       </button>
       <button id="newround-btn" type="button" class="btn btn-primary fx-fade" hidden>New round</button>
+      <button id="hold-btn" type="button" class="btn btn-quiet fx-fade" hidden>Hold</button>
       <div id="message" class="message txt-fade"></div>
     </div>
 
@@ -274,7 +349,7 @@
   <ul class="help-list">
     <li><b>Match the top card</b> by topping (colour) or by number — or play a Wild and pick the next topping.</li>
     <li>Nothing to play? <b>Draw one card.</b> If it fits you may play it at once; otherwise keep it and pass.</li>
-    <li><b>⊘ Skip</b> makes the next player lose their turn. <b>+2</b> makes them draw two and lose their turn. <b>↻ Reverse</b> flips the play order.</li>
+    <li><b>⊘ Skip</b> makes the next player lose their turn. <b>+2</b> makes them draw two and lose their turn. <b>⇄ Flip</b> reverses the play order (with two players it acts as a Skip).</li>
     <li>Down to <b>two cards</b>? Call <b>TONDO</b> before playing one of them. Forget, and anyone who catches you makes you draw two.</li>
     <li><b>First to zero cards wins</b> the round.</li>
   </ul>

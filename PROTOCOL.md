@@ -1,8 +1,21 @@
-# TONDO — wire protocol (v1, FROZEN)
+# TONDO — wire protocol (v1.2)
 
 This file is the contract between `server/` and `public/js/`. Neither side may
 deviate from it without updating this file first. All messages are JSON objects
 with a `type` field, sent over a single WebSocket at the same origin (`ws://host/`).
+
+**v1.2 (2026-09-09)** adds the round-boundary clock: `nextDueAt` and `held` on
+`match`, a new `hold` client message, and a **permission change** — `newRound`
+is now accepted from any seated human, not only the host. That last part is the
+only non-additive change in this version: it *widens* what is accepted, so no
+existing client breaks, but a client that hid its deal button behind `isHost`
+will keep hiding it and should be updated.
+
+**v1.1 (2026-09-09)** adds the `match` block to the `state` snapshot — the pie.
+The change is purely ADDITIVE: every v1 field keeps its name, type and meaning,
+no client→server message changed, and a client that ignores `match` plays
+exactly as it did before. That is why the version moved by a minor step rather
+than breaking the freeze.
 
 ## Game summary
 
@@ -16,11 +29,12 @@ Tondo is a 2–4 player UNO-style card game (pizza theme).
   - Active suit = suit chosen for the last wild if the top card is WILD, else top card's suit.
   - Drawn card playable → player must decide: play it or keep it (pass). Drawn card not playable → server keeps it and advances the turn automatically.
 - **Actions**: `SKIP` next player loses turn. `PLUS2` next player draws 2 and loses turn. `REVERSE` flips direction (acts as SKIP with 2 players). `WILD` player picks the next suit. No stacking.
-- **TONDO call**: a player holding exactly 2 cards may declare "TONDO" (any time before playing down to 1). If a player reaches 1 card without having declared, they are *vulnerable* until the start of their next turn; any other player may `callout` them → the vulnerable player draws 2 and is no longer vulnerable. Declaring resets when the hand grows above 2. Any growth of the hand (including a `PLUS2` landing on them) ends the vulnerability: both flags follow the hand, so a punished-by-cards player cannot also be called out.
-- **Round over**: first player to 0 cards wins. The host deals again; the opening seat rotates by one each round. `turnPlayerId` is `null` while the round is over, and the winner stays in `players` even if they leave.
+- **TONDO call**: a player holding exactly 2 cards may declare "TONDO" (any time before playing down to 1). If a player reaches 1 card without having declared, they are *vulnerable* until the start of their next turn; any other player may `callout` them → the vulnerable player draws 2 and is no longer vulnerable. Cards forced on a player (a `PLUS2`, a callout penalty) also end the vulnerability; a card they choose to draw on their own turn does not — at two players a SKIP or REVERSE can hand the turn straight back to a vulnerable player, and drawing used to erase the miss. Callout eligibility is the vulnerable flag alone, so at two players a target can briefly hold two cards. Declaring resets when the hand grows above 2. Round end clears every TONDO flag.
+- **The pie**: a match is four rounds ("slices"). The round winner banks the value of everyone else's remaining cards; highest total after the fourth slice takes the pie. See *The pie* below.
+- **Round over**: first player to 0 cards wins. Any seated human deals again; the opening seat moves to the seat after the previous opener each round, tracked by seat so a player joining or leaving between rounds does not skip or repeat anyone. `turnPlayerId` is `null` while the round is over, and the winner stays in `players` even if they leave.
 - When the draw pile empties, reshuffle the discard pile (minus the top card) into it. If both are empty, draws are no-ops.
 
-Bots: fill seats via host's `addBot`. Bots always declare TONDO; each bot callouts a vulnerable player with 35% probability (rolled once when the window opens, after a 1s delay).
+Bots: fill seats via host's `addBot`. Each named bot has a personality (`server/bot.js` `PERSONALITIES`): a chance to remember TONDO, a chance to call out a vulnerable player (rolled once per bot when the window opens, acted on after 1.4s so a human gets the first beat), and a think range. Think time scales with how many cards the bot could play, so a real choice visibly takes longer than a forced one. Bots forget TONDO at a rate tuned so a table of one human and three bots averages at least 0.30 callout windows on a bot per round (`node scripts/measure-scoring.js --callouts`).
 
 ## Client → server
 
@@ -31,7 +45,8 @@ Bots: fill seats via host's `addBot`. Bots always declare TONDO; each bot callou
 | `addBot` | `{}` | host, lobby or roundOver, up to 4 seats |
 | `removeSeat` | `{seatId}` | host, lobby or roundOver, bot seats only |
 | `startGame` | `{}` | host, lobby only, ≥2 seats |
-| `newRound` | `{}` | host, roundOver only |
+| `newRound` | `{}` | **any seated human**, roundOver only. Not host-gated: a table must never stall because one person put their phone down |
+| `hold` | `{}` | any seated human, roundOver only. Stops the between-slices countdown until somebody deals — sticky, not a snooze |
 | `leaveRoom` | `{}` | |
 | `play` | `{cardId, suit?}` | `suit` required iff card is WILD |
 | `draw` | `{}` | |
@@ -83,6 +98,59 @@ never freeze the table; the title snaps back when they reconnect.
 ```
 
 Card: `{ id: 'c17', suit: 'pepperoni'|'cheese'|'basil'|'anchovy'|null, value: '0'..'9'|'SKIP'|'PLUS2'|'REVERSE'|'WILD' }`. Ids are unique per round.
+
+## The pie (`match`, v1.1)
+
+A match is a **pie of four rounds** — four slices. The winner of a round banks
+the value of every card still in every other hand: numbers score their face
+value, `SKIP`/`PLUS2`/`REVERSE` score 20, `WILD` scores 50. After the fourth
+slice the highest total takes the pie; ties are broken by rounds won, and a
+genuine tie is shared rather than resolved by seat order.
+
+A fixed length rather than a race to a target because a round is worth very
+different amounts at different table sizes — measured over 2000 complete bot
+rounds per size with `scripts/measure-scoring.js`, the winner banks a median of
+51 points at two players, 85 at three and 137 at four. Any single "first to N"
+target would therefore run roughly 4 rounds at one table size and 8 at another.
+
+```js
+match: {
+  roundsPerPie: 4,
+  round: 2,                 // slices FINISHED (so the one being played is round + 1)
+  complete: false,          // true once the fourth slice is banked
+  championIds: [],          // set when complete; more than one entry means a shared pie
+  leaderIds: ['p3'],        // everyone currently tied at the top; empty while scoreless
+  standings: [{ id, name, isBot, points, roundsWon }],   // richest first, seats still at the table
+  lastRound: null | {       // what the round just finished was worth
+    winnerId: 'p3',
+    points: 107,
+    forfeited: 0,           // points from a hand returned to the deck by a player leaving
+    breakdown: [{ id, cards, points }]
+  },
+  nextDueAt: null | 1757430000000,  // epoch ms the next slice deals itself (v1.2)
+  held: false                       // a human asked the table to wait (v1.2)
+}
+```
+
+### The round-boundary clock (v1.2)
+
+When a slice ends the server arms a 10-second countdown and then deals the next
+slice itself. `nextDueAt` is an **absolute epoch millisecond**, not a remaining
+duration, so a client renders the countdown from its own clock and the server
+never has to tick at it.
+
+It arms only when all of these hold: the phase is `roundOver`, the pie is **not**
+complete, there are enough seats, and at least one human is connected. A finished
+pie deliberately never arms one — that is the boundary that has earned a pause,
+and it is where the group decides out loud whether to play another.
+
+`hold` clears it and sets `held`. The hold is **sticky**: it survives re-arming
+and is only spent when somebody actually deals. A hold that quietly expired
+would be worse than no hold at all.
+
+`match` is present on every snapshot, including in the lobby (where every total
+is zero). A completed pie stays on the wire through `roundOver` so the final
+scoreboard can be read; the next `startGame`/`newRound` resets it.
 
 Other players' hands NEVER cross the wire — only `cardCount`.
 The server is fully authoritative: clients send intent, never enforce rules,

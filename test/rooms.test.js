@@ -234,6 +234,25 @@ test('a finished round names no turn player and keeps the winner visible', () =>
     'winner stays visible even after leaving');
 });
 
+test('the opening seat rotates by identity, surviving a seat leaving between rounds', () => {
+  const manager = new RoomManager();
+  const { room } = manager.createRoom('Host', fakeSocket());
+  room.addSeat({ name: 'B1', isBot: true });
+  room.addSeat({ name: 'B2', isBot: true });
+  const [s0, s1, s2] = room.seats.map((s) => s.id);
+  const opener = () => room.game.players[room.game.turnIndex].id;
+
+  assert(room.startRound().ok, 'round 1');
+  eq(opener(), s0, 'round 1 opens with seat 0');
+  room.phase = 'roundOver';
+  assert(room.startRound().ok, 'round 2');
+  eq(opener(), s1, 'round 2 opens with seat 1');
+  room.phase = 'roundOver';
+  room.removeSeat(s1); // the last opener leaves
+  assert(room.startRound().ok, 'round 3');
+  eq(opener(), s2, 'round 3 opens with the seat that followed the one who left');
+});
+
 // ---------------------------------------------------------------------------
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

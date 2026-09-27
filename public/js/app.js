@@ -12,6 +12,11 @@
  */
 
 import { Connection } from './net.js';
+import { deriveEvents } from './events.js';
+import * as sound from './sound.js';
+import * as haptics from './haptics.js';
+import * as fx from './fx.js';
+import { pieResultText } from './share.js';
 
 /* ------------------------------------------------------------- constants */
 
@@ -59,7 +64,6 @@ const MS = {
   handIn: 190,      // a card arriving in your hand
   seatPop: 260,     // .plate.is-pop
   plaquePop: 200,   // .plaque.is-pop
-  sweep: 280,       // .sauce-tint.is-sweeping
   flash: 220,       // .plaque.flash
   refuse: 161,      // .card.refuse
   bannerOut: 140,   // .banner.is-leaving
@@ -161,6 +165,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (ch) => (
 const el = (id) => document.getElementById(id);
 const nodes = {};
 ['name-input', 'code-input', 'create-btn', 'join-btn', 'home-msg',
+ 'quickpie-btn', 'last-table', 'last-table-sub', 'rejoin-btn', 'forget-btn',
  'room-code', 'copy-btn', 'seat-list', 'host-controls', 'addbot-btn', 'start-btn',
  'lobby-wait', 'lobby-hint', 'lobby-msg', 'leave-btn',
  'queue', 'strip-code', 'stage', 'ring', 'plaque', 'match-label', 'dir-badge',
@@ -176,17 +181,34 @@ const nodes = {};
  'drawn-msg', 'drawn-play', 'drawn-keep',
  'wild-bar', 'wild-corner', 'wild-centre', 'wild-ghost', 'wild-grid',
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
- 'action-row', 'draw-btn', 'newround-btn', 'message', 'hint', 'game-leave', 'net-banner',
+ 'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips', 'share-btn', 'score-share-msg',
+ 'action-row', 'draw-btn', 'newround-btn', 'hold-btn', 'message', 'hint', 'game-leave', 'net-banner',
  'celebration',
 ].forEach((id) => { nodes[id] = el(id); });
 nodes['top-card'].style.setProperty('--land-rise', LAND_RISE + 'px');
 nodes['top-card'].style.setProperty('--land-scale', String(LAND_SCALE));
+/* The home card itself: an invite link hides it while it seats you, and every
+   revert of the forget control watches clicks anywhere inside it. */
+nodes['home-card'] = document.querySelector('.home-card');
 /* The three pieces of centre furniture the ledger has to keep its toppings off,
    plus the sauce disc they are positioned inside. Class-based, so they are
    resolved once here rather than re-queried on every repaint. */
 nodes.sauce = document.querySelector('.sauce');
 nodes.pile = document.querySelector('.center .pile');
 nodes.dir = document.querySelector('.center .dir');
+/* The one-shot effects for what just happened (fx.js). Handed the helpers
+   rather than importing this file, so the dependency only points one way. */
+fx.init({
+  nodes, pulse, popSeat, MS, RM, seatPlate,
+  seatNode: (id) => nodes.seats.querySelector(`.seat[data-player="${CSS.escape(id)}"]`),
+  youId: () => app.youId,
+  setSeatNote, announce,
+  // A seat's display name, as the table shows it ("Carmela", not "CARMELA").
+  playerName: (id) => nicelyName(playerName(id)),
+  // The Wild wash's colour: the chosen topping's light stop at 34%. Its own
+  // layer and alpha, so the resting .sauce-tint (10%) stays subtle.
+  washColor: (suit) => (SUITS[suit] ? tint(SUITS[suit].c, .34) : ''),
+});
 
 /* ----------------------------------------------------------------- state */
 
@@ -198,6 +220,12 @@ const app = {
   message: '',
   messageTone: 'info',
   pendingWild: null,       // card id waiting for a suit
+  autoJoin: '',            // a ?code= on THIS load, waiting for an open socket
+  autoJoinWait: false,     // a joinRoom is out and the seating line is showing
+  autoJoinTimer: 0,        // the deadline that hands the front door back
+  rejoinAttempt: false,    // this join came from a link or a remembered table
+  quickPie: null,          // null | 'creating' | 'seating' | 'dealing'
+  rosterPending: false,    // the next snapshot names tondo.lastTable's roster
   armedCard: null,         // coarse pointers: first tap arms, second commits
   calloutDismissed: '',    // target key the player chose to let pass
   bannerTimer: 0,
@@ -205,12 +233,12 @@ const app = {
   refuseTimer: 0,
   flashTimer: 0,
   lastTurn: undefined,
+  screenLine: '',          // setScreen's orientation line, owed one repaint
   wildWasOpen: false,      // so the picker steals focus once, not per snapshot
   drawnWasOpen: false,
   handMoved: false,      // the player has scrolled the hand at least once
   handOverflows: false,  // the hand row is wider than the tray
   pile: [],              // the last few discards, so the stack has visible depth
-  lastSeatsHtml: '',     // unchanged HTML is not rewritten, so animations survive
   lastQueueHtml: '',
   ledger: [],            // the Slice Ledger: one topping per card played
   tally: new Map(),      // playerId → cards played this round (uncapped truth)
@@ -224,16 +252,69 @@ const app = {
   glowRot: null,         // the lit wedge's rotation, UNWRAPPED so a Flip can
   glowDir: null,         //   sweep the long way round instead of the short one
   flight: null,          // the in-flight played-card ghost animation
+  roundDeal: null,       // {players, seatIndex, startDelay} during a new deal's repaint
   offline: true,         // stale snapshots stay visible, but never actionable
+  nextDueAt: 0,         // epoch ms the next slice deals itself, 0 when idle
+  nextTicker: 0,        // the 1s interval that rewrites the countdown line
   celebratedWinner: '', // one confetti beat per completed round
   confettiTimer: 0,     // celebrate()'s own cleanup, so a second burst owns it
+  seatNotes: {},       // id -> {text, until}: a transient seat verb
+  seatNoteTimer: 0,
 };
 
 const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus });
 
 /* --------------------------------------------------------------- helpers */
 
-function setScreen(name) { document.body.dataset.screen = name; }
+/* The heading of each screen, made focusable (`tabindex="-1"` in the markup)
+   so there is somewhere real to put focus when a screen is swapped. */
+const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', game: 'game-title' };
+
+/**
+ * Swap the visible screen — and take the keyboard with it.
+ *
+ * Every snapshot calls this, so it moves focus ONLY when the screen actually
+ * changed: otherwise a bot's snapshot would yank focus off whatever the
+ * player was standing on, twice a second. On a real change the outgoing
+ * screen is display:none'd, which drops focus to <body> (that is where
+ * "Deal the cards" left it), so focus goes to the new screen's <h1> and one
+ * orientation line goes to #live-polite.
+ *
+ * Returns true when the screen changed, so a caller can hang first-entry
+ * behaviour off it.
+ */
+function setScreen(name, opts) {
+  if (document.body.dataset.screen === name) return false;
+  document.body.dataset.screen = name;
+  const title = document.getElementById(SCREEN_TITLE[name]);
+  if (title) title.focus({ preventScroll: true });
+  /* The lobby's auto-opened rules are not a decision the player made, and the
+     table does not wait for them: the host can deal while they are still
+     reading. A modal nobody asked for must not end up covering a dealt hand
+     on somebody's turn — measured on a `--scene game` capture, which is
+     exactly what it did. Focus goes to the heading this swap just gave it,
+     not back to a "How to play" button on the screen they have left. */
+  closeAutoHelp(title);
+  const code = String(app.roomCode || '').toUpperCase();
+  const line = name === 'home' ? 'Home.'
+    : name === 'lobby' ? (code ? `Lobby for table ${code}.` : 'Lobby.')
+      : 'Game started.';
+  /* One arrival, one announcement. Arriving at the table and "Your turn" land
+     in the SAME synchronous snapshot, and #live-now is role="alert"
+     aria-live="assertive": it preempts the polite region, so the orientation
+     line loses a race it started (both regions were observed mutating on the
+     same tick, 103ms after "Deal the cards"). When the assertive turn alert is
+     going to carry the arrival, this line stands down rather than competing. */
+  /* renderGame writes this same region from the game log, and it runs later in
+     the very same repaint — without this the orientation line was overwritten
+     (usually with '') before a screen reader ever saw it. The line owns one
+     repaint; the next snapshot's event takes the region back. A silent swap
+     owes nothing, and says so, or a line left pending from an earlier screen
+     would eat the next game event's turn at the region. */
+  app.screenLine = (opts && opts.silent) ? '' : line;
+  if (app.screenLine) nodes['live-polite'].textContent = line;
+  return true;
+}
 
 /* A label swapping its words is something appearing on screen too, and a hard
  * swap reads exactly as jarring as a hard appearance. `setText` fades the old
@@ -381,6 +462,58 @@ function onNetStatus(state) {
     if (app.snap.phase === 'lobby') renderLobby(app.snap);
     else if (app.snap.game) renderGame(app.snap);
   }
+  // An invite link's join is the first thing the open socket does. `send()`
+  // queues nothing, so this is the only moment it can be sent from.
+  if (state === 'synchronized' && app.autoJoin) sendAutoJoin();
+}
+
+/* An open socket with no credentials is `synchronized`, which takes the net
+   banner DOWN — so without this the whole joinRoom round trip is a bare
+   gradient with nothing on it, and a reply that never comes is a bare
+   gradient forever. The wait says what it is doing and gives up out loud. */
+const AUTOJOIN_MS = 8000;
+
+/** The Join button's message, sent for the player, from a ?code= on this load. */
+function sendAutoJoin() {
+  const code = app.autoJoin;
+  app.autoJoin = '';
+  const seat = conn.seatFor(code);
+  app.rejoinAttempt = true;
+  const ok = conn.send({ type: 'joinRoom', code, name: app.name, token: seat ? seat.token : undefined });
+  if (!ok) {
+    // The socket went away between the status hook and here. Hand the player
+    // the ordinary front door with the code already in the box.
+    app.rejoinAttempt = false;
+    revealHome();
+    nodes['home-msg'].textContent = 'Not connected — try again in a moment.';
+    return;
+  }
+  app.autoJoinWait = true;
+  nodes['net-banner'].hidden = false;
+  nodes['net-banner'].textContent = 'Taking your seat…';
+  clearTimeout(app.autoJoinTimer);
+  app.autoJoinTimer = setTimeout(() => {
+    app.autoJoinTimer = 0;
+    app.rejoinAttempt = false;
+    revealHome();
+    nodes['home-msg'].textContent = 'That table did not answer — try again, or start a new one.';
+  }, AUTOJOIN_MS);
+}
+
+/** Takes the seating line down and disarms its deadline. */
+function endAutoJoinWait() {
+  if (!app.autoJoinWait) return;
+  app.autoJoinWait = false;
+  clearTimeout(app.autoJoinTimer);
+  app.autoJoinTimer = 0;
+  nodes['net-banner'].hidden = true;
+}
+
+/** Puts the home card back on screen after an auto-join that went nowhere. */
+function revealHome() {
+  endAutoJoinWait();
+  nodes['home-card'].hidden = false;
+  setScreen('home');
 }
 
 function names(snap) {
@@ -398,7 +531,38 @@ function playerName(id) {
 
 function nicely(name) {
   const s = String(name || '');
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  // Per WORD, not per string: title-casing the whole string turned
+  // "PEPPERONI" into "Pepperoni" correctly, but also turned "Chef Bot" into
+  // "Chef bot". Splitting on spaces before capitalising each word fixes
+  // both — for a string whose casing carries no meaning of its own, such as
+  // a hardcoded ALL-CAPS suit or card-value label (SUITS[...].label,
+  // ACTIONS[...]), which is what this function is for. For a NAME, whose
+  // casing a person or the game chose on purpose, use nicelyName() below —
+  // this function would flatten "AJ" to "Aj".
+  return s.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
+
+/**
+ * Same per-word title-casing as nicely(), for every PLAYER/SEAT name in the
+ * UI — with one more guard a suit label does not need: a word that already
+ * carries a capital past its first letter (McDonald, eBay, DeAndre, AJ) is
+ * left exactly as typed, never lowercased into it. A name is something a
+ * person chose the casing of on purpose, or the game did for "Chef Bot"
+ * (server/bot.js's own BOT_NAMES); a suit label never was. This still
+ * normalizes a plain-lowercase or ALL-CAPS-typed name a word at a time
+ * ("gent" -> "Gent"), since neither carries an interior capital to protect.
+ * It does NOT recover a capital buried inside an otherwise-uppercase word
+ * ("MCDONALD" -> "Mcdonald", not "McDonald") — that needs a name dictionary
+ * and is not attempted here.
+ * Duplicated in share.js (identical body), not imported: share.js has no
+ * DOM and app.js already imports pieResultText FROM it, so importing this
+ * back would be circular.
+ */
+function nicelyName(name) {
+  const s = String(name || '');
+  return s.split(' ').map((w) => (/[A-Z]/.test(w.slice(1))
+    ? w
+    : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())).join(' ');
 }
 
 /* --------------------------------------------------------------- network */
@@ -406,27 +570,48 @@ function nicely(name) {
 function handleMessage(msg, context) {
   if (context && context.rejoinRefused) {
     app.snap = null;
-    setScreen('home');
+    app.quickPie = null;
+    app.rejoinAttempt = false;
+    revealHome();
     nodes['home-msg'].textContent = msg.message || 'That seat is gone.';
     return;
   }
   if (msg.type === 'joined') {
     app.roomCode = msg.roomCode;
     app.youId = msg.youId;
+    app.rejoinAttempt = false;
     conn.remember(app.name, msg.roomCode, msg.token);
     try { sessionStorage.setItem('tondo.room', msg.roomCode); } catch { /* ignore */ }
+    // The code is known now; the roster is not — the seats arrive with the
+    // first snapshot, which fills it in. Rejoining the same table keeps the
+    // names already written rather than blanking them for one beat.
+    const code = String(msg.roomCode || '').toUpperCase();
+    const prev = readLastTable();
+    writeLastTable(code, (prev && prev.code === code) ? prev.roster : []);
+    app.rosterPending = true;
     return;
   }
   if (msg.type === 'state') { applySnapshot(msg); return; }
   if (msg.type === 'left') {
     app.snap = null;
+    app.quickPie = null;
+    app.rejoinAttempt = false;
     try { sessionStorage.removeItem('tondo.room'); } catch { /* ignore */ }
-    setScreen('home');
+    renderLastTable();
+    revealHome();
     return;
   }
   if (msg.type === 'error') {
     const text = msg.message || 'That did not work.';
-    nodes['home-msg'].textContent = text;
+    // A shortcut into a table nobody is sitting at any more is not an error
+    // the player did anything about; it is a dead end with a way out.
+    const fromMemory = app.rejoinAttempt;
+    app.rejoinAttempt = false;
+    app.quickPie = null;
+    if (fromMemory) revealHome();
+    nodes['home-msg'].textContent = (fromMemory && text === 'No table has that code.')
+      ? 'That table has closed — start a new one.'
+      : text;
     nodes['lobby-msg'].textContent = text;
     setMessage(text, 'bad');
     nodes['live-now'].textContent = text; // refusals are announced, not just shown
@@ -442,10 +627,20 @@ function send(payload) {
 /* -------------------------------------------------------------- snapshot */
 
 function applySnapshot(snap) {
+  // The table answered: the seating line has nothing left to say.
+  endAutoJoinWait();
   const prev = app.snap;
   app.snap = snap;
   app.youId = snap.youId;
   app.roomCode = snap.roomCode;
+
+  // The table you were last at, as the table itself reports it. Written when
+  // the roster is first known and refreshed at every round boundary, so the
+  // names on the home screen are the ones you actually played with.
+  if (app.rosterPending || (prev && prev.phase !== 'roundOver' && snap.phase === 'roundOver')) {
+    app.rosterPending = false;
+    writeLastTable(String(snap.roomCode || '').toUpperCase(), rosterOf(snap));
+  }
 
   const g = snap.game;
   // A wild waiting for a suit is only meaningful while that card is in hand.
@@ -463,23 +658,70 @@ function applySnapshot(snap) {
     app.glowRot = null;
     app.glowDir = null;
     app.celebratedWinner = '';
-    setScreen('lobby');
+    const enteredLobby = setScreen('lobby');
     renderLobby(snap);
+    // First time at a table: the rules, once, before anyone is waiting on you.
+    if (enteredLobby) maybeAutoHelp();
+    // One tap asked for a dealt table, so the lobby fills itself: one bot per
+    // snapshot (each addBot answers with one), then deal. Driven off the
+    // snapshot rather than a timer, so a dropped message stalls instead of
+    // seating a fifth chair.
+    if (app.quickPie === 'creating' || app.quickPie === 'seating') {
+      // Nothing is queued, so a dropped message ends the shortcut. The player
+      // is the host of a real lobby with every control in front of them —
+      // they are not stranded, but they are owed an explanation.
+      const stalled = () => {
+        app.quickPie = null;
+        nodes['lobby-msg'].textContent = 'Not connected — fill the table and deal when it comes back.';
+      };
+      if (snap.seats.length < 4) {
+        app.quickPie = 'seating';
+        if (!conn.send({ type: 'addBot' })) stalled();
+      } else {
+        app.quickPie = 'dealing';
+        if (!conn.send({ type: 'startGame' })) stalled();
+      }
+    }
     return;
   }
 
-  setScreen('game');
+  // Computed before the screen swap, because it decides whether the swap
+  // announces itself at all (see setScreen): the turn alert below is
+  // assertive and would preempt the polite line in the same tick.
+  const yourTurnNow = g && snap.phase === 'playing' && g.turnPlayerId === snap.youId;
+  const alertsTurn = !!(snap.phase !== 'roundOver' && yourTurnNow && app.lastTurn !== g.turnPlayerId);
+  setScreen('game', { silent: alertsTurn });
+  if (snap.phase === 'playing') app.quickPie = null;
   if (snap.phase !== 'roundOver') app.celebratedWinner = '';
   if (!prev || prev.phase === 'lobby') { setMessage('', 'info'); app.handMoved = false; }
 
-  const yourTurnNow = g && snap.phase === 'playing' && g.turnPlayerId === snap.youId;
   document.title = yourTurnNow ? '● Your turn — TONDO' : 'TONDO';
 
   if (snap.phase === 'roundOver' && g) {
-    const winner = playerName(g.winnerId);
-    showBanner(g.winnerId === snap.youId ? 'YOU WIN' : (nicely(winner) + ' WINS').toUpperCase(), 'win', 0);
-    if (app.celebratedWinner !== g.winnerId) {
-      app.celebratedWinner = g.winnerId;
+    /* On the last slice two things are true at once — somebody won the round
+       and somebody took the pie — and they are often different people. The
+       banner announces the bigger of the two, so it cannot contradict the
+       scoreboard directly underneath it. */
+    const m = snap.match;
+    const champions = (m && m.complete) ? (m.championIds || []) : [];
+    let text;
+    if (champions.length > 1) {
+      text = 'PIE SHARED';
+    } else if (champions.length === 1) {
+      text = champions[0] === snap.youId
+        ? 'YOU TAKE THE PIE'
+        : `${nicelyName(playerName(champions[0]))} TAKES THE PIE`.toUpperCase();
+    } else {
+      text = g.winnerId === snap.youId
+        ? 'YOU WIN'
+        : `${nicelyName(playerName(g.winnerId))} WINS`.toUpperCase();
+    }
+    showBanner(text, 'win', 0);
+    // Keyed on the pie as well as the round, so the champion gets their own
+    // burst rather than inheriting the round winner's.
+    const celebrationKey = champions.length ? `pie:${champions.join(',')}` : g.winnerId;
+    if (app.celebratedWinner !== celebrationKey) {
+      app.celebratedWinner = celebrationKey;
       celebrate();
     }
     app.lastTurn = undefined;
@@ -503,9 +745,13 @@ function applySnapshot(snap) {
   // ---- the ledger: whoever just played dresses their own wedge -----------
   // A new deal is a new pie. `roundOver` itself keeps the finished ledger on
   // screen — that is the round's scoreboard — and it is the NEXT round that
-  // wipes it.
+  // clears it: the finished pie is swept off the board first, and the new
+  // deal waits for the board to be clear before its first card leaves.
   const pgame = prev && prev.game;
-  if (prev && prev.phase === 'roundOver' && snap.phase === 'playing') ledgerClear();
+  if (prev && prev.phase === 'roundOver' && snap.phase === 'playing') {
+    const clearIn = ledgerClear({ sweep: true });
+    if (travel && travel.roundDeal) travel.startDelay = clearIn;
+  }
   // `pgame.turnPlayerId` is the player who just moved: this runs before the
   // repaint, so it is still the pre-play snapshot. A bot resolves here exactly
   // as your own play does. The suit is the ACTIVE one, so a Wild drops the
@@ -516,13 +762,62 @@ function applySnapshot(snap) {
       (travel && travel.flight) ? MS.flight : 0);
   }
 
-  renderGame(snap);
-  runTravel(travel, snap);
+  // ---- what actually happened -------------------------------------------
+  // The repaint below cannot tell a real move from an identical snapshot
+  // arriving twice; this can. Derived once here and shared, so a sound and a
+  // one-shot animation can never disagree about what the table just did.
+  // Deliberately outside the reduced-motion guard that gates `travel`: less
+  // movement is not less information.
+  const events = deriveEvents(prev, snap);
+
+  // Scheduled against the frame the card actually lands on, not the frame the
+  // snapshot arrived — the same delay ledgerAdd above already uses. A sound
+  // that beats its own card to the pile is heard as being out of sync. The +2
+  // throw below holds from this same frame.
+  const impactAt = (travel && travel.flight) ? MS.flight / 1000 : 0;
+  // renderHand reads this while it builds the new hand, so your cards rise as
+  // their own ghosts arrive rather than on the ordinary draw stagger. It lives
+  // for exactly this snapshot's repaint — a later repaint is not a deal — and
+  // is cleared even if the repaint throws, or the next mid-turn repaint would
+  // rebuild the hand as if it were being dealt.
+  app.roundDeal = (travel && travel.roundDeal) ? {
+    players: travel.deals.length,
+    seatIndex: travel.deals.findIndex((d) => d.playerId === snap.youId),
+    startDelay: travel.startDelay || 0,
+  } : null;
+  try {
+    renderGame(snap);
+  } finally {
+    app.roundDeal = null;
+  }
+  runTravel(travel, snap, events, impactAt);
+  if (events.length) {
+    // A new round's deal is heard when its first card leaves the deck, after
+    // the finished pie has been swept — not while the sweep is still running.
+    const heardAt = (travel && travel.roundDeal) ? (travel.startDelay || 0) / 1000 : impactAt;
+    sound.playForEvents(events, { impactAt: heardAt });
+    // The same moment in the third channel, for the one player it happened to.
+    // Silent on iOS and on any phone without a motor, so it only ever ADDS to
+    // the sound and the animation — nothing above is conditional on it, and
+    // the catch is what keeps that true in the other direction: fx.js's half
+    // of this moment runs a few lines below, and must not be reachable only
+    // through a channel half the devices here do not have.
+    try { haptics.forEvents(events, { impactAt: heardAt }); } catch { /* never breaks a repaint */ }
+  }
+  // The table's half of the same moment: a skipped seat ducks, a reversal
+  // sweeps the sauce, a Wild washes it, a TONDO stamps the declaring seat, a
+  // callout lunges the caller at the caught seat — and the seats say what
+  // happened in words that survive reduced motion. Fired after the repaint, at
+  // nodes that exist now.
+  fx.playForEvents(events, { impactAt });
 
   const pg = pgame;
   const turnChanged = !!(g && pg && prev.phase === 'playing' && snap.phase === 'playing'
     && g.turnPlayerId !== pg.turnPlayerId);
-  if (turnChanged) {
+  // The consequence ladder: when a card did something TO somebody, that owns
+  // the frame. A generic turn pop on top of a skip's duck or a +2's throw reads
+  // as two things happening, and at two players the "turn" often never moved.
+  if (turnChanged && !events.some((e) => fx.CONSEQUENCES.has(e.type))) {
     pulse(nodes.stage, 'is-turn-change', 220);
     // Whoever just took the turn: their tile pops once, so a bot's move has a
     // visible beginning as well as an end.
@@ -530,14 +825,10 @@ function applySnapshot(snap) {
   }
   // The plaque states what you must match. When that requirement actually
   // changes it acknowledges itself — state indication, not decoration.
+  // (A Wild's wash across the sauce is fx.js's, on its own layer: it fires for
+  // every Wild, including one that keeps the suit this check would miss.)
   if (g && pg && activeSuitOf(g) !== activeSuitOf(pg)) {
     pulse(nodes.plaque, 'is-pop', MS.plaquePop);
-    // A Wild is the one card whose topping is *chosen*: wash the new colour
-    // outward across the sauce. Rare enough to earn the flourish.
-    if (isWild(g.topCard) && !RM.matches) {
-      const tintLayer = nodes.ring.querySelector('.sauce-tint');
-      if (tintLayer) pulse(tintLayer, 'is-sweeping', MS.sweep);
-    }
   }
   // With a flight in the air the card lands when the ghost arrives (see
   // flyToPile); without one — no known source, or reduced motion — it lands now.
@@ -557,6 +848,48 @@ function popSeat(playerId) {
   setTimeout(() => plate.classList.remove('is-pop'), MS.seatPop);
 }
 
+/** The seat plate for a player, as it exists right now (seats are keyed). */
+function seatPlate(playerId) {
+  const seat = nodes.seats.querySelector(`.seat[data-player="${CSS.escape(playerId)}"]`);
+  return seat ? seat.querySelector('.plate') : null;
+}
+
+/** A seat says something for a moment — "skipped", "+2" — then goes back. */
+function setSeatNote(playerId, text, ms) {
+  if (!playerId) return;
+  app.seatNotes[playerId] = { text, until: Date.now() + ms };
+  scheduleSeatNoteExpiry();
+  if (app.snap) renderGame(app.snap);
+}
+
+/** One repaint at the EARLIEST live note's expiry, then again for the next.
+ *  A single timer re-armed for the newest note cancelled the older note's
+ *  repaint, so "skipped" stayed up until the second note expired (1839ms for a
+ *  1200ms note, measured). */
+function scheduleSeatNoteExpiry() {
+  clearTimeout(app.seatNoteTimer);
+  const now = Date.now();
+  let next = Infinity;
+  for (const [id, note] of Object.entries(app.seatNotes)) {
+    if (note.until <= now) delete app.seatNotes[id];
+    else next = Math.min(next, note.until);
+  }
+  if (next === Infinity) return;
+  app.seatNoteTimer = setTimeout(() => {
+    if (app.snap) renderGame(app.snap);
+    scheduleSeatNoteExpiry();
+  }, next - now + 20);
+}
+
+function liveSeatNote(playerId) {
+  const note = app.seatNotes[playerId];
+  if (!note) return null;
+  if (note.until <= Date.now()) { delete app.seatNotes[playerId]; return null; }
+  return note.text;
+}
+
+function announce(text) { nodes['live-now'].textContent = text; }
+
 /** Re-triggerable one-shot animation class; a second pulse restarts cleanly. */
 const pulseTimers = new WeakMap();
 function pulse(el, className, ms) {
@@ -575,7 +908,14 @@ function pulse(el, className, ms) {
 function planTravel(prev, snap) {
   const g = snap.game;
   const pg = prev && prev.game;
-  if (!pg || !g || RM.matches) return null;
+  if (!g || RM.matches) return null;
+  // A new deal — the next slice, or the first one out of the lobby, which has
+  // no previous game at all. This is the one moment cards are literally being
+  // dealt, so it gets the whole table's worth rather than a diff.
+  if (prev && (prev.phase === 'roundOver' || prev.phase === 'lobby') && snap.phase === 'playing') {
+    return planRoundDeal(g);
+  }
+  if (!pg) return null;
   if (!(prev.phase === 'playing')) return null;
 
   const plan = { flight: null, deals: [] };
@@ -615,16 +955,150 @@ function planTravel(prev, snap) {
   return (plan.flight || plan.deals.length) ? plan : null;
 }
 
-function runTravel(plan, snap) {
+/**
+ * One deal per player at their full hand, in seat order (`g.players`), starting
+ * AT the opener: the player who acts first is dealt first, so their hand is up
+ * within the deal's first lap instead of arriving last. `startDelay` is filled
+ * in by applySnapshot once it knows how long the finished pie takes to leave.
+ */
+function planRoundDeal(g) {
+  const ps = g.players || [];
+  if (!ps.length) return null;
+  const opener = Math.max(0, ps.findIndex((p) => p.id === g.turnPlayerId));
+  const deals = [];
+  for (let i = 0; i < ps.length; i++) {
+    const p = ps[(opener + i) % ps.length];
+    deals.push({ playerId: p.id, count: p.cardCount });
+  }
+  return { flight: null, deals, roundDeal: true, startDelay: 0 };
+}
+
+/** Where a player's cards go: your hand row, or an opponent's seat stack. */
+function travelTarget(playerId, snap) {
+  return playerId === snap.youId
+    ? nodes['hand-row']
+    : nodes.seats.querySelector(`.seat[data-player="${CSS.escape(playerId)}"] .stack`);
+}
+
+function runTravel(plan, snap, events, impactAt) {
   if (!plan) return;
+  if (plan.roundDeal) { runRoundDeal(plan, snap); return; }
   if (plan.flight) flyToPile(plan.flight.from, plan.flight.card);
   let wave = 0;
   for (const deal of plan.deals) {
-    const target = deal.playerId === snap.youId
-      ? nodes['hand-row']
-      : nodes.seats.querySelector(`.seat[data-player="${CSS.escape(deal.playerId)}"] .stack`);
-    if (target) dealGhosts(target.getBoundingClientRect(), deal.count, wave++);
+    const target = travelTarget(deal.playerId, snap);
+    // Cards a +2 forced on somebody are thrown off the card that did it, not
+    // dealt off the deck like an ordinary draw. A callout's two are thrown by
+    // whoever made the call, from their seat — when the log names them; an
+    // unknown caller falls back to an ordinary deal.
+    const impactMs = (impactAt || 0) * 1000;
+    const hit = (events || []).find((e) => e.type === 'plus2' && e.victimId === deal.playerId);
+    const caught = hit ? null
+      : (events || []).find((e) => e.type === 'callout' && e.targetId === deal.playerId && e.callerId);
+    const fromRect = caught ? seatCardRect(caught.callerId) : null;
+    let opts = null;
+    if (hit) opts = { lob: true, playerId: deal.playerId, impactMs };
+    else if (fromRect) opts = { lob: true, playerId: deal.playerId, impactMs, fromRect };
+    if (target) dealGhosts(target.getBoundingClientRect(), deal.count, wave++, opts);
   }
+}
+
+/* A round deal shows this many card backs per seat; your hand's first this-many
+   cards rise on their ghosts' arrival (renderHand). */
+const ROUND_DEAL_CARDS = 4;
+
+/**
+ * The deal goes around the table: card k of the player at seat position p
+ * leaves at startDelay + k·(players·90) + p·90 ms, so a four-seat table is 16
+ * ghosts over ~1.35s, one card to each seat per lap.
+ *
+ * Every ghost is created NOW, in the snapshot's own task, because your hand's
+ * entry animations (renderHand) are created in this task too: WAAPI delays that
+ * start on the same ready frame stay locked together, where a timer would drift
+ * from them by however long the task runs (see the lob's badge punch).
+ *
+ * But the table is not where it will be. The snapshot that deals is the one
+ * that swaps the scoreboard back out for the hand, so for the next --t-swap the
+ * tray is changing height, the stage with it, and --table-d is easing the seat
+ * orbit back out. Aimed at the snapshot frame, the worst ghost landed 116px
+ * from its target at 1440x900 and 146px at 390x844 (the deck and your hand move
+ * furthest). The first deal out of the lobby is worse in a different way: it has
+ * no sweep to wait for, so its first cards are ALREADY in the air while the game
+ * screen grows into place (118px at 390x844, measured in review). So every
+ * ghost follows its target until it lands (followDeal): before it leaves, from
+ * wherever the deck now is; once it has left, from the point it left, with only
+ * the destination moving.
+ */
+function runRoundDeal(plan, snap) {
+  const players = plan.deals.length;
+  const startDelay = plan.startDelay || 0;
+  const legs = [];
+  plan.deals.forEach((deal, seatIndex) => {
+    const el = travelTarget(deal.playerId, snap);
+    if (!el) return;
+    const ghosts = dealGhosts(el.getBoundingClientRect(), deal.count, 0,
+      { roundDeal: { players, seatIndex, startDelay } });
+    if (ghosts.length) legs.push({ el, ghosts });
+  });
+  if (legs.length) followDeal(legs);
+}
+
+/** Aims a round deal's ghosts at the table as it is on this frame, every frame
+ *  until the last one lands. A waiting ghost is re-seated on the deck too; a
+ *  flying one keeps the point it left from and the tilt it left with (a tilt
+ *  flipping sign mid-flight would snap), and only its destination follows. */
+function followDeal(legs) {
+  const aim = () => {
+    const src = pileRect();
+    let live = 0;
+    for (const leg of legs) {
+      const to = leg.el.isConnected ? leg.el.getBoundingClientRect() : null;
+      for (const g of leg.ghosts) {
+        if (!g.ghost.isConnected) continue;
+        const state = g.anim.playState;
+        if (state === 'finished' || state === 'idle') continue;
+        live++;
+        const t = g.anim.currentTime;
+        const flying = t !== null && t >= g.delay;
+        if (flying && !g.from) {
+          const st = g.ghost.style;
+          g.from = { left: parseFloat(st.left), top: parseFloat(st.top), width: parseFloat(st.width), height: parseFloat(st.height) };
+        }
+        const from = flying ? g.from : src;
+        if (to && to.width && from.width) aimDealGhost(g, from, to);
+      }
+    }
+    if (live) requestAnimationFrame(aim);
+  };
+  requestAnimationFrame(aim);
+}
+
+/** The ordinary deck → hand path: straight there, shrinking, fading at the end. */
+function dealFrames(dx, dy, tilt = dx > 0 ? 9 : -9) {
+  return [
+    { transform: 'translate(0,0) scale(1) rotate(0deg)', opacity: 1 },
+    { transform: `translate(${dx}px,${dy}px) scale(.55) rotate(${tilt}deg)`, opacity: .85, offset: .8 },
+    { transform: `translate(${dx}px,${dy}px) scale(.5) rotate(${tilt}deg)`, opacity: 0 },
+  ];
+}
+
+function aimDealGhost(g, src, to) {
+  const key = [src.left, src.top, src.width, src.height, to.left, to.top, to.width, to.height]
+    .map((v) => Math.round(v * 2)).join(',');
+  if (g.key === key) return;
+  g.key = key;
+  const node = g.ghost;
+  if (!g.from) {
+    node.style.left = src.left + 'px';
+    node.style.top = src.top + 'px';
+    node.style.width = src.width + 'px';
+    node.style.height = src.height + 'px';
+    node.style.setProperty('--cw', Math.round(src.width) + 'px');
+  }
+  const dx = (to.left + to.width / 2) - (src.left + src.width / 2);
+  const dy = (to.top + to.height / 2) - (src.top + src.height / 2);
+  if (!g.from) g.tilt = dx > 0 ? 9 : -9;   // a flying ghost keeps the tilt it left with
+  g.anim.effect.setKeyframes(dealFrames(dx, dy, g.tilt));
 }
 
 /** The pile's on-screen source: the deck, or the top card where the deck hides.
@@ -642,6 +1116,22 @@ function pileRect() {
     if (r.width) { lastDeckRect = r; return r; }
   }
   return lastDeckRect || nodes['top-card'].getBoundingClientRect();
+}
+
+/**
+ * A card back sized for a seat, centred on it: where a seat's thrown cards
+ * leave from. An opponent's is the table's own --seat-back on their stack —
+ * the same box their played cards fly out of in planTravel. Yours is centred on
+ * your tile at .74 of its width, the ratio the seats use (--seat-back .08 over
+ * --seat-tile .108 of the table): the tray has no --seat-back of its own.
+ */
+function seatCardRect(playerId) {
+  if (playerId === app.youId) {
+    const tile = document.querySelector('.you-seat');
+    return tile && tile.offsetWidth ? cardRectAt(tile, tile.offsetWidth * .74) : null;
+  }
+  const stack = nodes.seats.querySelector(`.seat[data-player="${CSS.escape(playerId)}"] .stack`);
+  return stack ? cardRectAt(stack, cssPx(stack, '--seat-back', 34)) : null;
 }
 
 /** A card-proportioned rect (the 96×138 ratio) centred on `node`. */
@@ -725,18 +1215,46 @@ function flyToPile(from, card) {
   flight.guard = setTimeout(settle, ms + 400);
 }
 
-function dealGhosts(target, count, wave) {
-  const src = pileRect();
-  if (!src.width || !target.width) return;
-  const shown = Math.min(count, 3); // a +2 reads at two; never flood the DOM
+/**
+ * Card backs travelling to a hand. `opts.lob` is a +2: the cards leave the top
+ * card that forced them, after a 90ms hold past the impact frame (the stillness
+ * is the weight), arc up by 0.4 of a card on the way, and the victim's count
+ * badge takes the punch when the last one arrives. `opts.impactMs` is that
+ * impact frame: MS.flight while a played card is in the air, 0 without one.
+ * `opts.fromRect` overrides where a lob leaves from — a callout's cards leave
+ * the caller's seat (seatCardRect), not the top card.
+ * `opts.roundDeal = { players, seatIndex, startDelay }` is a new round's deal
+ * (runRoundDeal): four cards instead of three, on the round-robin stagger, and
+ * unseen while they wait their turn on the deck. Returns the ghosts it threw,
+ * as `{ ghost, anim, delay }`, so a round deal can re-aim the ones still waiting.
+ */
+function dealGhosts(target, count, wave, opts) {
+  const lob = !!(opts && opts.lob);
+  const round = (opts && opts.roundDeal) || null;
+  const src = lob ? (opts.fromRect || nodes['top-card'].getBoundingClientRect()) : pileRect();
+  if (!src.width || !target.width) return [];
+  // A +2 reads at two; a deal reads at four; never flood the DOM.
+  const shown = Math.min(count, round ? ROUND_DEAL_CARDS : 3);
   const dx = (target.left + target.width / 2) - (src.left + src.width / 2);
   const dy = (target.top + target.height / 2) - (src.top + src.height / 2);
+  const lift = 0.4 * src.height;
+  const LOB_MS = 300;
+  const hold = lob ? (opts.impactMs || 0) + 90 : 0;
+  let lastAnim = null;
+  const thrown = [];
   for (let k = 0; k < shown; k++) {
     const ghost = ghostShell(src);
     ghost.classList.add('travel-back', 'back-face');
     ghost.style.setProperty('--cw', Math.round(src.width) + 'px');
+    // Up to ~1.9s of waiting for a round deal: a stack of backs sitting on the
+    // deck that long — or on the discard, where the phone band has no deck —
+    // would cover the card the new round starts on. The first keyframe brings
+    // each one in at opacity 1 the moment it leaves.
+    if (round) ghost.style.opacity = '0';
     document.body.appendChild(ghost);
-    const delay = wave * 120 + k * MS.dealStep;
+    const delay = lob ? hold + k * 90
+      : round ? round.startDelay + k * (round.players * 90) + round.seatIndex * 90
+        : wave * 120 + k * MS.dealStep;
     /* `finished` is the only thing holding these ghosts' leashes, and it does
        not always settle: on a hidden or unfocused page the animation never
        advances, so the promise never resolves and the ghost stays in <body>
@@ -745,25 +1263,114 @@ function dealGhosts(target, count, wave) {
        and had none. `done` keeps the two paths from double-removing. */
     let done = false, guard = 0;
     const drop = () => { if (done) return; done = true; clearTimeout(guard); ghost.remove(); };
-    ghost.animate([
-      { transform: 'translate(0,0) scale(1) rotate(0deg)', opacity: 1 },
-      { transform: `translate(${dx}px,${dy}px) scale(.55) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: .85, offset: .8 },
-      { transform: `translate(${dx}px,${dy}px) scale(.5) rotate(${dx > 0 ? 9 : -9}deg)`, opacity: 0 },
-    ], { duration: MS.deal, delay, easing: EASE_OUT, fill: 'forwards' })
-      .finished.then(drop, drop);
-    guard = setTimeout(drop, MS.deal + delay + 400);
+    const frames = lob
+      ? [
+        { transform: 'translate(0,0) scale(1)', opacity: 1 },
+        { transform: `translate(${dx * .5}px, ${dy * .5 - lift}px) scale(.8)`, opacity: 1, offset: .5 },
+        { transform: `translate(${dx}px, ${dy}px) scale(.5)`, opacity: 0 },
+      ]
+      : dealFrames(dx, dy);
+    const duration = lob ? LOB_MS : MS.deal;
+    lastAnim = ghost.animate(frames, { duration, delay, easing: EASE_OUT, fill: 'forwards' });
+    lastAnim.finished.then(drop, drop);
+    guard = setTimeout(drop, duration + delay + 400);
+    thrown.push({ ghost, anim: lastAnim, delay, tilt: dx > 0 ? 9 : -9 });
   }
+  if (lob && lastAnim) {
+    // The punch rides the LAST card's own `finished`, not a timer started here.
+    // A WAAPI delay counts from the frame the animation becomes ready, which is
+    // after this whole snapshot task (two renders, with the seat note); a timer
+    // counts from now. With a 200ms stall injected at the end of the task, a
+    // timer punched the badge exactly 200ms before the card got there. The
+    // guard is the same leash the ghosts wear, for a surface that never ticks.
+    let punched = false, punchGuard = 0;
+    const punch = () => {
+      if (punched) return;
+      punched = true;
+      clearTimeout(punchGuard);
+      const badge = opts.playerId === app.youId
+        ? nodes['you-count']
+        : nodes.seats.querySelector(`.seat[data-player="${CSS.escape(opts.playerId)}"] .count-badge`);
+      if (badge) pulse(badge, 'is-punched', 260);
+    };
+    lastAnim.finished.then(punch, punch);
+    punchGuard = setTimeout(punch, hold + (shown - 1) * 90 + LOB_MS + 400);
+  }
+  return thrown;
 }
 
 /* ------------------------------------------------------------------ home */
+
+/* Storage is a privilege, not a given: Safari's private mode throws on the
+   first touch of either store, and an uncaught throw at boot is a blank
+   screen. Every read and every write is guarded on its own, and a value that
+   will not parse is read as "nothing remembered" — never deleted, never
+   allowed to take the home screen down with it. */
+
+const LAST_TABLE_KEY = 'tondo.lastTable';
+const LAST_TABLE_MS = 12 * 60 * 60 * 1000;
+
+/** The seats around you, as the table names them. */
+function rosterOf(snap) {
+  return ((snap && snap.seats) || [])
+    .filter((s) => s.id !== snap.youId)
+    .map((s) => (s.isBot ? nicelyName(s.name) : s.name))
+    .filter(Boolean);
+}
+
+/** `{ code, roster, at }`, or null for anything that is not exactly that. */
+function readLastTable() {
+  let raw = '';
+  try { raw = localStorage.getItem(LAST_TABLE_KEY) || ''; } catch { return null; }
+  if (!raw) return null;
+  let v = null;
+  // A truncated or hand-edited value is not an error to report, it is simply
+  // no last table. The bad value stays where it is: the next join rewrites it.
+  try { v = JSON.parse(raw); } catch { return null; }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const code = typeof v.code === 'string' ? v.code.trim().toUpperCase() : '';
+  const at = Number(v.at);
+  if (!code || !Number.isFinite(at)) return null;
+  const roster = Array.isArray(v.roster)
+    ? v.roster.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim()).slice(0, 3)
+    : [];
+  return { code, roster, at };
+}
+
+function writeLastTable(code, roster) {
+  if (!code) return;
+  try {
+    localStorage.setItem(LAST_TABLE_KEY, JSON.stringify({ code, roster: roster || [], at: Date.now() }));
+  } catch { /* nowhere to keep it */ }
+}
+
+/** Decided before first paint, so the row never shoves the card downwards. */
+function renderLastTable() {
+  const last = readLastTable();
+  // Older than half a day and the names stop being a promise worth making.
+  const fresh = !!last && (Date.now() - last.at) < LAST_TABLE_MS;
+  nodes['last-table'].hidden = !fresh;
+  // The copy never claims the table is still there — only that it was yours.
+  nodes['last-table-sub'].textContent = fresh && last.roster.length
+    ? 'with ' + last.roster.join(', ') : '';
+}
 
 function bootHome() {
   const params = new URLSearchParams(location.search);
   let stored = '';
   try { stored = localStorage.getItem('tondo.name') || ''; } catch { /* ignore */ }
   nodes['name-input'].value = stored;
-  const code = params.get('code');
-  if (code) nodes['code-input'].value = code.toUpperCase();
+  const code = (params.get('code') || '').trim().toUpperCase();
+  if (code) nodes['code-input'].value = code;
+  renderLastTable();
+  // A friend tapping an invite link has already told us the two things the
+  // front door asks for. Only a ?code= on THIS load may do this — a
+  // remembered table never seats you without a tap.
+  if (code && stored) {
+    app.name = stored;
+    app.autoJoin = code;
+    nodes['home-card'].hidden = true;
+  }
 }
 
 function readName() {
@@ -781,14 +1388,102 @@ nodes['create-btn'].addEventListener('click', () => {
   send({ type: 'createRoom', name });
 });
 
+/* One tap instead of create, add three bots, deal. No stats, no record, no
+   progression: playing alone must not grow a ledger to keep up with. */
+nodes['quickpie-btn'].addEventListener('click', () => {
+  const name = readName();
+  if (!name) return;
+  nodes['home-msg'].textContent = '';
+  app.quickPie = 'creating';
+  if (!send({ type: 'createRoom', name })) app.quickPie = null;
+});
+
 nodes['join-btn'].addEventListener('click', () => {
+  // Whether this join came from a remembered table is decided BEFORE
+  // readName() can bail out, and only survives as far as a message actually
+  // sent — otherwise the next server error would wear the wrong copy.
+  const fromMemory = app.rejoinAttempt;
+  app.rejoinAttempt = false;
   const name = readName();
   if (!name) return;
   const code = (nodes['code-input'].value || '').trim().toUpperCase();
   if (!code) { nodes['home-msg'].textContent = 'A table code goes in the box.'; nodes['code-input'].focus(); return; }
   nodes['home-msg'].textContent = '';
   const seat = conn.seatFor(code);
-  send({ type: 'joinRoom', code, name, token: seat ? seat.token : undefined });
+  app.rejoinAttempt = fromMemory;
+  if (!send({ type: 'joinRoom', code, name, token: seat ? seat.token : undefined })) app.rejoinAttempt = false;
+});
+
+/* Always an explicit tap: the row offers the table, it never takes it. */
+nodes['rejoin-btn'].addEventListener('click', () => {
+  const last = readLastTable();
+  if (!last) { renderLastTable(); return; }
+  nodes['code-input'].value = last.code;
+  app.rejoinAttempt = true;
+  nodes['join-btn'].click();
+});
+
+/* ---- forget this device -------------------------------------------------
+   Two taps on one button, not a modal: the wipe takes the seat token with it,
+   so a mis-tap on a control that sits where a thumb rests would be
+   unrecoverable, and a modal is focus-trap surface a privacy affordance does
+   not deserve. The armed state is announced by #home-msg, which is already a
+   polite live region — no second one is added. */
+const FORGET_IDLE = 'Forget this device';
+const FORGET_ARMED = 'Tap again to forget';
+const FORGET_WARN = 'This clears your name and your last table. It cannot be undone.';
+const FORGET_DONE = 'Forgotten. Nothing about you is stored here now.';
+const FORGET_MS = 4000;
+let forgetTimer = 0;
+
+function disarmForget() {
+  if (!forgetTimer) return;
+  clearTimeout(forgetTimer);
+  forgetTimer = 0;
+  nodes['forget-btn'].textContent = FORGET_IDLE;
+  // Only the warning is ours to take back. Another control may have written
+  // its own line in the same breath, and that one stands.
+  if (nodes['home-msg'].textContent === FORGET_WARN) nodes['home-msg'].textContent = '';
+}
+
+/** Removes every `tondo.` key from one store, and nothing else. */
+function wipeStore(get) {
+  try {
+    const store = get();
+    for (const key of Object.keys(store)) {
+      if (key.startsWith('tondo.')) { try { store.removeItem(key); } catch { /* ignore */ } }
+    }
+  } catch { /* no storage to clear */ }
+}
+
+nodes['forget-btn'].addEventListener('click', () => {
+  if (!forgetTimer) {
+    forgetTimer = setTimeout(disarmForget, FORGET_MS);
+    nodes['forget-btn'].textContent = FORGET_ARMED;
+    nodes['home-msg'].textContent = FORGET_WARN;
+    return;
+  }
+  clearTimeout(forgetTimer);
+  forgetTimer = 0;
+  nodes['forget-btn'].textContent = FORGET_IDLE;
+  wipeStore(() => localStorage);
+  wipeStore(() => sessionStorage);
+  // The stores are only half of it: Connection still holds { name, code,
+  // token } in memory, and the next socket drop would re-send joinRoom and
+  // write every one of those keys back. "Nothing about you is stored here
+  // now" has to be true a minute later too.
+  conn.forget();
+  nodes['name-input'].value = '';
+  app.name = '';
+  renderLastTable();
+  nodes['home-msg'].textContent = FORGET_DONE;
+});
+
+// Leaving the button, or reaching for anything else on the card, puts the
+// safety back on.
+nodes['forget-btn'].addEventListener('blur', disarmForget);
+nodes['home-card'].addEventListener('click', (e) => {
+  if (!nodes['forget-btn'].contains(e.target)) disarmForget();
 });
 
 nodes['code-input'].addEventListener('keydown', (e) => { if (e.key === 'Enter') nodes['join-btn'].click(); });
@@ -796,39 +1491,146 @@ nodes['name-input'].addEventListener('keydown', (e) => { if (e.key === 'Enter') 
 
 /* ----------------------------------------------------------------- lobby */
 
+/* One tag per kind, so a row's tags can be compared as a list rather than as
+   a blob of markup. */
+const TAG_TEXT = { you: 'You', host: 'Host', bot: 'Bot', away: 'Away' };
+
+/** The empty shell of one seat row; everything inside is updated in place. */
+function buildSeatRow(key, ghost) {
+  const li = document.createElement('li');
+  li.className = ghost ? 'seat-row seat-ghost' : 'seat-row';
+  li.dataset.seat = key;
+  if (ghost) {
+    li.setAttribute('aria-hidden', 'true');
+    li.innerHTML = '<span class="ghost-plus">+</span><span class="who">Open seat</span>';
+  } else {
+    li.innerHTML = '<span class="seat-chip" aria-hidden="true"><span class="initial"></span></span>'
+      + '<span class="who"></span>';
+  }
+  return li;
+}
+
+/** Puts `kinds` on the row, in order, before `anchor`. Tags are not focusable,
+ *  so the cheap path is to compare the whole list and rebuild only on a change. */
+function syncTags(row, kinds, anchor) {
+  const live = [...row.querySelectorAll('.tag')];
+  if (live.map((n) => n.dataset.tag).join(',') === kinds.join(',')) return;
+  live.forEach((n) => n.remove());
+  kinds.forEach((k) => {
+    const el = document.createElement('span');
+    el.className = 'tag tag-' + k;
+    el.dataset.tag = k;
+    el.textContent = TAG_TEXT[k];
+    row.insertBefore(el, anchor);
+  });
+}
+
+/**
+ * Keyed reconciliation, for the same reason renderSeats and renderHand are:
+ * this list is repainted by every snapshot, and someone else joining, a bot
+ * being added or a name changing used to throw away the "Remove" button the
+ * keyboard was standing on. A seat keeps its node for as long as it is at the
+ * table; the empty chairs are keyed by position.
+ *
+ * Classes are toggled rather than assigned wholesale, so a transient class a
+ * helper puts on a row survives the next snapshot.
+ */
+function renderSeatList(snap) {
+  const host = nodes['seat-list'];
+  const focused = document.activeElement;
+  const focusedKey = (focused && host.contains(focused) && focused.dataset.remove) || '';
+  const focusedIndex = focusedKey
+    ? [...host.children].findIndex((n) => n.contains(focused)) : -1;
+  const live = new Map([...host.children].map((n) => [n.dataset.seat, n]));
+
+  snap.seats.forEach((seat, i) => {
+    // The same tile the player will wear at the table, so the seat they take
+    // here is recognisably theirs once the game starts.
+    const tone = TONES[SEAT_TONES[i % SEAT_TONES.length]];
+    const name = seat.isBot ? nicelyName(seat.name) : seat.name;
+    const initial = (String(name).trim().charAt(0) || '?').toUpperCase();
+    let row = live.get(seat.id);
+    if (!row || row.classList.contains('seat-ghost')) row = buildSeatRow(seat.id, false);
+    else live.delete(seat.id);
+    if (host.children[i] !== row) host.insertBefore(row, host.children[i] || null);
+
+    const chip = row.querySelector('.seat-chip');
+    if (chip.style.getPropertyValue('--tone-bg') !== tone.bg) {
+      chip.style.setProperty('--tone-bg', tone.bg);
+      chip.style.setProperty('--tone-edge', tone.edge);
+    }
+    setTextIfChanged(chip.querySelector('.initial'), initial);
+    setTextIfChanged(row.querySelector('.who'), name);
+
+    // The one focusable control in the row: kept, not rebuilt, and its
+    // listener reads the seat id off the node so it outlives every repaint.
+    let remove = row.querySelector('[data-remove]');
+    const wantRemove = !!(snap.isHost && seat.isBot);
+    if (wantRemove && !remove) {
+      remove = document.createElement('button');
+      remove.type = 'button';
+      remove.classList.add('btn', 'btn-tiny');
+      remove.dataset.remove = seat.id;
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => send({ type: 'removeSeat', seatId: remove.dataset.remove }));
+      row.appendChild(remove);
+    } else if (!wantRemove && remove) { remove.remove(); remove = null; }
+    if (remove) {
+      remove.dataset.remove = seat.id;
+      const label = `Remove ${name}`;
+      if (remove.getAttribute('aria-label') !== label) remove.setAttribute('aria-label', label);
+      remove.disabled = app.offline;
+    }
+
+    const tags = [];
+    if (seat.id === snap.youId) tags.push('you');
+    if (seat.id === snap.hostId) tags.push('host');
+    if (seat.isBot) tags.push('bot');
+    if (!seat.connected) tags.push('away');
+    syncTags(row, tags, remove);
+  });
+
+  // The empty chairs are drawn too, so the table's capacity is visible and the
+  // card does not jump in height as seats fill.
+  const ghosts = Math.max(0, 4 - snap.seats.length);
+  for (let k = 0; k < ghosts; k++) {
+    const key = 'ghost:' + k;
+    const at = snap.seats.length + k;
+    let row = live.get(key);
+    if (!row) row = buildSeatRow(key, true);
+    else live.delete(key);
+    if (host.children[at] !== row) host.insertBefore(row, host.children[at] || null);
+  }
+  live.forEach((n) => n.remove());
+
+  // Belt and braces: the node is normally the same one, but if a seat's row
+  // was rebuilt the keyboard still goes back to it — and if the seat you were
+  // standing on is the one that LEFT (you removed that bot), it walks outwards
+  // to the nearest row that still has a control, then to the button that
+  // fills the table. Removing a bot used to drop the keyboard on <body>.
+  if (focusedKey && focusLost()) {
+    const usable = (n) => !!n && !n.disabled && (n.offsetParent || n.getClientRects().length);
+    const again = host.querySelector(`[data-remove="${CSS.escape(focusedKey)}"]`);
+    let target = usable(again) ? again : null;
+    const kids = [...host.children];
+    const start = Math.min(Math.max(focusedIndex, 0), Math.max(kids.length - 1, 0));
+    for (let d = 0; d < kids.length && !target; d++) {
+      for (const row of [kids[start - d], kids[start + d]]) {
+        const btn = row && row.querySelector('[data-remove]');
+        if (usable(btn)) { target = btn; break; }
+      }
+    }
+    if (!target && usable(nodes['addbot-btn'])) target = nodes['addbot-btn'];
+    if (target) target.focus({ preventScroll: true });
+  }
+}
+
 function renderLobby(snap) {
   nodes['room-code'].textContent = snap.roomCode || '—';
   // lobby-msg is left alone: "Invite link copied." must not vanish the moment
   // someone else's join triggers a repaint.
 
-  nodes['seat-list'].innerHTML = snap.seats.map((seat, i) => {
-    // The same tile the player will wear at the table, so the seat they take
-    // here is recognisably theirs once the game starts.
-    const tone = TONES[SEAT_TONES[i % SEAT_TONES.length]];
-    const name = seat.isBot ? nicely(seat.name) : seat.name;
-    const initial = (String(name).trim().charAt(0) || '?').toUpperCase();
-    const tags = [];
-    if (seat.id === snap.youId) tags.push('<span class="tag tag-you">You</span>');
-    if (seat.id === snap.hostId) tags.push('<span class="tag tag-host">Host</span>');
-    if (seat.isBot) tags.push('<span class="tag tag-bot">Bot</span>');
-    if (!seat.connected) tags.push('<span class="tag tag-away">Away</span>');
-    const remove = (snap.isHost && seat.isBot)
-      ? `<button type="button" class="btn btn-tiny" data-remove="${esc(seat.id)}" aria-label="Remove ${esc(name)}"${app.offline ? ' disabled' : ''}>Remove</button>` : '';
-    return `<li class="seat-row">
-      <span class="seat-chip" style="--tone-bg:${tone.bg};--tone-edge:${tone.edge}" aria-hidden="true"><span class="initial">${esc(initial)}</span></span>
-      <span class="who">${esc(name)}</span>
-      ${tags.join('')}${remove}
-    </li>`;
-  }).join('') +
-    // The empty chairs are drawn too, so the table's capacity is visible and
-    // the card does not jump in height as seats fill.
-    Array.from({ length: Math.max(0, 4 - snap.seats.length) }, () =>
-      '<li class="seat-row seat-ghost" aria-hidden="true"><span class="ghost-plus">+</span><span class="who">Open seat</span></li>'
-    ).join('');
-
-  nodes['seat-list'].querySelectorAll('[data-remove]').forEach((btn) => {
-    btn.addEventListener('click', () => send({ type: 'removeSeat', seatId: btn.dataset.remove }));
-  });
+  renderSeatList(snap);
 
   nodes['host-controls'].hidden = !snap.isHost;
   nodes['lobby-wait'].hidden = snap.isHost;
@@ -854,6 +1656,72 @@ nodes['copy-btn'].addEventListener('click', async () => {
 nodes['addbot-btn'].addEventListener('click', () => send({ type: 'addBot' }));
 nodes['start-btn'].addEventListener('click', () => send({ type: 'startGame' }));
 nodes['leave-btn'].addEventListener('click', leaveTable);
+
+/* The readonly textarea shown after the share button when the clipboard
+   write did not land. Tracked so a later render (a new round, a new pie)
+   can clear a stale one instead of leaving it behind under the wrong text. */
+let shareFallbackEl = null;
+function hideShareBtn() {
+  nodes['share-btn'].hidden = true;
+  if (shareFallbackEl) { shareFallbackEl.remove(); shareFallbackEl = null; }
+  setText(nodes['score-share-msg'], '');
+}
+
+/**
+ * `navigator.clipboard` is undefined outside a secure context — and Tondo is
+ * a LAN game people open at `http://192.168.x.x` from another phone, which is
+ * not one. Reading `.writeText` off `undefined` there throws a TypeError
+ * SYNCHRONOUSLY, before any promise exists; a `.then().catch()` chained onto
+ * that call never runs, because there is no promise to chain onto. The
+ * try/catch below is what actually catches it — the same catch also covers
+ * `writeText` rejecting (permission denied). A resolved `writeText` is
+ * trusted as "copied"; whether the clipboard is later readABLE is never
+ * checked here.
+ */
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+nodes['share-btn'].addEventListener('click', async () => {
+  const m = app.snap && app.snap.match;
+  if (!m) return;
+  const origin = location.origin + location.pathname.replace(/index\.html$/, '');
+  const text = pieResultText(m, { origin, resolveName: playerName });
+  if (!text) return;
+  const copied = await copyToClipboard(text);
+  if (shareFallbackEl) { shareFallbackEl.remove(); shareFallbackEl = null; }
+  if (copied) {
+    // Its own node (#score-share-msg), not #score-sub: renderMatch rewrites
+    // #score-sub on every snapshot, which would erase this the moment
+    // anything else changes at the table — a bot added, someone leaving,
+    // even a resize. Announced too, since neither outcome otherwise reaches
+    // a screen reader (WCAG 4.1.3), and the announcement survives that same
+    // clobber independently of this node.
+    setText(nodes['score-share-msg'], 'Result copied — paste it anywhere.');
+    announce('Result copied — paste it anywhere.');
+    return;
+  }
+  setText(nodes['score-share-msg'], 'Copy failed — select the text below.');
+  announce('Copy failed — select the text below.');
+  const ta = document.createElement('textarea');
+  ta.className = 'score-share-fallback input';
+  ta.readOnly = true;
+  ta.rows = 3;
+  ta.value = text;
+  ta.setAttribute('aria-label', 'Pie result — select and copy');
+  nodes['share-btn'].insertAdjacentElement('afterend', ta);
+  ta.focus();
+  // setSelectionRange, not select(): the durable idiom on the one platform
+  // this fallback exists for (a non-secure-context LAN game opened on a
+  // phone) — a plain select() has a history of being unreliable there.
+  ta.setSelectionRange(0, ta.value.length);
+  shareFallbackEl = ta;
+});
 nodes['game-leave'].addEventListener('click', leaveTable);
 
 function leaveTable() {
@@ -869,11 +1737,79 @@ function leaveTable() {
   }
   try { sessionStorage.removeItem('tondo.room'); } catch { /* ignore */ }
   app.snap = null;
+  app.quickPie = null;
   conn.forget();
-  setScreen('home');
+  renderLastTable();
+  revealHome();
 }
 
 /* ------------------------------------------------------------ game: read */
+
+/* The key the "Let it pass" button is stored under, so one map holds both it
+   and the targets without an id ever colliding with it. */
+const CALLOUT_SKIP = '\u0000skip';
+
+/**
+ * Keyed reconciliation, like renderSeats and renderHand.
+ *
+ * This bar is open at the one moment the table is busiest: a bot's snapshot
+ * lands every second or two, and rebuilding these buttons threw away the node
+ * the keyboard was standing on — "Call out Dominic" could not be reached
+ * before it was replaced, a race a keyboard player cannot win. The button for
+ * a target keeps its node for as long as that target is callable, and its
+ * listener reads the id off the node so it survives every repaint.
+ *
+ * Classes are toggled, never assigned wholesale, so a transient class a helper
+ * owns is not stripped by the next snapshot.
+ */
+function renderCalloutButtons(targets, targetKey) {
+  const host = nodes['callout-buttons'];
+  const keyOf = (n) => (n.dataset.calloutSkip ? CALLOUT_SKIP : (n.dataset.callout || ''));
+  const focused = document.activeElement;
+  const focusedKey = (focused && host.contains(focused)) ? keyOf(focused) : '';
+  const live = new Map([...host.children].map((n) => [keyOf(n), n]));
+
+  targets.forEach((id, i) => {
+    let btn = live.get(id);
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.classList.add('btn', 'btn-cta');
+      btn.dataset.callout = id;
+      btn.addEventListener('click', () => send({ type: 'callout', targetId: btn.dataset.callout }));
+    } else live.delete(id);
+    if (host.children[i] !== btn) host.insertBefore(btn, host.children[i] || null);
+    setTextIfChanged(btn, `Call out ${nicelyName(playerName(id))}`);
+    btn.disabled = app.offline;
+  });
+
+  let skip = live.get(CALLOUT_SKIP);
+  if (!skip) {
+    skip = document.createElement('button');
+    skip.type = 'button';
+    skip.classList.add('btn', 'btn-quiet');
+    skip.dataset.calloutSkip = '1';
+    skip.textContent = 'Let it pass';
+    // The key is read off the node at click time: the button outlives the
+    // render that made it, and the targets it is dismissing can change.
+    skip.addEventListener('click', () => {
+      app.calloutDismissed = skip.dataset.key || '';
+      renderGame(app.snap);
+    });
+  } else live.delete(CALLOUT_SKIP);
+  skip.dataset.key = targetKey;
+  // Only move it when it is not already last: relocating a node blurs it.
+  if (host.lastElementChild !== skip) host.appendChild(skip);
+  skip.disabled = app.offline;
+
+  live.forEach((n) => n.remove());
+
+  if (focusedKey && focusLost()) {
+    const again = focusedKey === CALLOUT_SKIP
+      ? skip : host.querySelector(`[data-callout="${CSS.escape(focusedKey)}"]`);
+    if (again && !again.disabled) again.focus({ preventScroll: true });
+  }
+}
 
 function activeSuitOf(g) { return g.activeSuit || (g.topCard && g.topCard.suit) || 'cheese'; }
 function matchValueText(g) {
@@ -886,7 +1822,7 @@ function reasonFor(g) {
   return 'Doesn’t match — need ' + (v ? s + ', ' + nicely(v) : s) + ', or a Wild';
 }
 function consequence(g, c) {
-  const nx = nicely(playerName(nextPlayerId(g)));
+  const nx = nicelyName(playerName(nextPlayerId(g)));
   if (isWild(c)) return 'Playable — wild, you pick the next topping.';
   if (c.value === 'SKIP') return `Playable — ${nx} loses their turn.`;
   if (c.value === 'PLUS2') return `Playable — ${nx} draws 2 and loses their turn.`;
@@ -933,12 +1869,15 @@ function renderGame(snap) {
   setText(nodes['event-ribbon'], eventText);
   nodes['event-ribbon'].hidden = !eventText || redundantStatus;
   const politeEvent = redundantStatus ? '' : eventText;
-  if (nodes['live-polite'].textContent !== politeEvent) {
+  // setScreen has just written "Game started." into this region for the screen
+  // the player has only now arrived on; it keeps this one repaint.
+  if (app.screenLine) app.screenLine = '';
+  else if (nodes['live-polite'].textContent !== politeEvent) {
     nodes['live-polite'].textContent = politeEvent;
   }
 
   /* --- you strip: the reference Seat, in the tray */
-  const youName = nicely(you.name || app.name || 'You');
+  const youName = nicelyName(you.name || app.name || 'You');
   const youTone = TONES[SEAT_TONES[0]];
   nodes['you-strip'].style.setProperty('--tone-bg', youTone.bg);
   nodes['you-strip'].style.setProperty('--tone-edge', youTone.edge);
@@ -957,6 +1896,9 @@ function renderGame(snap) {
   else if (!over && nextPlayerId(g) === snap.youId) youStatus = 'you’re next';
   else if (g.hand.length === 1) youStatus = 'one card!';
   else youStatus = 'you';
+  // Same ladder as the seats: a win and the forgot-TONDO alarm outrank a note.
+  const youNote = (youStatus === 'winner!' || youAlarm) ? null : liveSeatNote(snap.youId);
+  if (youNote) youStatus = youNote;
   setText(nodes['you-status'], youStatus);
   nodes['you-status'].hidden = !youStatus;
   nodes['you-status'].classList.toggle('is-acting', yourTurn);
@@ -968,28 +1910,33 @@ function renderGame(snap) {
 
   const targets = (g.calloutTargets || []).filter(Boolean);
   const targetKey = targets.join(',');
-  const showCallout = targets.length > 0 && app.calloutDismissed !== targetKey;
+  const showCallout = !over && targets.length > 0 && app.calloutDismissed !== targetKey;
   const drawnCard = drawnId ? g.hand.find((c) => c.id === drawnId) : null;
+  /* The bar is about to close under whoever pressed a button in it: "Let it
+     pass" hides it in this very repaint, "Call out X" on the snapshot that
+     answers. Either way the focused node goes with it and the keyboard lands
+     on <body> — the same shape the suit picker had, so it takes the same
+     landing, applied after the hand below has been rebuilt. */
+  const leavingCallout = !nodes['callout-bar'].hidden && !showCallout
+    && !!document.activeElement && nodes['callout-bar'].contains(document.activeElement);
   nodes['callout-bar'].hidden = !showCallout;
   nodes.stage.classList.toggle(
     'is-compressed',
     g.canDeclareTondo || showCallout || !!drawnCard || wildOpen || over,
   );
   if (showCallout) {
-    const who = targets.map((id) => nicely(playerName(id))).join(' and ');
+    const who = targets.map((id) => nicelyName(playerName(id))).join(' and ');
     nodes['callout-head'].textContent = `${who} forgot TONDO — call them out`;
     nodes['callout-sub'].textContent = 'One card left and never said it. Catching them costs them +2.';
-    nodes['callout-buttons'].innerHTML = targets.map((id) =>
-      `<button type="button" class="btn btn-cta" data-callout="${esc(id)}"${app.offline ? ' disabled' : ''}>Call out ${esc(nicely(playerName(id)))}</button>`
-    ).join('') + `<button type="button" class="btn btn-quiet" data-callout-skip="1"${app.offline ? ' disabled' : ''}>Let it pass</button>`;
-    nodes['callout-buttons'].querySelectorAll('[data-callout]').forEach((btn) => {
-      btn.addEventListener('click', () => send({ type: 'callout', targetId: btn.dataset.callout }));
-    });
-    const skip = nodes['callout-buttons'].querySelector('[data-callout-skip]');
-    if (skip) skip.addEventListener('click', () => { app.calloutDismissed = targetKey; renderGame(app.snap); });
+    renderCalloutButtons(targets, targetKey);
   }
 
-  nodes['drawn-bar'].hidden = !drawnCard;
+  /* Playing a DRAWN wild opens the suit picker while the server still holds a
+     drawn decision, so both bars used to show at once — and the drawn bar's
+     "Play it" simply re-opened the picker the player was already looking at.
+     One decision is on the table at a time: once the picker is up, it is the
+     only thing being asked. */
+  nodes['drawn-bar'].hidden = !drawnCard || wildOpen;
   if (drawnCard) {
     paintStock(nodes['drawn-card'], drawnCard);
     paintFace(drawnCard, {
@@ -1025,6 +1972,10 @@ function renderGame(snap) {
           app.pendingWild = null;
           send({ type: 'play', cardId, suit: btn.dataset.suit });
           if (app.snap) renderGame(app.snap);
+          /* The button that was just pressed is inside a bar this render has
+             hidden, so the browser drops focus to <body> and a keyboard player
+             is left nowhere. Same landing as cancelWild's Escape path. */
+          focusHandOrDraw(cardId);
         });
       });
       nodes['wild-grid'].querySelector('[data-wild-cancel]')
@@ -1047,14 +1998,22 @@ function renderGame(snap) {
     nodes['event-ribbon'].hidden = true;
   }
 
+  /* --- the pie */
+  renderMatch(snap, over);
+
   /* --- hand */
-  const swapHand = !!drawnCard || wildOpen;
+  // A finished round swaps the hand for the scoreboard: the cards can no
+  // longer be played, and the standings are what the table wants to look at.
+  const swapHand = !!drawnCard || wildOpen || over;
   nodes['hand-wrap'].hidden = swapHand;
-  nodes['action-row'].hidden = swapHand;
+  nodes['action-row'].hidden = !!drawnCard || wildOpen;
   if (!swapHand) renderHand(g, yourTurn, playable, drawnId);
 
-  setText(nodes['hand-label'], wildOpen ? 'Pick a topping'
-    : (drawnCard ? 'Draw decision' : 'Your hand'));
+  // The label names whatever the tray is actually showing — at round over the
+  // hand has been swapped out for the scoreboard, so "Your hand" would be
+  // pointing at something that is not there.
+  setText(nodes['hand-label'], over ? 'The pie'
+    : (wildOpen ? 'Pick a topping' : (drawnCard ? 'Draw decision' : 'Your hand')));
   let playLabel;
   if (over) playLabel = 'Round over';
   else if (drawnCard) playLabel = 'Drawn card only';
@@ -1066,6 +2025,10 @@ function renderGame(snap) {
   nodes['playable-label'].classList.toggle('is-live', liveLabel);
   nodes['playable-label'].classList.toggle('is-drawn', !liveLabel && !!drawnCard);
 
+  // The callout bar has closed under the keyboard (see `leavingCallout`): the
+  // hand is rendered now, so there is somewhere real to land.
+  if (leavingCallout) focusHandOrDraw();
+
   /* --- action row */
   nodes['draw-btn'].disabled = app.offline || !yourTurn || !!drawnCard || wildOpen;
   nodes['draw-btn'].hidden = over;
@@ -1074,7 +2037,16 @@ function renderGame(snap) {
   deckButton.setAttribute('aria-label', deckButton.disabled
     ? `Draw pile — ${g.drawPileCount} cards left`
     : `Draw a card — ${g.drawPileCount} left in the deck`);
-  nodes['newround-btn'].hidden = !(over && snap.isHost);
+  /* Dealing is no longer the host's alone. A table used to stall because one
+     specific person had put their phone down, and everyone else was shown
+     "waiting for the host" with no control at all. */
+  const m = snap.match;
+  nodes['newround-btn'].hidden = !over;
+  if (over) setText(nodes['newround-btn'], m && m.complete ? 'New pie' : 'Next slice');
+  // Hold is only meaningful while a clock is actually running toward a deal.
+  const clockRunning = !!(over && m && m.nextDueAt);
+  nodes['hold-btn'].hidden = !clockRunning;
+  nodes['hold-btn'].disabled = app.offline;
   nodes['newround-btn'].disabled = app.offline;
 
   /* --- hint + assertive line */
@@ -1087,16 +2059,31 @@ function renderGame(snap) {
   else {
     const current = g.players.find((p) => p.id === g.turnPlayerId);
     hint = current && !current.connected
-      ? `Waiting for ${nicely(current.name)} to reconnect…`
-      : `${nicely(playerName(g.turnPlayerId))} is playing — hands off.`;
+      ? `Waiting for ${nicelyName(current.name)} to reconnect…`
+      : `${nicelyName(playerName(g.turnPlayerId))} is playing — hands off.`;
   }
-  setText(nodes.hint, hint);
+  /* The between-slices clock lives in the hint slot, in the tray's own quiet
+     type. Deliberately NOT a large counting digit and never a tick sound: the
+     beat exists so the table can read the standings and groan about them, and
+     a slot-machine reel would turn a pause into pressure. `app.nextDueAt`
+     drives a 1s ticker (below) that rewrites this line in place. */
+  app.nextDueAt = clockRunning ? m.nextDueAt : 0;
+  if (over) {
+    if (clockRunning) hint = nextSliceHint(m);
+    else if (m && m.held) hint = 'Held — deal when the table is ready.';
+    else if (m && m.complete) hint = 'Pie finished. Deal again for a fresh one.';
+    else hint = 'Round over — deal again when you like.';
+  }
+  // A countdown must not crossfade every second; it is rewritten in place.
+  if (clockRunning) nodes.hint.textContent = hint;
+  else setText(nodes.hint, hint);
+  scheduleNextSliceTicker();
 
   let alert = '';
   if (g.canDeclareTondo) alert = 'You are down to two cards. Call TONDO before you play.';
-  else if (showCallout) alert = `${targets.map((id) => nicely(playerName(id))).join(' and ')} forgot TONDO. Call them out now.`;
+  else if (showCallout) alert = `${targets.map((id) => nicelyName(playerName(id))).join(' and ')} forgot TONDO. Call them out now.`;
   else if (drawnCard) alert = `You drew ${prettyCard(drawnCard)}. Play it, or keep it and pass.`;
-  else if (over) alert = g.winnerId === snap.youId ? 'You win the round.' : `${nicely(playerName(g.winnerId))} wins the round.`;
+  else if (over) alert = g.winnerId === snap.youId ? 'You win the round.' : `${nicelyName(playerName(g.winnerId))} wins the round.`;
   if (nodes['live-alert'].textContent !== alert) nodes['live-alert'].textContent = alert;
 
   if (!over && !yourTurn && app.messageTone !== 'bad') setMessage('', 'info');
@@ -1106,6 +2093,124 @@ function renderGame(snap) {
 
 /** A small chip that travels the ring to whoever holds the turn — the turn
  *  passing is the Ring Table's one continuous, spatial fact. */
+/**
+ * The pie: four rounds, a running score, and the scoreboard that closes each
+ * one.
+ *
+ * A round used to end and leave nothing behind — a banner, a dead hand and a
+ * button. Nothing accumulated, so there was never a reason to play the next
+ * one beyond wanting to. This is where a round becomes part of something.
+ *
+ * During play it is deliberately almost invisible: one chip saying which slice
+ * this is. The product principle is that idle surfaces stay quiet, and a
+ * running scoreboard on screen while somebody is deciding a card is noise.
+ */
+function renderMatch(snap, over) {
+  const m = snap.match;
+  const chip = nodes['slice-chip'];
+  const board = nodes.scoreboard;
+  if (!m) { chip.hidden = true; board.hidden = true; hideShareBtn(); return; }
+
+  // Slice N of 4 — `round` counts slices FINISHED, so the one being played is
+  // the next one up, capped so a finished pie does not read "slice 5 of 4".
+  const playing = Math.min(m.round + 1, m.roundsPerPie);
+  chip.hidden = over;
+  if (!over) setText(chip, `Slice ${playing}/${m.roundsPerPie}`);
+
+  board.hidden = !over;
+  if (!over) { hideShareBtn(); return; }
+
+  // The share button only ever describes a FINISHED pie — a mid-pie round
+  // boundary has nothing worth pasting into a group chat yet.
+  if (!m.complete) hideShareBtn();
+  else nodes['share-btn'].hidden = false;
+
+  const last = m.lastRound;
+  const champions = m.championIds || [];
+  const youWon = champions.includes(snap.youId);
+  const championNames = champions.map((id) => nicelyName(playerName(id))).join(' & ');
+
+  if (m.complete) {
+    setText(nodes['score-title'], champions.length > 1
+      ? 'The pie is shared'
+      : (youWon ? 'You take the pie!' : `${championNames} takes the pie`));
+    setText(nodes['score-sub'], champions.length > 1
+      ? `${championNames} finish level after four slices.`
+      : `Four slices played. Deal again for a fresh pie.`);
+  } else {
+    const winner = last && last.winnerId ? nicelyName(playerName(last.winnerId)) : null;
+    setText(nodes['score-title'], !winner ? 'Round over'
+      : (last.winnerId === snap.youId ? `You win slice ${m.round}` : `${winner} wins slice ${m.round}`));
+    setText(nodes['score-sub'], `${m.roundsPerPie - m.round} ${m.roundsPerPie - m.round === 1 ? 'slice' : 'slices'} left in the pie.`);
+  }
+
+  // Rows are keyed by player id for the same reason the seats are: a score
+  // that counts up should animate, and a rebuilt node cannot.
+  const rows = nodes['score-rows'];
+  const live = new Map([...rows.children].map((n) => [n.dataset.player, n]));
+  (m.standings || []).forEach((row, i) => {
+    let li = live.get(row.id);
+    if (!li) {
+      li = document.createElement('li');
+      li.className = 'score-row';
+      li.dataset.player = row.id;
+      li.innerHTML = '<span class="score-rank"></span><span class="score-name"></span>'
+        + '<span class="score-delta"></span><span class="score-total"></span>';
+    } else live.delete(row.id);
+    if (rows.children[i] !== li) rows.insertBefore(li, rows.children[i] || null);
+
+    const gained = last && last.winnerId === row.id ? last.points : 0;
+    const isChampion = m.complete && champions.includes(row.id);
+    const cls = `score-row${row.id === snap.youId ? ' is-you' : ''}${isChampion ? ' is-champion' : ''}`;
+    if (li.className !== cls) li.className = cls;
+    li.querySelector('.score-rank').textContent = String(i + 1);
+    li.querySelector('.score-name').textContent = nicelyName(row.name);
+    // The points just banked are the story of the round; a zero is left blank
+    // rather than shown as "+0", which reads as a failure the player caused.
+    li.querySelector('.score-delta').textContent = gained ? `+${gained}` : '';
+    li.querySelector('.score-total').textContent = String(row.points);
+    li.setAttribute('aria-label',
+      `${nicelyName(row.name)}, ${row.points} points${gained ? `, ${gained} this round` : ''}`);
+  });
+  live.forEach((n) => n.remove());
+
+  // One pip per slice, filled as the pie is eaten.
+  const pips = nodes['slice-pips'];
+  while (pips.children.length > m.roundsPerPie) pips.lastElementChild.remove();
+  while (pips.children.length < m.roundsPerPie) {
+    const pip = document.createElement('span');
+    pip.className = 'slice-pip';
+    pips.appendChild(pip);
+  }
+  [...pips.children].forEach((pip, i) => pip.classList.toggle('is-done', i < m.round));
+}
+
+/** "Next slice in 7 — or deal now." Seconds, floored, never below zero. */
+function nextSliceHint(m) {
+  const left = Math.max(0, Math.ceil((m.nextDueAt - Date.now()) / 1000));
+  return left > 0
+    ? `Next slice in ${left} — deal now, or hold.`
+    : 'Dealing the next slice…';
+}
+
+/* One 1s interval, alive only while a clock is actually running. It rewrites a
+   single text node and touches nothing else — a full repaint every second at
+   the round boundary would restart the scoreboard's own entry. */
+function scheduleNextSliceTicker() {
+  clearInterval(app.nextTicker);
+  app.nextTicker = 0;
+  if (!app.nextDueAt) return;
+  app.nextTicker = setInterval(() => {
+    const m = app.snap && app.snap.match;
+    if (!m || !m.nextDueAt || app.snap.phase !== 'roundOver') {
+      clearInterval(app.nextTicker);
+      app.nextTicker = 0;
+      return;
+    }
+    nodes.hint.textContent = nextSliceHint(m);
+  }, 1000);
+}
+
 function moveToken(snap) {
   const tok = document.getElementById('turn-token');
   const g = snap.game;
@@ -1153,12 +2258,19 @@ function renderQueue(snap, g, over) {
   const nextId = nextPlayerId(g);
   const next = g.players.find((p) => p.id === nextId);
   const colorOf = (id) => TONES[seatToneOf(g, snap.youId, id)].solid;
+  // On the last slice the chip follows the banner and the scoreboard: the pie
+  // outranks the round, and the three must not name three different people.
+  const m = snap.match;
+  const champions = (over && m && m.complete) ? (m.championIds || []) : [];
   let verb;
-  if (over) verb = (g.winnerId === snap.youId ? 'You win!' : nicely(playerName(g.winnerId)) + ' wins!');
+  if (champions.length > 1) verb = 'Pie shared';
+  else if (champions.length === 1) {
+    verb = champions[0] === snap.youId ? 'You take the pie!' : `${nicelyName(playerName(champions[0]))} takes the pie!`;
+  } else if (over) verb = (g.winnerId === snap.youId ? 'You win!' : nicelyName(playerName(g.winnerId)) + ' wins!');
   else if (g.turnPlayerId === snap.youId) verb = 'Your turn';
-  else if (active && !active.connected) verb = 'Waiting for ' + nicely(active.name) + '…';
-  else verb = nicely(active ? active.name : '') + ' is playing';
-  const leadId = over ? g.winnerId : g.turnPlayerId;
+  else if (active && !active.connected) verb = 'Waiting for ' + nicelyName(active.name) + '…';
+  else verb = nicelyName(active ? active.name : '') + ' is playing';
+  const leadId = champions.length === 1 ? champions[0] : (over ? g.winnerId : g.turnPlayerId);
   // The pill is the header's turn chip: a dot in the holder's tone, then the
   // verb. Whoever is next follows in the serif voice, not a second chip.
   let html = `<span class="chip">
@@ -1166,7 +2278,7 @@ function renderQueue(snap, g, over) {
       <span class="txt">${esc(verb)}</span></span>`;
   if (!over && next) {
     html += `<span class="chip chip-next">
-      <span class="txt">then ${esc(next.id === snap.youId ? 'you' : nicely(next.name))}</span></span>`;
+      <span class="txt">then ${esc(next.id === snap.youId ? 'you' : nicelyName(next.name))}</span></span>`;
   }
   // Identical repaints are skipped so the chips are not torn down on every
   // unrelated snapshot; turn-change motion itself is the token's job.
@@ -1516,13 +2628,60 @@ function layoutLedger(g, force) {
   }
 }
 
-/** A new round is a new pie. */
-function ledgerClear() {
+/* The finished pie leaving the board: each topping slides outward along its own
+   bearing, past the crust, fading as it goes. Ease-in, because it is leaving —
+   it gathers speed on the way out rather than arriving anywhere. */
+const LEDGER_SWEEP_MS = 520;
+const LEDGER_SWEEP_EASE = 'cubic-bezier(.55,.06,.68,.19)';
+
+/**
+ * A new round is a new pie. The ledger's STATE resets at once — the next
+ * round's toppings start from nothing even while the last round's are still
+ * leaving — but with `{ sweep: true }` the finished pie is swept off the board
+ * instead of vanishing in one frame. Returns the milliseconds until the board is
+ * clear: LEDGER_SWEEP_MS while sweeping, 0 when it cleared immediately (reduced
+ * motion, an empty pie, or any caller that did not ask for the sweep).
+ */
+function ledgerClear({ sweep = false } = {}) {
   app.ledger = [];
   app.tally = new Map();
   app.ledgerKey = 0;
   app.ledgerLaidOut = '';
-  if (nodes.ledger) nodes.ledger.replaceChildren();
+  if (!nodes.ledger) return 0;
+  const leaving = [...nodes.ledger.querySelectorAll('.tp')];
+  const box = nodes.sauce ? nodes.sauce.getBoundingClientRect() : null;
+  const R = box ? box.width / 2 : 0;
+  if (!sweep || RM.matches || !leaving.length || !R) {
+    nodes.ledger.replaceChildren();
+    return 0;
+  }
+  const cx = box.left + R, cy = box.top + box.height / 2;
+  for (const node of leaving) {
+    // The point is the topping's position (the .tp box is 0x0), so its bearing
+    // is read off the rect; a piece dead on the centre leaves straight up.
+    const p = node.getBoundingClientRect();
+    const x = p.left - cx, y = p.top - cy;
+    const len = Math.hypot(x, y);
+    const ux = len > 0.5 ? x / len : 0, uy = len > 0.5 ? y / len : -1;
+    /* composite: 'add' appends this translate AFTER the topping's own
+       `scale(--age-s)`, which scales it: divide that back out so every piece
+       travels the full 135% of the radius, aged or not. */
+    const s = Number.parseFloat(node.style.getPropertyValue('--age-s')) || 1;
+    const d = (1.35 * R) / s;
+    const timing = { id: 'ledger-sweep', duration: LEDGER_SWEEP_MS, easing: LEDGER_SWEEP_EASE, fill: 'forwards' };
+    const move = node.animate([
+      { transform: 'translate(0px, 0px)' },
+      { transform: `translate(${(ux * d).toFixed(2)}px, ${(uy * d).toFixed(2)}px)` },
+    ], { ...timing, composite: 'add' });
+    // Opacity is its own, replacing effect: an additive one would add to the
+    // topping's age dimming rather than fade it out.
+    node.animate([{ opacity: 0 }], timing);
+    let gone = false, guard = 0;
+    const drop = () => { if (gone) return; gone = true; clearTimeout(guard); node.remove(); };
+    move.finished.then(drop, drop);
+    guard = setTimeout(drop, LEDGER_SWEEP_MS + 400);
+  }
+  return LEDGER_SWEEP_MS;
 }
 
 /** One card played → one topping in that player's wedge. */
@@ -1702,7 +2861,13 @@ function renderCenter(snap, g, over) {
   paintUnder(nodes['under-2'], app.pile[2]);
 
   paintStock(nodes['top-card'], top);
-  nodes['top-card'].setAttribute('aria-label', `Top card: ${prettyCard(top)}`);
+  /* A Wild's chosen topping is the single most consequential fact on the
+     board, and #top-card is the only labelled element that exists to state
+     it: "Top card: Wild" alone leaves a screen-reader player unable to know
+     what they may play. The plaque shows the same thing to everyone else. */
+  nodes['top-card'].setAttribute('aria-label', isWild(top)
+    ? `Top card: Wild, topping is ${SUITS[activeSuitOf(g)].label.toLowerCase()}`
+    : `Top card: ${prettyCard(top)}`);
   paintFace(top, {
     index: nodes['top-index'], glyph: nodes['top-glyph'],
     suit: nodes['top-suit'], ghost: nodes['top-ghost'],
@@ -1718,23 +2883,75 @@ function renderCenter(snap, g, over) {
    badge on the tile carries the true count. */
 const FAN_ROTS = [-10, -2, 6, 13];
 
+/** The empty shell of one seat. Everything inside it is then updated in place. */
+function buildSeat(playerId) {
+  const seat = document.createElement('div');
+  seat.className = 'seat';
+  seat.dataset.player = playerId;
+  seat.setAttribute('role', 'img');
+  seat.innerHTML = `<div class="plate">
+      <div class="seat-body">
+        <div class="stack">
+          <span class="seat-tile"><span class="seat-initial"></span></span>
+          <span class="count-badge"></span>
+        </div>
+        <div class="fan"></div>
+      </div>
+      <div class="seat-status">
+        <span class="seat-name"></span>
+        <span class="seat-verb"></span>
+      </div>
+    </div>`;
+  return seat;
+}
+
+/** One-shot classes fired at a seat plate from outside the render (see renderSeats):
+ *  the turn pop, and fx.js's TONDO stamp.
+ *  (The skip duck and the callout lunge are WAAPI animations in fx.js, so they
+ *  need no entry here.) */
+const PLATE_ONE_SHOTS = ['is-pop', 'is-tondo'];
+
+/** Adds or removes fanned card backs so the stack matches the hand size. */
+function syncFan(fan, shown) {
+  while (fan.children.length > shown) fan.lastElementChild.remove();
+  while (fan.children.length < shown) {
+    const back = document.createElement('span');
+    back.className = 'mini-back back-face';
+    back.style.transform = `rotate(${FAN_ROTS[fan.children.length] || 0}deg)`;
+    fan.appendChild(back);
+  }
+}
+
+const setTextIfChanged = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+
+/**
+ * Seats are updated in place, keyed by player id — the same treatment the hand
+ * gets, and for the same reasons.
+ *
+ * This used to render one HTML string for the whole ring and assign it to
+ * `innerHTML` whenever it differed from last time. Because ANY difference
+ * rewrote EVERY seat, three things followed. A card count changing anywhere
+ * destroyed and rebuilt all four seats, so a player who had forgotten TONDO had
+ * their alarm restarted by other people's moves. The seats' own CSS opacity
+ * transitions could never run at all, because the node that would have
+ * transitioned was replaced rather than changed. And the rebuild cost the most
+ * DOM churn in the app on the single most frequent event in the game.
+ *
+ * Keeping the nodes fixes all three: an animation restarts only when the thing
+ * it describes actually changes.
+ */
 function renderSeats(snap, g, over) {
   const around = seatsAroundYou(g, snap.youId);
   const nextId = over ? '' : nextPlayerId(g);
   const maxBacks = COMPACT.matches ? 3 : 4;
+  const host = nodes.seats;
+  const live = new Map([...host.children].map((n) => [n.dataset.player, n]));
 
-  const seatsHtml = around.map(({ p, slot, offset }) => {
+  around.forEach(({ p, slot, offset }, i) => {
     const tone = TONES[SEAT_TONES[offset % SEAT_TONES.length]];
     const acting = !over && p.id === g.turnPlayerId && p.connected;
     const isNext = p.id === nextId && !acting;
-    const one = p.cardCount === 1;
-    const name = nicely(p.name);
-
-    let backs = '';
-    const shown = Math.min(p.cardCount, maxBacks);
-    for (let k = 0; k < shown; k++) {
-      backs += `<span class="mini-back back-face" style="transform:rotate(${FAN_ROTS[k] || 0}deg)"></span>`;
-    }
+    const name = nicelyName(p.name);
 
     let status = '', loud = false, alarm = false;
     if (over && g.winnerId === p.id) { status = 'wins!'; loud = true; }
@@ -1744,36 +2961,74 @@ function renderSeats(snap, g, over) {
     else if (p.vulnerable) { status = 'forgot TONDO!'; alarm = true; }
     else if (acting) { status = 'playing…'; loud = true; }
     else if (isNext) { status = 'next'; }
-    else if (one) { status = 'one card!'; }
+    else if (p.cardCount === 1) { status = 'one card!'; }
     else if (p.declaredTondo) { status = 'TONDO!'; }
     else status = 'waiting';
+    // A transient verb ("skipped", "+2") outranks the ordinary statuses: it is
+    // the words half of a consequence, and it has to be there under reduced
+    // motion, where the duck and the throw are not. A win, an absence and the
+    // forgot-TONDO alarm outrank it — the alarm is still true and still
+    // catchable, and swapping it out for 1.2s toggled the plate's `is-loud` off
+    // and on, which replayed the alarm pop when the note expired.
+    const note = (status === 'wins!' || status === 'away — reconnecting' || alarm) ? null : liveSeatNote(p.id);
+    if (note) { status = note; loud = true; }
 
-    const toneVars = `--tone-bg:${tone.bg};--tone-edge:${tone.edge}`;
+    let seat = live.get(p.id);
+    if (!seat) seat = buildSeat(p.id);
+    else live.delete(p.id);
+    if (host.children[i] !== seat) host.insertBefore(seat, host.children[i] || null);
+
+    // `className` is assigned wholesale only when it actually differs, so the
+    // seat's transitions see a class change only on a real state change.
+    const seatClass = `seat seat-${slot}${acting ? '' : (isNext ? ' is-next' : ' is-idle')}`;
+    if (seat.className !== seatClass) seat.className = seatClass;
+
     const cardWord = p.cardCount === 1 ? 'card' : 'cards';
-    const seatLabel = `${name}, ${p.cardCount} ${cardWord}, ${status}`;
-    return `<div class="seat seat-${slot} ${acting ? '' : (isNext ? 'is-next' : 'is-idle')}" data-player="${esc(p.id)}" role="img" aria-label="${esc(seatLabel)}">
-      <div class="plate ${acting ? 'is-acting' : ''} ${(loud || alarm) && !acting ? 'is-loud' : ''}">
-        <div class="seat-body">
-          <div class="stack" style="${toneVars}">
-            ${acting ? '<span class="seat-ring"></span>' : ''}
-            <span class="seat-tile"><span class="seat-initial">${esc((name.charAt(0) || '?').toUpperCase())}</span></span>
-            <span class="count-badge">${p.cardCount}</span>
-          </div>
-          <div class="fan">${backs}</div>
-        </div>
-        <div class="seat-status ${alarm ? 'is-alarm' : (loud ? 'is-loud' : '')}">
-          <span class="seat-name">${esc(name)}</span>
-          <span class="seat-verb">${esc(status)}</span>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-  // Skip identical repaints so the acting plate's bob is not restarted (and
-  // the pop not replayed) by every unrelated snapshot.
-  if (seatsHtml !== app.lastSeatsHtml) {
-    nodes.seats.innerHTML = seatsHtml;
-    app.lastSeatsHtml = seatsHtml;
-  }
+    const label = `${name}, ${p.cardCount} ${cardWord}, ${status}`;
+    if (seat.getAttribute('aria-label') !== label) seat.setAttribute('aria-label', label);
+
+    const plate = seat.firstElementChild;
+    // A seat note makes the PILL loud, never the plate. `.plate.is-loud` is a pop,
+    // and the note arrives with the snapshot: on the plate it fired before the
+    // card's impact frame, and it replayed straight after the duck (a 0.4-opacity
+    // flash, measured at 406ms). The consequence effect (duck, throw, punch) is
+    // the only motion the victim's plate gets.
+    const plateClass = `plate${acting ? ' is-acting' : ''}${(loud || alarm) && !acting && !note ? ' is-loud' : ''}`;
+    // Transient one-shot classes (PLATE_ONE_SHOTS) are owned by their callers;
+    // preserve them across updates, or a repaint landing mid-animation would
+    // strip the class and cut the motion short.
+    const transient = PLATE_ONE_SHOTS.filter((c) => plate.classList.contains(c));
+    const bare = transient.reduce((cls, c) => cls.replace(' ' + c, ''), plate.className);
+    if (bare !== plateClass) {
+      plate.className = plateClass + transient.map((c) => ' ' + c).join('');
+    }
+
+    const stack = plate.querySelector('.stack');
+    if (stack.style.getPropertyValue('--tone-bg') !== tone.bg) {
+      stack.style.setProperty('--tone-bg', tone.bg);
+      stack.style.setProperty('--tone-edge', tone.edge);
+    }
+    // The acting ring is a node rather than a class so its pulse starts when
+    // the turn arrives and cannot be restarted by an unrelated repaint.
+    const ring = stack.querySelector('.seat-ring');
+    if (acting && !ring) {
+      const r = document.createElement('span');
+      r.className = 'seat-ring';
+      stack.insertBefore(r, stack.firstChild);
+    } else if (!acting && ring) ring.remove();
+
+    setTextIfChanged(stack.querySelector('.seat-initial'), (name.charAt(0) || '?').toUpperCase());
+    setTextIfChanged(stack.querySelector('.count-badge'), String(p.cardCount));
+    syncFan(plate.querySelector('.fan'), Math.min(p.cardCount, maxBacks));
+
+    const statusEl = plate.querySelector('.seat-status');
+    const statusClass = `seat-status${alarm ? ' is-alarm' : (loud ? ' is-loud' : '')}`;
+    if (statusEl.className !== statusClass) statusEl.className = statusClass;
+    setTextIfChanged(statusEl.querySelector('.seat-name'), name);
+    setTextIfChanged(statusEl.querySelector('.seat-verb'), status);
+  });
+
+  live.forEach((n) => n.remove());
 }
 
 /**
@@ -1839,6 +3094,12 @@ function renderHand(g, yourTurn, playable, drawnId) {
   const focusedIndex = focusedId
     ? [...row.children].findIndex((n) => n.dataset.card === focusedId) : -1;
 
+  // A new deal is a whole new hand, even where a card id repeats. Ids name a
+  // card in the deck (c0…c67), not a hand, so a keyed node from last round's
+  // leftovers would be KEPT for the same card in the new deal — shown at once,
+  // before any ghost has left the deck. (A three-card leftover shares an id
+  // with a fresh seven-card hand 1 − C(65,7)/C(68,7) ≈ 28% of the time.)
+  if (app.roundDeal) row.replaceChildren();
   const live = new Map([...row.children].map((n) => [n.dataset.card, n]));
   const entering = [];
   g.hand.forEach((c, i) => {
@@ -1882,25 +3143,53 @@ function renderHand(g, yourTurn, playable, drawnId) {
      entry finishes; opacity is a separate effect because additive opacity
      would cancel the fade. */
   if (entering.length && !RM.matches) {
+    // During a new round's deal each card that has a ghost (the first
+    // ROUND_DEAL_CARDS) rises as that ghost arrives: the same round-robin slot
+    // dealGhosts gives it, plus the flight. The rest follow straight after the
+    // last of those on the ordinary draw stagger — continuing the round-robin
+    // for cards nobody sees dealt left a 7-card hand still rising at 3.1s.
+    const deal = app.roundDeal && app.roundDeal.seatIndex >= 0 ? app.roundDeal : null;
+    const ghosted = Math.min(entering.length, ROUND_DEAL_CARDS);
+    const arrival = (k) => deal.startDelay + k * (deal.players * 90) + deal.seatIndex * 90 + MS.deal;
+    const rising = [];
     entering.forEach((node, k) => {
+      const delay = !deal ? Math.min(k, 6) * MS.dealStep
+        : (k < ghosted ? arrival(k) : arrival(ghosted - 1) + (k - ghosted + 1) * MS.dealStep);
       const timing = {
         duration: MS.handIn,
-        delay: Math.min(k, 6) * MS.dealStep,
+        delay,
         easing: EASE_OUT,
         fill: 'backwards',   // invisible during its delay, not popped in early
       };
-      node.animate(
+      const rise = node.animate(
         [{ transform: 'translateY(22px) scale(.92)' }, { transform: 'translateY(0) scale(1)' }],
         { ...timing, composite: 'add' });
       node.animate([{ opacity: 0 }, { opacity: 1 }], timing);
+      // A card still waiting to rise is at opacity 0 but otherwise a real
+      // button: it could be tabbed to, armed or played unseen. Inert until its
+      // rise begins (releaseWhenRising), and tapCardId refuses it besides.
+      if (delay > 0) { node.inert = true; rising.push({ node, rise, delay }); }
     });
+    if (rising.length) releaseWhenRising(rising);
   }
 
-  if (focusedId && document.activeElement === document.body && row.children.length) {
+  if (focusedId && focusLost() && row.children.length) {
     // The focused card left the hand (it was played): land on its neighbour.
+    // A card that has not started rising yet is `inert` and cannot take focus
+    // — focusing it is a silent no-op that leaves the player on <body> — so
+    // the search walks outwards from where the played card was to the nearest
+    // card that can actually hold focus.
     const again = row.querySelector(`[data-card="${CSS.escape(focusedId)}"]`);
-    const fallback = row.children[Math.min(Math.max(focusedIndex, 0), row.children.length - 1)];
-    (again || fallback).focus({ preventScroll: true });
+    const takesFocus = (n) => !!n && !n.inert && !n.disabled;
+    const kids = [...row.children];
+    const start = Math.min(Math.max(focusedIndex, 0), kids.length - 1);
+    let near = null;
+    for (let d = 0; d < kids.length && !near; d++) {
+      if (takesFocus(kids[start - d])) near = kids[start - d];
+      else if (takesFocus(kids[start + d])) near = kids[start + d];
+    }
+    const target = takesFocus(again) ? again : near;
+    if (target) target.focus({ preventScroll: true });
   }
   /* Measured, not deferred on principle: reading the row here — straight after
      rebuilding the hand, the seats and the centre — was the single forced
@@ -1912,6 +3201,26 @@ function renderHand(g, yourTurn, playable, drawnId) {
      hint is corrected inside updateFades precisely because the row cannot be
      measured while it is still being written. */
   scheduleFades();
+}
+
+/** Hands each waiting card back to the player on the frame its rise begins —
+ *  read off its own entry animation, so it cannot come back before it is seen. */
+function releaseWhenRising(cards) {
+  const tick = () => {
+    let waiting = 0;
+    for (const c of cards) {
+      if (!c.node.inert) continue;
+      const t = c.rise.currentTime;
+      const state = c.rise.playState;
+      if (!c.node.isConnected || state === 'finished' || state === 'idle' || (t !== null && t >= c.delay)) {
+        c.node.inert = false;
+      } else {
+        waiting++;
+      }
+    }
+    if (waiting) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
 }
 
 function previewCardId(id) {
@@ -1937,9 +3246,12 @@ function tapCardId(id) {
   const g = s.game;
   const c = g.hand.find((x) => x.id === id);
   if (!c || s.phase !== 'playing' || g.drawnDecisionCardId) return;
+  // A card that has not started rising yet is not on screen (see renderHand).
+  const node = nodes['hand-row'].querySelector(`[data-card="${CSS.escape(id)}"]`);
+  if (node && node.inert) return;
 
   if (g.turnPlayerId !== s.youId) {
-    setMessage(`${nicely(playerName(g.turnPlayerId))} is playing — you can look, but not play yet.`, 'info');
+    setMessage(`${nicelyName(playerName(g.turnPlayerId))} is playing — you can look, but not play yet.`, 'info');
     return;
   }
   if (!(g.playableCardIds || []).includes(id)) {
@@ -1966,6 +3278,9 @@ function tapCardId(id) {
     renderGame(s);
     return;
   }
+  // Press feedback for the commit, not for the arming tap above: the buzz
+  // says "that went", which is only true of this branch.
+  haptics.tap();
   send({ type: 'play', cardId: id });
 }
 
@@ -1986,14 +3301,42 @@ function refuse(cardId) {
   app.flashTimer = setTimeout(() => nodes.plaque.classList.remove('flash'), MS.flash);
 }
 
+/**
+ * Has the keyboard been dropped? A removed node leaves <body> focused, but a
+ * node that is merely hidden can keep `document.activeElement` pointing at it
+ * for a while (measured on the help dialog: still #help-close one microtask,
+ * one rAF and one timeout after close), so "is it still connected and in the
+ * document" is the question, not "is it <body>".
+ */
+function focusLost() {
+  const a = document.activeElement;
+  return !a || a === document.body || !a.isConnected || !document.body.contains(a);
+}
+
+/**
+ * Where the keyboard goes when a tray bar closes under it — the suit picker,
+ * either way it can close, and the callout bar. The card the bar was about if
+ * it is still in the hand (Escape put a Wild back), else the nearest card that
+ * survived, else the Draw button. Never <body>.
+ */
+function focusHandOrDraw(cardId) {
+  const row = nodes['hand-row'];
+  const handUp = !nodes['hand-wrap'].hidden;
+  const usable = (n) => n && !n.inert && !n.disabled && (n.offsetParent || n.getClientRects().length);
+  const card = (handUp && cardId) ? row.querySelector(`[data-card="${CSS.escape(cardId)}"]`) : null;
+  const target = (usable(card) && card)
+    || (handUp ? [...row.children].find(usable) : null)
+    || (usable(nodes['draw-btn']) ? nodes['draw-btn'] : null);
+  if (target) target.focus({ preventScroll: true });
+}
+
 function cancelWild() {
   const cardId = app.pendingWild;
   if (!cardId) return;
   app.pendingWild = null;
   if (!app.snap) return;
   renderGame(app.snap);
-  const card = nodes['hand-row'].querySelector(`[data-card="${CSS.escape(cardId)}"]`);
-  if (card) card.focus({ preventScroll: true });
+  focusHandOrDraw(cardId);
 }
 
 /* Escape is the help dialog's OWN key: a native <dialog> closes on it, and
@@ -2058,12 +3401,128 @@ window.addEventListener('resize', () => {
   });
 });
 
+/* ------------------------------------------------------------------ sound */
+
+/* A browser will not create a running AudioContext outside a user gesture, and
+   iOS suspends the one we have whenever the tab goes away. So this listens to
+   every gesture rather than just the first: `unlock()` is a no-op once the
+   context is running, and the repeat is what brings it back after a suspend. */
+for (const evt of ['pointerdown', 'keydown', 'touchstart']) {
+  document.addEventListener(evt, () => sound.unlock(), { passive: true });
+}
+
+const soundBtn = document.getElementById('sound-btn');
+function paintSoundButton() {
+  const on = !sound.isMuted();
+  soundBtn.setAttribute('aria-pressed', String(on));
+  soundBtn.setAttribute('aria-label', on ? 'Sound on — turn off' : 'Sound off — turn on');
+  soundBtn.classList.toggle('is-off', !on);
+}
+soundBtn.addEventListener('click', () => {
+  const nowMuted = sound.toggleMuted();
+  paintSoundButton();
+  // Unmuting plays the sound it just re-enabled, so the button proves itself.
+  if (!nowMuted) sound.play('turn');
+});
+paintSoundButton();
+
+/* ---------------------------------------------------------------- haptics */
+
+/* The toggle only exists where the capability does. `navigator.vibrate` has
+   never shipped in Safari on iOS, so on roughly half the phones this game is
+   played on the button stays `hidden` rather than sitting there doing nothing
+   — and every other channel carries the same information regardless. */
+const hapticsBtn = document.getElementById('haptics-btn');
+function paintHapticsButton() {
+  const on = haptics.isEnabled();
+  hapticsBtn.hidden = !haptics.isSupported();
+  hapticsBtn.setAttribute('aria-pressed', String(on));
+  hapticsBtn.setAttribute('aria-label', on ? 'Vibration on — turn off' : 'Vibration off — turn on');
+  hapticsBtn.classList.toggle('is-off', !on);
+}
+hapticsBtn.addEventListener('click', () => {
+  const on = haptics.setEnabled(!haptics.isEnabled());
+  paintHapticsButton();
+  // Turning it on proves itself in the only way this channel can be proven.
+  if (on) haptics.tap();
+});
+paintHapticsButton();
+
 /* ------------------------------------------------------------- how to play */
 
 const helpDialog = document.getElementById('help-dialog');
-document.querySelectorAll('[data-help-open]').forEach((btn) => {
-  btn.addEventListener('click', () => helpDialog.showModal());
+/* Delegated, not a one-shot querySelectorAll at boot: a `[data-help-open]`
+   button that is added to the page after that line has run is a dead control
+   that still looks like a live one. */
+document.addEventListener('click', (e) => {
+  const opener = e.target instanceof Element ? e.target.closest('[data-help-open]') : null;
+  if (opener) openHelp(opener);
 });
+
+/** The control focus should return to when the dialog closes, when the
+ *  browser has none of its own (an auto-open has no opener). */
+let helpReturn = null;
+/** This dialog was opened by the app, not by the player. */
+let helpAuto = false;
+
+function openHelp(opener) {
+  // Seeing the rules once is the whole gate on the lobby's auto-open.
+  try { localStorage.setItem('tondo.seenHelp', '1'); } catch { /* private mode */ }
+  helpReturn = opener || null;
+  helpAuto = !opener;
+  if (!helpDialog.open) helpDialog.showModal();
+}
+
+/** Takes an auto-opened dialog down when the screen under it changes. A
+ *  dialog the player opened themselves is theirs and stays. */
+function closeAutoHelp(landOn) {
+  if (!helpDialog.open || !helpAuto) return;
+  helpReturn = landOn || null;
+  helpDialog.close();
+}
+
+/** A real control on the screen the player is actually looking at. */
+function helpFallbackControl() {
+  const screen = document.getElementById('screen-' + (document.body.dataset.screen || 'home'));
+  if (!screen) return null;
+  const shown = (n) => !!(n.offsetParent || n.getClientRects().length);
+  const help = [...screen.querySelectorAll('[data-help-open]')].find(shown);
+  if (help) return help;
+  return [...screen.querySelectorAll('button:not([disabled])')].find(shown) || null;
+}
+
+/* A native <dialog> restores focus to whatever opened it — but the lobby's
+   first-visit auto-open has no opener, so the browser has nothing to restore
+   to and focus falls to <body>: defect (c) again, inside the flow (b) adds.
+   So the landing is placed here rather than waited for. Measured in headless
+   Chrome 1280x800: at `close` time, and still one microtask, one rAF and one
+   timeout later, document.activeElement is #help-close — a node inside a
+   dialog that is already display:none — and only afterwards does the browser
+   quietly reset it to <body>. Reading focus to decide whether to intervene
+   therefore always reads the wrong answer; setting it does not. Where the
+   browser would have a restore target of its own (a button the player
+   pressed) this lands on that same button. */
+helpDialog.addEventListener('close', () => {
+  const back = helpReturn;
+  helpReturn = null;
+  helpAuto = false;
+  const shown = (n) => !!(n && n.isConnected && (n.offsetParent || n.getClientRects().length));
+  const target = shown(back) ? back : helpFallbackControl();
+  if (target) target.focus({ preventScroll: true });
+});
+
+/** The lobby, on a first visit: the rules, once, unasked. */
+function maybeAutoHelp() {
+  if (helpDialog.open) return;
+  // "One quick pie" passes through the lobby in two snapshots on its way to a
+  // dealt table; a modal opened there would land on top of the game.
+  if (app.quickPie) return;
+  let seen = '';
+  try { seen = localStorage.getItem('tondo.seenHelp') || ''; } catch { seen = ''; }
+  if (seen) return;
+  openHelp(null);
+}
+
 document.getElementById('help-close').addEventListener('click', () => helpDialog.close());
 helpDialog.addEventListener('click', (e) => {
   if (e.target === helpDialog) helpDialog.close(); // backdrop tap closes
@@ -2085,6 +3544,11 @@ nodes['drawn-play'].addEventListener('click', () => {
 });
 nodes['drawn-keep'].addEventListener('click', () => send({ type: 'pass' }));
 nodes['newround-btn'].addEventListener('click', () => send({ type: 'newRound' }));
+nodes['hold-btn'].addEventListener('click', () => {
+  // Sticky on the server: the table waits until somebody actually deals.
+  send({ type: 'hold' });
+  nodes['live-now'].textContent = 'Table held. Deal when you are ready.';
+});
 
 /* ------------------------------------------------------------------ boot */
 
@@ -2094,7 +3558,7 @@ setScreen('home');
 /* A reload is a drop that lost its variables: arm the seat first, then dial. */
 let room = '';
 try { room = sessionStorage.getItem('tondo.room') || ''; } catch { /* ignore */ }
-if (room) {
+if (room && !app.autoJoin) {
   const seat = conn.seatFor(room);
   if (seat) { app.name = seat.name; conn.restore(seat); }
 }
