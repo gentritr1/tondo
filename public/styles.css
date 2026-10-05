@@ -2278,6 +2278,47 @@ body[data-screen="game"] { background: var(--page); }
   .stage.is-compressed .seat-top .seat-status { position: static; top: auto; }
 }
 
+/* The worst case for the top seat is NOT a decision bar — it is an ordinary
+   turn. A bar swaps the hand out, so the tray shrinks and the stage GAINS
+   room, which pushes the pie and the plaque down and away from the seat.
+   Measured at 320x568: stage 180px with no bar and the plaque top at 101,
+   against 230px and 123 with the suit picker open. So every scene the probes
+   watched (tondo, callout, drawn — all bars) was the safe case, and plain play
+   was the one nobody measured:
+
+     320x568  -12.6px      375x667  -9.4px       390x700  -3.1px
+     360x568  -12.6px      360x600  +6.8px       390x844  +33.2px
+
+   Not monotonic in stage height — 360x640 clears by 25.6px at 251px of stage
+   while 375x667 overlaps at 257px — so there is no honest narrow band to
+   scope this to. It applies across phone widths whenever no bar is open.
+
+   The pill goes to the screen-reader layer rather than `display: none`: the
+   layout space is what we need back, and a seat's name and status are exactly
+   what a screen-reader user should keep. Whenever the pill carries something
+   urgent a bar is open anyway (a vulnerable seat puts itself in
+   `calloutTargets`), which is the state that restores it.
+
+   The shift is the other half of the fix and it is not optional. `.plate` is
+   centred on its anchor, so removing 21px of pill gives back only 10.8px as
+   the plate re-centres downward — measured: the tile falls from 51 to 63 and
+   320x568 still overlaps at -1.8px. Lifting the seat .3x its tile converts
+   the rest: +9.0 at 320x568, +12.1 at 375x667, +19.1 at 390x700, and the tile
+   still sits 5.7px below the stage's top edge at the tightest size. .35x
+   leaves only 3.9px of that headroom; .25x only reaches +7.2. */
+@media (max-width: 719px) {
+  .stage:not(.is-compressed) .seat-top .seat-status {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  /* The seat moves when a bar opens or closes, so it moves on the stage's own
+     clock instead of jumping a frame ahead of it. */
+  .stage .seat-top { transition: opacity var(--t-state) var(--e-out), transform var(--t-swap) var(--e-out); }
+  .stage:not(.is-compressed) .seat-top {
+    transform: translate(-50%, calc(-50% - var(--seat-tile) * .3));
+  }
+}
+
 /* On short portrait/tablet screens, contextual trays scroll internally rather
    than pushing the table or the primary controls out of the viewport. */
 /* (band raised from 700px to 780px: a 360x740 phone has the same problem the
