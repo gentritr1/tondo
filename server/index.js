@@ -13,6 +13,7 @@ const game = require('./game');
 const bot = require('./bot');
 const { RoomManager } = require('./rooms');
 const { Assets } = require('./assets');
+const { SocketLimits, maxSocketsPerIp } = require('./limits');
 
 const PORT = Number(process.env.PORT) || 4600;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -111,8 +112,74 @@ const server = http.createServer((req, res) => {
   }
 });
 
+/** The peer address, with IPv4-mapped IPv6 folded onto the plain form so
+ *  127.0.0.1 and ::ffff:127.0.0.1 count as the same household. */
+function clientIp(req) {
+  const raw = (req && req.socket && req.socket.remoteAddress) || '';
+  return String(raw).replace(/^::ffff:/, '');
+}
+
+/**
+ * Who may open a socket at all.
+ *
+ * There was no Origin check, so any page a player happened to visit could open
+ * a socket to this server from inside their network — including to a LAN-only
+ * instance that is not reachable from the internet at all — and drive it from
+ * their browser: fill every room slot, flood it, sweep the room codes. A
+ * WebSocket upgrade is not covered by CORS, so nothing else was stopping it.
+ *
+ * An ABSENT Origin is allowed: that is a native client, a test harness, the
+ * smoke scripts and the probes — none of them is a browser being driven by a
+ * page the player did not mean to trust. A PRESENT Origin must have the same
+ * host:port the request was addressed to, which is what the game's own page
+ * always sends, by IP as readily as by name — LAN play (a phone opening
+ * http://192.168.1.7:4600) sends `Origin: http://192.168.1.7:4600` against
+ * `Host: 192.168.1.7:4600` and matches.
+ */
+function originAllowed(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  let host;
+  try {
+    host = new URL(origin).host;
+  } catch {
+    return false; // an Origin we cannot even parse is not our own page
+  }
+  return Boolean(host) && host === req.headers.host;
+}
+
+/**
+ * How many sockets this address already holds. Counted from the LIVE sockets
+ * rather than from a tally kept by hand, so an upgrade that dies between
+ * `verifyClient` and `connection` cannot leak a slot that never opened. ws
+ * completes a synchronous `verifyClient` and emits `connection` in the same
+ * call stack, so a socket admitted here is counted before the next upgrade is
+ * judged — the measured proof is that 1,200 parallel connects from one address
+ * yielded exactly 32 open sockets and 1,168 refusals.
+ */
+function socketsFromIp(ip) {
+  let n = 0;
+  for (const client of wss.clients) if (client.tondoIp === ip) n += 1;
+  return n;
+}
+
 // A game message is a few hundred bytes. Anything larger is not a player.
-const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
+const wss = new WebSocketServer({
+  server,
+  maxPayload: 16 * 1024,
+  verifyClient: (info) => {
+    if (!originAllowed(info.req)) {
+      console.warn(`[tondo] upgrade refused: Origin ${info.req.headers.origin} != Host ${info.req.headers.host}`);
+      return false;
+    }
+    const ip = clientIp(info.req);
+    if (socketsFromIp(ip) >= maxSocketsPerIp()) {
+      console.warn(`[tondo] upgrade refused: ${ip} already holds ${maxSocketsPerIp()} sockets`);
+      return false;
+    }
+    return true;
+  },
+});
 
 function send(socket, payload) {
   if (socket.readyState === 1) socket.send(JSON.stringify(payload));
@@ -129,13 +196,28 @@ function refuse(socket, room, seatId, message) {
   send(socket, room.snapshotFor(seatId));
 }
 
-wss.on('connection', (socket) => {
-  const session = { room: null, seatId: null };
+wss.on('connection', (socket, req) => {
+  // Every budget this connection has. Per socket, never per IP: four friends on
+  // one phone network must not share a message allowance.
+  const session = { room: null, seatId: null, limits: new SocketLimits() };
+  socket.tondoIp = clientIp(req);
 
   socket.isAlive = true;
   socket.on('pong', () => { socket.isAlive = true; });
 
   socket.on('message', (raw) => {
+    // The budget is spent BEFORE the frame is parsed, so a flood of garbage
+    // costs the same as a flood of valid JSON.
+    const verdict = session.limits.admit();
+    if (verdict === 'close') {
+      sendError(socket, 'Too many messages. Closing this connection.');
+      socket.close(1008, 'rate limit');
+      return;
+    }
+    if (verdict === 'slow') {
+      if (session.limits.shouldAnswerRefusal()) sendError(socket, 'Slow down — too many messages at once.');
+      return;
+    }
     let message;
     try {
       message = JSON.parse(raw.toString());
@@ -176,13 +258,33 @@ wss.on('connection', (socket) => {
 function handleMessage(socket, session, message) {
   // ---- joining ----------------------------------------------------------
   if (message.type === 'createRoom' || message.type === 'joinRoom') {
+    const limits = session.limits;
+    /* One socket used to be able to take every one of the 500 room slots in
+       under half a second, and the rooms survived it leaving because a game in
+       progress keeps its seats. A player creates one table. */
+    if (message.type === 'createRoom' && !limits.canCreateRoom()) {
+      return sendError(socket, 'You have opened enough tables. Join one instead.');
+    }
+    /* Wrong codes are rationed, which is what ends a sweep of the code space —
+       and the refusal is deliberately the same whatever the code was, so it
+       tells an attacker nothing a silent drop would not. */
+    if (message.type === 'joinRoom' && !limits.canTryJoin()) {
+      return sendError(socket, 'Too many wrong table codes. Wait a moment and try again.');
+    }
+
     // The new table is granted BEFORE the old seat is torn down: a bad code
     // or a full house must not leave the sender seatless.
     const result = message.type === 'createRoom'
       ? manager.createRoom(message.name, socket)
       : manager.joinRoom(message.code, message.name, socket, message.token);
 
-    if (!result.ok) return sendError(socket, result.error);
+    if (!result.ok) {
+      // Any failed join costs a token, not only "no such code": "that round is
+      // being played" is just as good an oracle for "this table exists".
+      if (message.type === 'joinRoom') limits.countJoinFailure();
+      return sendError(socket, result.error);
+    }
+    if (message.type === 'createRoom') limits.countRoomCreated();
 
     const oldRoom = session.room;
     const oldSeat = oldRoom ? oldRoom.findSeat(session.seatId) : null;

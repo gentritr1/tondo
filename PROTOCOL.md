@@ -1,8 +1,13 @@
-# TONDO — wire protocol (v1.2)
+# TONDO — wire protocol (v1.3)
 
 This file is the contract between `server/` and `public/js/`. Neither side may
 deviate from it without updating this file first. All messages are JSON objects
 with a `type` field, sent over a single WebSocket at the same origin (`ws://host/`).
+
+**v1.3 (2026-10-06)** adds per-socket limits and an Origin check on the
+WebSocket upgrade (see *Limits*), and widens the room-code space. The code
+SHAPE is unchanged — still `WORD-NNNN`, still at most 10 characters — so no
+client change is needed: only the word list and the random source moved.
 
 **v1.2 (2026-09-09)** adds the round-boundary clock: `nextDueAt` and `held` on
 `match`, a new `hold` client message, and a **permission change** — `newRound`
@@ -158,13 +163,52 @@ and repaint entirely from each snapshot.
 
 ## Rooms & reconnect
 
-- Room code: `WORD-NNNN` from a small pizza word list.
+- Room code: `WORD-NNNN` — 37 pizza words x 10,000 numbers = 370,000 codes,
+  chosen with `crypto.randomInt`, four digits with a leading zero allowed
+  (`SLICE-0421`). At most 10 characters. It was 10 words x 9000 = 90,000 until
+  v1.3, which one socket swept end to end in 2.1 seconds — and a guessed code
+  does not just reveal a table, it SEATS you at it. The shape could not grow:
+  measured in the lobby's own code element, a six-digit code is 237-261px
+  against a 229px box at 390x844 and would be truncated on the primary
+  reference phone. The wrong-code throttle below is the actual defence; the
+  space is depth. A client must not validate the shape beyond "non-empty,
+  uppercased, trimmed" — the word list is the server's business.
 - Each human seat gets a random hex `token` (returned in `joined`); a socket
   presenting the token for a disconnected seat reclaims it (`reconnected: true`).
 - On disconnect mid-game the seat stays (connected:false) and its turns are
   auto-played (draw+pass) after 10s. In lobby, disconnected seats are removed.
-- Empty rooms are garbage-collected after 60s.
+- Empty rooms are garbage-collected after 60s — or 10s if the table never had
+  a second human (see *Limits*).
 - Ping/pong heartbeat every 30s; no pong → terminate.
+
+## Limits (v1.3)
+
+None of this is authentication — the game has none and needs none. It is the
+floor that stops ONE socket denying the game to everybody, measured against what
+real play does rather than guessed. Everything except the last item is **per
+socket**, on purpose: this game is four friends in one room on their phones
+behind ONE public IP, and a tight per-IP limit would break the primary use case
+more thoroughly than the attack it prevents.
+
+| limit | value | over it |
+|---|---|---|
+| messages | 20/s, burst 40 | `error` "Slow down — too many messages at once." and the frame is dropped. Answered for the first 10 refusals, then dropped silently (an error reply is bytes out too). 500 refusals closes the socket with code 1008 |
+| `createRoom` | 3 per socket | `error` "You have opened enough tables. Join one instead." |
+| failed `joinRoom` | 5 free, then 1 per 2s | `error` "Too many wrong table codes. Wait a moment and try again." — the code is not even looked up, and the message is the same whatever the code was. Only a FAILED join costs; a correct code costs nothing |
+| concurrent sockets per IP | 32, `TONDO_MAX_SOCKETS_PER_IP` | the upgrade is refused with HTTP 401 |
+
+**Origin.** The WebSocket upgrade is refused (HTTP 401) when an `Origin` header
+is present and its host:port differs from `Host`. An ABSENT `Origin` is allowed
+— native clients, the smoke scripts and the probes. LAN play is unaffected: a
+phone opening `http://192.168.1.7:4600` sends `Origin: http://192.168.1.7:4600`
+against `Host: 192.168.1.7:4600`, which matches. Without this, any page a player
+visited could run every one of these attacks from inside their network,
+including against a LAN-only instance (a WS upgrade is not covered by CORS).
+
+**Abandoned tables.** A table whose humans are all disconnected is collected
+after 60s, or after **10s** if it never had a second human — nobody is coming
+back to a table one person opened and left, and 500 of those is how the room
+slots were exhausted.
 
 ## HTTP
 

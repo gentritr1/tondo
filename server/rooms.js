@@ -11,9 +11,38 @@ const crypto = require('crypto');
 const game = require('./game');
 const bot = require('./bot');
 
+/**
+ * The words a table code can be built from.
+ *
+ * It was ten, which with four digits made a space of 90,000 — one socket swept
+ * it end to end in 2.1 seconds, and a guessed code does not merely reveal a
+ * table, it SEATS you at it. Thirty-seven words x 10,000 numbers is 370,000.
+ *
+ * The SHAPE deliberately does not change, because it cannot: the lobby renders
+ * the code in a 32px display face inside a flex box that is 229px wide at
+ * 390x844, 199px at 360x640 and 159px at 320x568, with `text-overflow:
+ * ellipsis`. Measured in that very element (scripts/shoot.js --scene lobby,
+ * true text width off a cloned span, so nothing is clamped): a six-digit code
+ * is 237-261px and would be TRUNCATED on the primary reference phone, and a
+ * four-symbol alphanumeric tail reaches 236.6px ('BASIL-WWWW'). A code a player
+ * cannot read off their own screen is the worst legibility failure available, so
+ * the space was widened the only way that costs no pixels — more words.
+ *
+ * Every word here measures no wider, in that element, than the widest code the
+ * OLD list could already produce ('DOUGH-0000', 217.6px), so no code is ever
+ * visually wider than one today's server can already hand out. CREAM (219.3),
+ * SMOKE (218.5) and ROUND (218.3) were measured and dropped for exactly that
+ * reason. Do not add a word without measuring it.
+ *
+ * All of them are ordinary words somebody can spell after hearing them once
+ * across a room, which is the other half of the job: the code is read aloud.
+ */
 const CODE_WORDS = [
-  'PIZZA', 'DOUGH', 'CRUST', 'BASIL', 'OLIVE',
-  'PESTO', 'SAUCE', 'SLICE', 'OVEN', 'TONDO',
+  'PIZZA', 'DOUGH', 'CRUST', 'BASIL', 'OLIVE', 'PESTO', 'SAUCE', 'SLICE',
+  'OVEN', 'TONDO', 'FLOUR', 'YEAST', 'WATER', 'SALT', 'HERB', 'THYME',
+  'CHILI', 'ONION', 'CAPER', 'HONEY', 'BREAD', 'CRISP', 'EMBER', 'STONE',
+  'PEEL', 'WOOD', 'CHAR', 'MELT', 'FIRE', 'BRINE', 'LEMON', 'GRILL',
+  'FRESH', 'PLATE', 'TABLE', 'FEAST', 'FORNO',
 ];
 
 const TICK_MS = 250;
@@ -27,6 +56,13 @@ const AWAY_TURN_MS = 10000; // resolve the turn of a player whose socket went
    pie: that is the one boundary that has earned a pause. */
 const NEXT_SLICE_MS = 10000;
 const EMPTY_ROOM_TTL_MS = 60000;
+/* A table that NEVER had a second human is held for ten seconds, not sixty.
+   Sixty exists so a group whose phones all dropped can come back to the game
+   they were playing; a room one person opened and abandoned has nobody to come
+   back for, and holding 500 of those is how one socket denied the game to
+   everyone. Ten seconds still covers that one person refreshing the page (the
+   client reconnects by token in about a second). */
+const LONE_ROOM_TTL_MS = 10000;
 const MAX_NAME_LENGTH = 16;
 const MAX_ROOMS = 500;
 
@@ -83,6 +119,9 @@ class Room {
     this.rolledFor = new Set();
     this.calloutPlans = [];
     this.emptySince = 0;
+    // The most humans this table ever had at once. A table that never reached
+    // two is a table nobody is coming back to — see LONE_ROOM_TTL_MS.
+    this.peakHumans = 0;
     this.roundCount = 0;
     // Who opened the last round, by seat id. Rotating by index broke whenever
     // a seat joined or left between rounds, because the modulus base moved.
@@ -202,6 +241,7 @@ class Room {
       disconnectedAt: null,
     };
     this.seats.push(seat);
+    if (!isBot) this.peakHumans = Math.max(this.peakHumans, this.humanSeats().length);
     if (!this.hostId) this.hostId = seat.id;
     return seat;
   }
@@ -416,14 +456,32 @@ class RoomManager {
     clearInterval(this.timer);
   }
 
+  /**
+   * A table code: `WORD-NNNN`, 37 words x 10,000 numbers = 370,000.
+   *
+   * Four digits with a leading zero allowed (`SLICE-0421`), which the old
+   * 1000-9999 range quietly threw away. See CODE_WORDS for why the shape could
+   * not simply grow instead, and what was measured to establish that.
+   *
+   * `crypto.randomInt` rather than `Math.random`: a predictable PRNG has no
+   * business choosing the only thing standing between a stranger and your
+   * table. The space is depth, not the defence — the per-socket wrong-code
+   * throttle in server/limits.js is what actually ends a sweep.
+   */
   generateCode() {
     for (let attempt = 0; attempt < 200; attempt++) {
-      const word = CODE_WORDS[Math.floor(Math.random() * CODE_WORDS.length)];
-      const digits = String(Math.floor(1000 + Math.random() * 9000));
-      const code = `${word}-${digits}`;
+      const word = CODE_WORDS[crypto.randomInt(CODE_WORDS.length)];
+      const code = `${word}-${String(crypto.randomInt(10000)).padStart(4, '0')}`;
       if (!this.rooms.has(code)) return code;
     }
-    return `PIZZA-${Date.now().toString().slice(-4)}`;
+    // 200 collisions in a 370,000 space holding at most 500 rooms will not
+    // happen, but a duplicate code would hand one table's players to another,
+    // so the fallback is a scan that cannot collide rather than a prettier guess.
+    for (let n = 0; n < 10000; n++) {
+      const code = `${CODE_WORDS[0]}-${String(n).padStart(4, '0')}`;
+      if (!this.rooms.has(code)) return code;
+    }
+    return null;
   }
 
   getRoom(code) {
@@ -436,7 +494,11 @@ class RoomManager {
     if (this.rooms.size >= MAX_ROOMS) {
       return { ok: false, error: 'The pizzeria is full. Try again in a minute.' };
     }
-    const room = new Room(this.generateCode());
+    const code = this.generateCode();
+    // Unreachable while 9,000,000 codes hold at most 500 rooms, but a room
+    // without a code is not something to construct on a maybe.
+    if (!code) return { ok: false, error: 'The pizzeria is full. Try again in a minute.' };
+    const room = new Room(code);
     this.rooms.set(room.code, room);
     const seat = room.addSeat({ name: cleaned, socket });
     return { ok: true, room, seat };
@@ -569,7 +631,8 @@ class RoomManager {
     } else {
       room.emptySince = 0;
     }
-    if (room.emptySince && now - room.emptySince > EMPTY_ROOM_TTL_MS) {
+    const ttl = room.peakHumans >= 2 ? EMPTY_ROOM_TTL_MS : LONE_ROOM_TTL_MS;
+    if (room.emptySince && now - room.emptySince > ttl) {
       if (this.rooms.get(room.code) === room) this.rooms.delete(room.code);
       return;
     }
@@ -646,5 +709,6 @@ module.exports = {
   NEXT_SLICE_MS,
   AWAY_TURN_MS,
   EMPTY_ROOM_TTL_MS,
+  LONE_ROOM_TTL_MS,
   BOT_CALLOUT_MS,
 };
