@@ -298,6 +298,36 @@ const heartbeat = setInterval(() => {
 }, 30000);
 if (heartbeat.unref) heartbeat.unref();
 
+/**
+ * Brotli q11 is expensive (223ms for styles.css on a dev machine) and this one
+ * process also holds every player's WebSocket, so paying for it lazily meant
+ * the first visitor after a restart froze the whole game: a `sync` round-trip
+ * sampled through the first compression of styles.css went from 0.03ms to
+ * 230ms. Pay it here instead, before the port is even open — nobody is playing
+ * yet, and the quality (and therefore the bytes) stays exactly the same.
+ *
+ * Only URLs this server would actually serve are warmed: the dev-only design
+ * reference (`_ref.html`, 1.7MB) and the concept pages are left lazy so a dev
+ * restart does not wait on 1.7MB of q11.
+ */
+function warmAssets() {
+  const report = assets.warm((pathname) => {
+    if (DEV_ONLY.test(pathname)) return false;
+    return Boolean(MIME[path.extname(pathname).toLowerCase()]);
+  });
+  const note = report.failed.length ? ` — FAILED (served raw): ${report.failed.join(', ')}` : '';
+  console.log(`  precompressed ${report.files} text files `
+    + `(${report.br} br + ${report.gzip} gzip, ${report.raw} too small to compress) `
+    + `in ${report.ms.toFixed(0)}ms${note}`);
+}
+
+try {
+  warmAssets();
+} catch (err) {
+  // Warming is an optimisation. Never a reason not to open the pizzeria.
+  console.error('[tondo] asset warm-up failed, falling back to lazy:', err && err.message);
+}
+
 server.listen(PORT, () => {
   console.log(`\n  Tondo is open. http://localhost:${PORT}\n`);
 });

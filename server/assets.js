@@ -6,8 +6,14 @@
  * Three jobs, in the order they matter to the bill and to the player:
  *
  * 1. COMPRESSION. 242KB of HTML/CSS/JS shipped raw on every visit. Brotli takes
- *    that to roughly a quarter of the size. Encoded copies are built once, on
- *    first request, and kept in memory — there are five text files.
+ *    that to roughly a quarter of the size. Encoded copies are built ONCE AT
+ *    BOOT (`warm()`, called before `listen()`) and kept in memory — there are
+ *    ten text files. They used to be built lazily, on the first request for
+ *    each file, which put a brotli q11 compression on the request path of the
+ *    very process that holds every player's WebSocket: measured on this
+ *    machine, the first `/styles.css` blocked the event loop for 223ms and
+ *    stalled a live `sync` round-trip from 0.03ms to 230ms. Quality stays at
+ *    11 — the bytes are worth having; the latency just belongs at startup.
  *
  * 2. CONTENT HASHING, so the cache headers can be honest. The rule is: never
  *    ship an unhashed asset with a long max-age, and never ship a hashed one
@@ -181,10 +187,72 @@ class Assets {
       ? 'public, max-age=31536000, immutable'
       : 'public, max-age=0, must-revalidate';
 
-    const encoding = this.pickEncoding(entry, accept);
-    const payload = encoding ? this.encode(entry, body, encoding) : body;
+    // After `warm()` this is a Map lookup. An encoding that could not be
+    // produced (a compressor that threw) is served raw rather than 500: the
+    // bytes are the same, only the Content-Encoding header goes away.
+    const wanted = this.pickEncoding(entry, accept);
+    const encoded = wanted ? this.encode(entry, body, wanted) : null;
+    const encoding = encoded ? wanted : null;
 
-    return { body: payload, etag, cacheControl, encoding, ext: entry.ext };
+    return { body: encoded || body, etag, cacheControl, encoding, ext: entry.ext };
+  }
+
+  /**
+   * Builds every encoded copy up front, so `serve()` only ever reads a warm
+   * cache and a brotli q11 pass can never land on the request path of the
+   * process that also holds the game sockets. Call it BEFORE `listen()`.
+   *
+   * `filter(pathname)` decides what is worth warming — the caller owns that,
+   * because the caller is what knows which URLs it will actually serve (the
+   * 1.7MB dev-only design reference is deliberately not one of them).
+   *
+   * One file that will not compress must never stop the server from opening:
+   * it is logged, skipped, and falls back to being served uncompressed.
+   */
+  warm(filter = () => true) {
+    const started = process.hrtime.bigint();
+    const report = { files: 0, raw: 0, br: 0, gzip: 0, failed: [], ms: 0 };
+    const walk = (dir, prefix) => {
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const dirent of entries) {
+        const abs = path.join(dir, dirent.name);
+        const pathname = `${prefix}/${dirent.name}`;
+        if (dirent.isDirectory()) {
+          walk(abs, pathname);
+          continue;
+        }
+        if (!dirent.isFile()) continue;
+        if (!TEXT_TYPES.has(path.extname(dirent.name).toLowerCase())) continue;
+        if (!filter(pathname)) continue;
+        try {
+          const entry = this.load(abs);
+          if (!entry) continue;
+          const body = this.stamp(abs);
+          if (!body) continue;
+          // Exactly the two encodings `pickEncoding` can ask for, keyed the
+          // same way `serve()` will look them up.
+          if (entry.raw.length < 1024) {
+            report.raw += 1; // never compressed at request time either
+          } else {
+            for (const encoding of ['br', 'gzip']) {
+              if (this.encode(entry, body, encoding)) report[encoding] += 1;
+              else report.failed.push(`${pathname} (${encoding})`);
+            }
+          }
+          report.files += 1;
+        } catch (err) {
+          report.failed.push(`${pathname} (${err && err.message})`);
+        }
+      }
+    };
+    walk(this.root, '');
+    report.ms = Number(process.hrtime.bigint() - started) / 1e6;
+    return report;
   }
 
   /** Brotli where offered (it wins on text), gzip otherwise, raw for binaries. */
@@ -196,18 +264,25 @@ class Assets {
     return null;
   }
 
+  /** The encoded copy, or null if this build of zlib refused to make one. */
   encode(entry, body, encoding) {
     const key = `${encoding}:${body.length}`;
     const hit = entry.encoded.get(key);
     if (hit) return hit;
-    const out = encoding === 'br'
-      ? zlib.brotliCompressSync(body, {
-        params: {
-          [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
-          [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length,
-        },
-      })
-      : zlib.gzipSync(body, { level: 9 });
+    let out;
+    try {
+      out = encoding === 'br'
+        ? zlib.brotliCompressSync(body, {
+          params: {
+            [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+            [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length,
+          },
+        })
+        : zlib.gzipSync(body, { level: 9 });
+    } catch (err) {
+      console.error(`[tondo] ${encoding} compression failed, serving raw:`, err && err.message);
+      return null;
+    }
     entry.encoded.set(key, out);
     return out;
   }
