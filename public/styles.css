@@ -2295,9 +2295,33 @@ body[data-screen="game"] { background: var(--page); }
 
    The pill goes to the screen-reader layer rather than `display: none`: the
    layout space is what we need back, and a seat's name and status are exactly
-   what a screen-reader user should keep. Whenever the pill carries something
-   urgent a bar is open anyway (a vulnerable seat puts itself in
-   `calloutTargets`), which is the state that restores it.
+   what a screen-reader user should keep.
+
+   CORRECTION to the first version of this comment, which claimed that whenever
+   the pill carries something urgent a bar is open anyway. That holds for
+   `vulnerable` — such a seat puts itself in `calloutTargets` and opens the
+   callout bar — and it is FALSE for every note `fx.js setSeatNote()` writes:
+   "skipped", "+2", "TONDO!", "caught them!" all land during plain play with no
+   bar. Measured at 390x844 on a SKIP: the side seat read "skipped" at 96.8px
+   while the top seat's status was 2px wide. So this rule does cost the top
+   seat its note text on phones, and the earlier comment asserted a guarantee
+   the code does not provide.
+
+   It is still the right trade, for a measured reason rather than a hoped one.
+   Excusing a loud pill from the clip was tried and is worse: the plate is
+   centre-anchored, so letting a 20.5px pill back in pushes the tile 6.6px
+   ABOVE the stage's clipped top edge AND still leaves the pill 1.8px over the
+   plaque at 320x568 — it fails at both ends at once. Lifting further to pay
+   for it clips the avatar harder. At 568px of viewport the seat has about 15px
+   of slack and the pill needs 20.5; it does not fit, and no tuning makes it.
+
+   What carries the note instead: #event-ribbon prints the server's own
+   sentence for the whole table, the victim's plate ducks (measured 16% of its
+   own height), a voice plays on the impact frame, and #live-now announces it.
+   The pill was the fourth carrier of that fact and the only one that cost
+   layout. The one residual: after a player taps "Let it pass", the dismissed
+   seat stays vulnerable with the bar closed, so on a phone its alarm pill is
+   clipped — they dismissed it, but the standing indicator is gone.
 
    The shift is the other half of the fix and it is not optional. `.plate` is
    centred on its anchor, so removing 21px of pill gives back only 10.8px as
