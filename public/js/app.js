@@ -2185,6 +2185,20 @@ function renderGame(snap) {
  * argued with.
  */
 function standingClause(m, youId) {
+  /* The strip is a single non-wrapping row, so every pixel the chip gains is a
+     pixel the trailing buttons lose. Measured against the HELP BUTTON'S right
+     edge rather than the chip's own width — which is the mistake that shipped
+     this clause over the edge in the first place:
+
+       chip budget   390px: 178   360px: 153   320px: 113
+       worst clause  "Slice 2/4 — 300 behind" = 209
+
+     No phone width can hold it, and at 390 the overflow pushed "?" — the only
+     way into the rules — 17.2px off screen. Above the compact boundary the
+     budget is 508px at 720 and larger beyond, so the clause is gated on the
+     layout it was actually measured in. renderGame runs on resize, so crossing
+     the boundary updates the chip. */
+  if (COMPACT.matches) return '';
   const rows = m && Array.isArray(m.standings) ? m.standings : [];
   if (rows.length < 2) return '';
   const best = rows.reduce((a, b) => (b.points > a.points ? b : a), rows[0]);
@@ -2195,8 +2209,8 @@ function standingClause(m, youId) {
   if (gap > 0) return ` — ${gap} behind`;
   // Level at the top is worth saying; level on zero was filtered out above.
   const tied = rows.filter((r) => r.points === you.points).length > 1;
-  // "level", not "level in front": the longer phrasing measured 243px and the
-  // strip at 320x568 could not hold it.
+  // "level", not "level in front": the longer phrasing measured 243px, past
+  // the budget above even on the layouts that do show the clause.
   return tied ? ' — level' : ` — ${you.points - (rows.filter((r) => r.id !== youId)
     .reduce((a, b) => (b.points > a.points ? b : a), { points: 0 }).points)} ahead`;
 }

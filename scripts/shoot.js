@@ -52,6 +52,16 @@
  *                                   scrollHeight===clientHeight===0 always,
  *                                   which reads exactly like "trapped
  *                                   off-screen" and is not.
+ *                   strip-fits      nothing in `.strip-inner` extends past the
+ *                                   bar's content edge at 320/360/390/1280.
+ *                                   The bar is one non-wrapping row, so a
+ *                                   chip that grows pushes `?` — the only
+ *                                   route into the rules — off the viewport,
+ *                                   and nothing there scrolls. Asserted on
+ *                                   the BUTTON'S right edge, because the
+ *                                   standings clause was signed off by
+ *                                   measuring the CHIP at 1280x800 and shipped
+ *                                   `?` 17.2px off screen at 390x844.
  *                   seat-plaque-gap scripts/probes/seat-plaque-gap.js
  *                                   `pass: true` across the desktop/tablet
  *                                   widths it was written for.
@@ -651,6 +661,52 @@ async function runCheck(a) {
       }
     }
 
+    // ---- strip-fits --------------------------------------------------------
+    // `.strip-inner` is one non-wrapping row, so anything that grows inside it
+    // pushes the TRAILING controls off the right edge — and the last of those
+    // is `?`, the only way into the rules. That is exactly how it broke: the
+    // slice chip grew from 97.2px to 200.2px when the standings clause was
+    // added, the clause was verified by measuring the CHIP at 1280x800, and at
+    // 390x844 the help button ended 17.2px past the viewport with nothing
+    // scrollable to reach it. So the assertion is on the BUTTON'S right edge
+    // against the bar's content edge, never on the chip's own width.
+    //
+    // Two premises, asserted rather than assumed: the bar must have a real box,
+    // and it must hold the controls this check exists to protect. Without the
+    // second, a future refactor that moves the buttons elsewhere would leave
+    // this passing over an empty row.
+    const STRIP_PROBE = `(() => {
+      const inner = document.querySelector('.strip-inner');
+      if (!inner) return JSON.stringify({ valid: false, reason: 'no .strip-inner' });
+      const ib = inner.getBoundingClientRect();
+      if (!(ib.width > 0 && ib.height > 0)) return JSON.stringify({ valid: false, reason: '.strip-inner has no box' });
+      const help = inner.querySelector('.strip-help');
+      if (!help) return JSON.stringify({ valid: false, reason: 'no .strip-help inside .strip-inner' });
+      const kids = [...inner.children].filter((e) => !e.hidden && e.getBoundingClientRect().width > 0);
+      if (kids.length < 3) return JSON.stringify({ valid: false, reason: 'only ' + kids.length + ' visible strip children -- not the real bar' });
+      const padRight = parseFloat(getComputedStyle(inner).paddingRight) || 0;
+      const limit = Math.round((innerWidth - padRight) * 10) / 10;
+      const past = kids
+        .filter((e) => e.getBoundingClientRect().right > limit + 0.5)
+        .map((e) => ((e.textContent || e.getAttribute('aria-label') || e.className).trim().slice(0, 18) || '?')
+          + '@' + Math.round(e.getBoundingClientRect().right * 10) / 10);
+      const hr = Math.round(help.getBoundingClientRect().right * 10) / 10;
+      return JSON.stringify({
+        valid: true, visibleChildren: kids.length, limit, helpRight: hr,
+        slack: Math.round((limit - hr) * 10) / 10,
+        chip: (document.getElementById('slice-chip') || {}).textContent || '(no chip)',
+        past, pass: past.length === 0,
+      });
+    })()`;
+    for (const [w, h] of [[320, 568], [360, 640], [390, 844], [1280, 800]]) {
+      await gotoScene('yourTurn', w, h);
+      const parsed = JSON.parse(await cdp.eval(STRIP_PROBE));
+      record('strip-fits', `mock:yourTurn@${w}x${h}`, parsed.valid === true && parsed.pass === true,
+        parsed.valid
+          ? `children=${parsed.visibleChildren} chip="${parsed.chip}" helpRight=${parsed.helpRight} limit=${parsed.limit} slack=${parsed.slack}${parsed.past.length ? ' PAST: ' + parsed.past.join(', ') : ''}`
+          : `INVALID: ${parsed.reason}`);
+    }
+
     // ---- seat-plaque-gap ---------------------------------------------------
     const seatPlaqueSrc = fs.readFileSync(path.join(__dirname, 'probes', 'seat-plaque-gap.js'), 'utf8');
     for (const [w, h] of [[1024, 768], [1280, 800], [1440, 900]]) {
@@ -683,7 +739,13 @@ async function runCheck(a) {
         && parsed.checks.bannerClearAtYourTurn === true;
       record('banner-clear', `mock:roundOver@${w}x${h}`, ok,
         `valid=${parsed.valid} bannerVisible=${ar.bannerVisible} seatNodes=${ar.seats} seatsVisible=${ar.seatsVisible} `
-        + `standDown=${parsed.checks.seatsStandDownAtRoundOver} clearAtYourTurn=${parsed.checks.bannerClearAtYourTurn}`);
+        + `standDown=${parsed.checks.seatsStandDownAtRoundOver} clearAtYourTurn=${parsed.checks.bannerClearAtYourTurn}`
+        // Without this, an invalid run says only that one of fourteen premises
+        // did not hold, and every diagnosis costs a separate probe run — which
+        // then passes, because the premises that go soft are the sample-count
+        // floors and an isolated run has the machine to itself.
+        + (parsed.valid ? '' : ` FAILED PREMISES: ${(parsed.failedPremises || ['(probe predates failedPremises)']).join(', ')}`
+            + ` [frames next=${parsed.next && parsed.next.frames}/60 lobby=${parsed.lobby && parsed.lobby.frames}/45]`));
     }
 
     // ---- capture every mock scene at every reference viewport ----------

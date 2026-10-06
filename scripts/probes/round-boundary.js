@@ -422,16 +422,38 @@
   checks.bannerClearAtYourTurn = [atYourTurn, ...barReads].every(clearOrRuledTrade);
   checks.yourTurnClearOfTopCard = [atYourTurn, ...barReads].every((y) => y.topCardOverlap === false);
 
-  const valid = audioLive && roundOverShown && atRoundOver.bannerVisible && atRoundOver.seats === SEATS
-    && next.sweep.toppingsBefore > 0 && next.delivered && lobbyShown && lobby.delivered
+  /* Named one by one rather than chained with `&&`. A bare `valid=false` says
+     only that ONE of a dozen premises did not hold, and the gate prints the
+     verdict, not the conjunction — so a failure here cost a full diagnostic
+     round-trip just to learn WHICH premise it was, while the same run in
+     isolation passed. The names are the diagnosis. */
+  const premises = {
+    audioLive,
+    roundOverShown,
+    roundOverBannerVisible: atRoundOver.bannerVisible,
+    roundOverSeatNodes: atRoundOver.seats === SEATS,
+    toppingsBeforeSweep: next.sweep.toppingsBefore > 0,
+    nextDelivered: next.delivered,
+    lobbyShown,
+    lobbyDelivered: lobby.delivered,
     // The overlap tests below mean nothing unless the seats are ON SCREEN for
     // them, so the premise counts area, not nodes.
-    && atYourTurn.bannerVisible && atYourTurn.seatsVisible === SEATS
-    && barReads.every((y) => y.bannerVisible && y.seatsVisible === SEATS && y.compressed && y.measuredAt !== null)
+    yourTurnBannerVisible: atYourTurn.bannerVisible,
+    yourTurnSeatsOnScreen: atYourTurn.seatsVisible === SEATS,
+    barsUsable: barReads.every((y) => y.bannerVisible && y.seatsVisible === SEATS && y.compressed && y.measuredAt !== null),
     // YOUR TURN counts only if it waited for the table to settle (the swap was
     // seen moving; reduced motion snaps it) and still landed inside its 700ms.
-    && (rm || next.layoutMovingFrames > 0) && next.yourTurnMeasuredAt !== null && next.yourTurnMeasuredAt < 700
-    && next.frames >= 60 && lobby.frames >= 45;
+    layoutSeenMoving: rm || next.layoutMovingFrames > 0,
+    yourTurnMeasured: next.yourTurnMeasuredAt !== null && next.yourTurnMeasuredAt < 700,
+    // Sample-count floors. These are the premises that go soft under load:
+    // the rAF sampler is counting real frames, so a browser 40 navigations
+    // into a gate run can undershoot a floor that an isolated run clears
+    // three times over. Reported with their counts for exactly that reason.
+    nextFrameFloor: next.frames >= 60,
+    lobbyFrameFloor: lobby.frames >= 45,
+  };
+  const failedPremises = Object.keys(premises).filter((k) => !premises[k]);
+  const valid = failedPremises.length === 0;
   return JSON.stringify({
     viewport: `${innerWidth}x${innerHeight}`, reducedMotion: rm,
     atRoundOver, atYourTurn, atYourTurnWithBar,
@@ -443,6 +465,6 @@
       barsMeasuredAt: barReads.map((y) => y.measuredAt) },
     checks,
     pass: valid && Object.values(checks).every(Boolean),
-    valid,
+    valid, failedPremises,
   }, null, 1);
 })()
