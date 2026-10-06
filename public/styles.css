@@ -734,7 +734,23 @@ body[data-screen="lobby"] #screen-lobby {
 .code-row { display: flex; align-items: center; gap: 12px; }
 .code {
   flex: 1 1 auto; min-width: 0;
-  font-family: var(--font-display); font-weight: 800; font-size: 32px; line-height: 1.05;
+  /* The code is the one string a player reads out loud to three other people,
+     so it must never ellipsise. At a flat 32px it did: measured in this very
+     element with every one of the 37 CODE_WORDS, the widest code needs 217px
+     while the box is 159px at 320px of viewport and 199px at 360px — 37 of 37
+     words clipped at 320, 21 of 37 at 360, 3 of 37 at 375 (the digits survive
+     and the WORD loses its tail, which is the worst half to lose).
+
+     Scaled rather than stacked: moving the Copy button below the code would
+     give the code the whole row at its designed size, but it adds ~44px to a
+     lobby card that already overflows 320x568 by 237px.
+
+     The ramp is derived from the box, not guessed: required width is 6.78px per
+     px of font-size for the widest code, so the fit ceiling is 23.4px at 320
+     and 33.7px at 390. This line runs through (320, 22) and (390, 32) and sits
+     under that ceiling at every width with ~4px of slack. */
+  font-family: var(--font-display); font-weight: 800; line-height: 1.05;
+  font-size: clamp(22px, calc(14.3vw - 23.7px), 32px);
   letter-spacing: .03em; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
