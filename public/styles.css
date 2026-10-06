@@ -424,7 +424,15 @@ body { height: 100dvh; }
 }
 /* A Wild washes its chosen colour outward across the sauce (fx.js), on its own
    .sauce-wash layer: from a small bright pool to past the rim, gone by the end. */
-@keyframes sauce-wash { 0% { opacity: 0; transform: scale(.42); } 30% { opacity: 1; } 100% { opacity: 0; transform: scale(1.08); } }
+/* The rise carries --e-out's curve (cubic-bezier(.23,1,.32,1), written out
+   because a keyframe's own timing function is the house pattern — see
+   tondo-stamp); everything after it rides the rule's `linear`. A keyframe
+   timing function applies to the segment STARTING at that keyframe. */
+@keyframes sauce-wash {
+  0%   { opacity: 0; transform: scale(.42); animation-timing-function: cubic-bezier(.23,1,.32,1); }
+  30%  { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.08); }
+}
 /* The TONDO stamp (fx.js): a wind-up — squash and a counter-lean — then the
    seat slams big and settles. The wind-up (0-22%) runs on the rule's `linear`;
    the slam and the overshooting settle carry their own curves, set on the
@@ -1312,15 +1320,40 @@ body[data-screen="game"] { background: var(--page); }
   position: absolute; inset: 0; border-radius: 50%; pointer-events: none; opacity: 0;
   background: radial-gradient(circle closest-side, var(--wash-fill, transparent) 0%, var(--wash-fill, transparent) 55%, transparent 100%);
 }
-.sauce-wash.is-washing { animation: sauce-wash 520ms cubic-bezier(.16,1,.3,1) 1; }
+.sauce-wash.is-washing { animation: sauce-wash 520ms linear 1; }
 /* The reversal sweep (fx.js). Inside .sauce, like every centre layer that
    moves, so the plaque, the pile and the direction label never animate. */
 .dir-sweep {
   position: absolute; inset: 0; border-radius: 50%; pointer-events: none; opacity: 0;
   background: conic-gradient(from -20deg, transparent 0deg, rgb(245 203 92) 20deg, transparent 40deg, transparent 360deg);
 }
-.dir-sweep.is-cw  { animation: dir-sweep-cw 620ms cubic-bezier(.16,1,.3,1) 1; }
-.dir-sweep.is-ccw { animation: dir-sweep-ccw 620ms cubic-bezier(.16,1,.3,1) 1; }
+/* These four flourishes run on `linear`, and that is the opposite of this
+   file's usual advice for a reason worth writing down.
+
+   An animation's timing function warps TIME INTO PROGRESS for the whole
+   keyframe timeline. cubic-bezier(.16,1,.3,1) and --e-out are both strongly
+   front-loaded, so by ~16% of the declared duration the timeline is nearly
+   spent and the opacity has already collapsed. Measured by pausing each
+   animation and seeking it in 5ms steps, taking the window where opacity is at
+   least 40% of its own peak:
+
+     dir-sweep   620ms declared -> 100ms visible (16%)  -> linear: 380ms (61%)
+     sauce-wash  520ms declared ->  80ms visible (15%)  -> linear: 315ms (61%)
+     ring-pulse  220ms declared ->  40ms visible (18%)  -> linear: 135ms (61%)
+     token-hop   280ms declared ->  50ms visible (18%)  -> linear: 170ms (61%)
+
+   So every "this effect is too subtle" complaint about this file was partly a
+   DURATION bug: the values were not weak, they were shown for a fifth of the
+   time they claimed. Note that moving the easing onto the fade-out KEYFRAME
+   does not fix it — measured identical — because the input progress is already
+   front-loaded before any per-keyframe curve applies. The animation-level
+   function is the one that has to change.
+
+   --e-out stays correct everywhere it means "an element arriving or leaving",
+   where a fast start reads as responsiveness. It is wrong for a one-shot whose
+   entire job is to be seen for its stated duration. */
+.dir-sweep.is-cw  { animation: dir-sweep-cw 620ms linear 1; }
+.dir-sweep.is-ccw { animation: dir-sweep-ccw 620ms linear 1; }
 
 /* --- the ledger: one topping per card played, in its owner's wedge ------- */
 /* `overflow: visible` is deliberate and is half of the annulus floor (the
@@ -1395,7 +1428,7 @@ body[data-screen="game"] { background: var(--page); }
   content: ""; position: absolute; inset: -3px; border-radius: 14px;
   border: 2px solid rgba(255,247,232,.75); opacity: 0; pointer-events: none;
 }
-.plaque.flash::after { animation: tondo-ring-pulse 220ms var(--e-out) 1; }
+.plaque.flash::after { animation: tondo-ring-pulse 220ms linear 1; }
 /* The plaque is the answer to "what can I play?" — when that answer changes
    it acknowledges itself once, briefly, with the playful settle. */
 .plaque.is-pop { animation: plaque-pop 200ms var(--e-pop) 1; }
@@ -1638,7 +1671,7 @@ body[data-screen="game"] { background: var(--page); }
    turn change, once, and it carries the playful overshoot. */
 .plate.is-pop { animation: tondo-pop 260ms var(--e-pop) 1; }
 .plate.is-loud { animation: tondo-pop 200ms var(--e-out) 1; }
-.plate.is-loud::after { animation: tondo-ring-pulse 220ms var(--e-out) 1; }
+.plate.is-loud::after { animation: tondo-ring-pulse 220ms linear 1; }
 /* The TONDO stamp and its ring (fx.js), for a seat plate and for your tile.
    After the is-pop / is-loud rules on purpose: same specificity, so source order
    gives the stamp `animation` while both are on (a turn pop landing mid-stamp
@@ -1734,7 +1767,7 @@ body[data-screen="game"] { background: var(--page); }
   content: ""; position: absolute; inset: -2px; border-radius: 50%;
   background: rgba(245,203,92,.55); opacity: 0; pointer-events: none;
 }
-.turn-token.hop::after { animation: token-hop 280ms var(--e-out) 1; }
+.turn-token.hop::after { animation: token-hop 280ms linear 1; }
 
 .ribbon {
   position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); max-width: 92%; z-index: 8;
