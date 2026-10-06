@@ -2186,7 +2186,18 @@ function renderMatch(snap, over) {
     const winner = last && last.winnerId ? nicelyName(playerName(last.winnerId)) : null;
     setText(nodes['score-title'], !winner ? 'Round over'
       : (last.winnerId === snap.youId ? `You win slice ${m.round}` : `${winner} wins slice ${m.round}`));
-    setText(nodes['score-sub'], `${m.roundsPerPie - m.round} ${m.roundsPerPie - m.round === 1 ? 'slice' : 'slices'} left in the pie.`);
+    /* The scoreboard used to show a bare "+107" with nothing anywhere saying
+       where it came from, and the help dialog never uses the word "point" at
+       all. The server has always shipped the answer — roundResult.breakdown,
+       one { id, cards, points } per seat that did not win (server/game.js) and
+       documented in PROTOCOL.md — and no client code read it. This line spends
+       it: the sum IS the rule, so showing the addition teaches "the winner
+       banks the value of every other hand" without a sentence of instruction.
+       The slices-left count it replaces was duplicated by the pips directly
+       below it, which now carry that fact to assistive tech as well as to the
+       eye. */
+    setText(nodes['score-sub'], roundArithmetic(last, snap.youId)
+      || `${m.roundsPerPie - m.round} ${m.roundsPerPie - m.round === 1 ? 'slice' : 'slices'} left in the pie.`);
   }
 
   // Rows are keyed by player id for the same reason the seats are: a score
@@ -2228,6 +2239,30 @@ function renderMatch(snap, over) {
     pips.appendChild(pip);
   }
   [...pips.children].forEach((pip, i) => pip.classList.toggle('is-done', i < m.round));
+  /* The pips were aria-hidden decoration duplicating the sub-line's
+     slices-left sentence. The sub-line now carries the round's arithmetic
+     instead, so the pips take over the fact they were already showing. */
+  const label = `${m.round} of ${m.roundsPerPie} slices played`;
+  if (pips.getAttribute('aria-label') !== label) pips.setAttribute('aria-label', label);
+}
+
+/* "Cards left in hand: Dominic 45 + Pina 32 + you 30 = 107."
+   Built from the round result's own breakdown, in the order the server sent it,
+   so the figures cannot disagree with the +107 on the winner's row. Returns ''
+   when there is nothing to explain — no winner, or a breakdown the server did
+   not send — and the caller falls back to the old sentence rather than printing
+   a half-formed one. `forfeited` is called out separately because it comes from
+   a hand returned to the deck by someone who left, not from a seat still at the
+   table, and silently folding it into the sum would make the addition wrong. */
+function roundArithmetic(last, youId) {
+  if (!last || !last.winnerId || !Array.isArray(last.breakdown) || !last.breakdown.length) return '';
+  const parts = last.breakdown.map((b) => {
+    const who = b.id === youId ? 'you' : nicelyName(playerName(b.id));
+    return `${who} ${b.points}`;
+  });
+  const forfeited = last.forfeited
+    ? ` (+${last.forfeited} from a seat that left)` : '';
+  return `Cards left in hand: ${parts.join(' + ')} = ${last.points}${forfeited}.`;
 }
 
 /** "Next slice in 7 — or deal now." Seconds, floored, never below zero. */

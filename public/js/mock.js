@@ -74,7 +74,19 @@ function matchBlock() {
   // button exists for.
   const pieDone = table.scene === 'pieComplete';
   const winnerId = table.game && table.game.winnerId;
-  const points = 107;
+  /* What each seat that did NOT win was still holding. The real server sends
+     this as roundResult.breakdown (server/game.js, PROTOCOL.md), and this
+     fixture used to send `breakdown: []` — which is part of why the client
+     ignored the field for so long: no scene could show it, so nothing looked
+     wrong. `points` is the SUM rather than a separate constant, so the figures
+     the scoreboard adds up can never disagree with the total it prints. */
+  const HELD = { p1: { cards: 2, points: 30 }, p2: { cards: 3, points: 34 },
+                 p3: { cards: 4, points: 45 }, p4: { cards: 3, points: 32 } };
+  const breakdown = (table.phase === 'roundOver' && winnerId)
+    ? table.seats.filter((s) => s.id !== winnerId && HELD[s.id])
+        .map((s) => ({ id: s.id, cards: HELD[s.id].cards, points: HELD[s.id].points }))
+    : [];
+  const points = breakdown.reduce((a, b) => a + b.points, 0);
   const scores = { p1: 81, p2: 166, p3: 0, p4: 0 };
   if (over && winnerId) scores[winnerId] = (scores[winnerId] || 0) + points;
   const standings = table.seats
@@ -93,7 +105,7 @@ function matchBlock() {
     leaderIds: best && best.points ? [best.id] : [],
     standings,
     lastRound: over && winnerId
-      ? { winnerId, points, forfeited: 0, breakdown: [] }
+      ? { winnerId, points, forfeited: 0, breakdown }
       : null,
     // The scripted table has no server to deal for it, so the boundary clock
     // is shown at rest rather than counting toward a deal that cannot happen.
