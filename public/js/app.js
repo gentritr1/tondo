@@ -16,7 +16,7 @@ import { deriveEvents } from './events.js';
 import * as sound from './sound.js';
 import * as haptics from './haptics.js';
 import * as fx from './fx.js';
-import { pieResultText } from './share.js';
+import { pieResultText, sliceWord } from './share.js';
 
 /* ------------------------------------------------------------- constants */
 
@@ -1423,12 +1423,26 @@ nodes['create-btn'].addEventListener('click', () => {
 
 /* One tap instead of create, add three bots, deal. No stats, no record, no
    progression: playing alone must not grow a ledger to keep up with. */
-nodes['quickpie-btn'].addEventListener('click', () => {
-  const name = readName();
-  if (!name) return;
+function startQuickPie(name) {
   nodes['home-msg'].textContent = '';
   app.quickPie = 'creating';
   if (!send({ type: 'createRoom', name })) app.quickPie = null;
+}
+
+nodes['quickpie-btn'].addEventListener('click', () => {
+  const name = readName();
+  if (!name) return;
+  /* "One quick pie" is the fastest route from a cold load to a dealt table, and
+     it used to be the ONLY route that never showed the rules: the lobby's
+     auto-open is skipped on this path (a modal would land on the dealt game),
+     so a first-time solo player arrived at a four-handed table having been told
+     nothing. On a first visit the rules come first and "Got it" deals; every
+     visit after that is the one tap it advertises. */
+  let seen = '';
+  try { seen = localStorage.getItem('tondo.seenHelp') || ''; } catch { seen = ''; }
+  if (seen) { startQuickPie(name); return; }
+  pendingAfterHelp = () => startQuickPie(name);
+  openHelp(nodes['quickpie-btn']);
 });
 
 nodes['join-btn'].addEventListener('click', () => {
@@ -2244,6 +2258,14 @@ function renderMatch(snap, over) {
      instead, so the pips take over the fact they were already showing. */
   const label = `${m.round} of ${m.roundsPerPie} slices played`;
   if (pips.getAttribute('aria-label') !== label) pips.setAttribute('aria-label', label);
+  /* The rules say how many slices make a pie; the server decides. Filling it
+     from the wire means the help text cannot drift from PIE_ROUNDS, which is
+     exactly how the share text ended up hardcoding "Four". */
+  const slices = document.getElementById('help-slices');
+  if (slices) {
+    const word = sliceWord(m.roundsPerPie);
+    if (slices.textContent !== word) slices.textContent = word;
+  }
 }
 
 /* "Cards left in hand: Dominic 45 + Pina 32 + you 30 = 107."
@@ -3582,6 +3604,10 @@ function helpFallbackControl() {
    therefore always reads the wrong answer; setting it does not. Where the
    browser would have a restore target of its own (a button the player
    pressed) this lands on that same button. */
+/* Something to do once the player has read the rules — set by the quick-pie
+   button so a first visit reads first and deals second. */
+let pendingAfterHelp = null;
+
 helpDialog.addEventListener('close', () => {
   const back = helpReturn;
   helpReturn = null;
@@ -3589,13 +3615,19 @@ helpDialog.addEventListener('close', () => {
   const shown = (n) => !!(n && n.isConnected && (n.offsetParent || n.getClientRects().length));
   const target = shown(back) ? back : helpFallbackControl();
   if (target) target.focus({ preventScroll: true });
+  // Focus first, then act: the action may change screens, and setScreen() moves
+  // focus to the new screen's heading once it does.
+  const run = pendingAfterHelp;
+  pendingAfterHelp = null;
+  if (run) run();
 });
 
 /** The lobby, on a first visit: the rules, once, unasked. */
 function maybeAutoHelp() {
   if (helpDialog.open) return;
   // "One quick pie" passes through the lobby in two snapshots on its way to a
-  // dealt table; a modal opened there would land on top of the game.
+  // dealt table; a modal opened there would land on top of the game. That path
+  // shows the rules from its own button instead, before it deals.
   if (app.quickPie) return;
   let seen = '';
   try { seen = localStorage.getItem('tondo.seenHelp') || ''; } catch { seen = ''; }

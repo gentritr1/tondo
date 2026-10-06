@@ -61,6 +61,13 @@ function sliceCount(match) {
   return 4;
 }
 
+/* The help dialog needs the same number-as-word treatment, and one list of
+   words in the project is better than two that can disagree. */
+export function sliceWord(n) {
+  const i = Number(n);
+  return Number.isFinite(i) && SLICE_WORDS[i] ? SLICE_WORDS[i] : String(n);
+}
+
 function sliceSentence(n) {
   const word = SLICE_WORDS[n] || String(n);
   return `${word} slice${n === 1 ? '' : 's'}.`;

@@ -351,7 +351,16 @@
     <li>Nothing to play? <b>Draw one card.</b> If it fits you may play it at once; otherwise keep it and pass.</li>
     <li><b>⊘ Skip</b> makes the next player lose their turn. <b>+2</b> makes them draw two and lose their turn. <b>⇄ Flip</b> reverses the play order (with two players it acts as a Skip).</li>
     <li>Down to <b>two cards</b>? Call <b>TONDO</b> before playing one of them. Forget, and anyone who catches you makes you draw two.</li>
-    <li><b>First to zero cards wins</b> the round.</li>
+    <!-- Kept tight on purpose: the line above already names the action cards, so
+         repeating their glyphs here cost 151px of scroll inside the dialog at
+         320x568 — which would have pushed the pie rule, the newest and least
+         known of them, out of sight on the smallest screen. -->
+    <li><b>First to zero wins the slice</b> and scores the cards left in every other hand: numbers at face value, action cards 20 points, a <b>Wild</b> 50.</li>
+    <!-- The count is filled from match.roundsPerPie at runtime (app.js), so the
+         rules cannot drift from the server's PIE_ROUNDS the way the share text
+         once did. "Four" is the shipping value and the default before any match
+         block has arrived. -->
+    <li><b><span id="help-slices">Four</span> slices make a pie</b> — highest score takes it.</li>
   </ul>
   <button id="help-close" type="button" class="btn btn-primary btn-block">Got it</button>
 </dialog>

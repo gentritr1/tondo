@@ -429,11 +429,18 @@ function drawCard(state, playerId) {
   }
 
   const card = dealt[0];
-  addLog(state, `${up(player.name)} DREW A CARD`);
   if (canPlay(state, card)) {
+    addLog(state, `${up(player.name)} DREW A CARD`);
     state.drawnCard = { playerId, cardId: card.id };
     return { ok: true, card, playable: true };
   }
+  /* A drawn card that cannot be played ends the turn here, with no input from
+     the player. The server is the only thing that knows WHY — it has just
+     evaluated canPlay() — and saying so is the difference between "my turn
+     vanished" and "I drew a card that did not match". The phrasing stays third
+     person so it reads for every seat, since the client renders this line for
+     the whole table. */
+  addLog(state, `${up(player.name)} DREW A CARD - NOTHING TO PLAY`);
   advanceTurn(state, 1);
   return { ok: true, card, playable: false };
 }
