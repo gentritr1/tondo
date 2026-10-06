@@ -416,7 +416,6 @@ body { height: 100dvh; }
   100% { transform:rotate(-3deg) translateY(0) scale(1); opacity:1 }
 }
 /* was: filter:brightness on the whole 576px oven (full repaint each turn) */
-@keyframes table-turn { 0%{opacity:.55} 100%{opacity:0} }
 /* MATCH plaque acknowledging a new topping — squash, then settle. */
 @keyframes plaque-pop {
   0%   { transform:rotate(-2deg) scale(.972) }
@@ -527,7 +526,7 @@ body { height: 100dvh; }
   .stage { transition: none !important; }
   .banner.is-leaving { animation: rm-fade 140ms linear 1 reverse !important; }
   /* Pure attention-getters carry no information a fade can't: silence them. */
-  .card.refuse, .turn-token.hop::after, .stage.is-turn-change .ring::after,
+  .card.refuse, .turn-token.hop::after,
   .plaque.is-pop, .plaque.flash::after, .plate.is-loud::after { animation: none !important; }
   /* The consequence effects move; their meaning rides the seat verb ("skipped",
      "+2") and the live region instead, which fx.js writes under every
@@ -1142,15 +1141,12 @@ body[data-screen="game"] { background: var(--page); }
   box-shadow: 0 26px 54px rgba(0,0,0,.6), inset 0 2px 0 rgba(255,247,232,.1), inset 0 -8px 18px rgba(0,0,0,.5);
   pointer-events: none; z-index: 2;
 }
-/* The turn-change flash: a warm overlay fading out on top of the oven, rather
-   than `filter: brightness()` on the 576px element itself (which repainted the
-   crust, the sauce and their shadows every single turn). */
-.ring::after {
-  content: ""; position: absolute; inset: 2.8%; border-radius: 50%;
-  background: radial-gradient(circle at 50% 46%, rgba(255,236,190,.5), rgba(255,200,120,.16) 62%, transparent 78%);
-  opacity: 0; pointer-events: none;
-}
-.stage.is-turn-change .ring::after { animation: table-turn 220ms var(--e-out) 1; }
+/* (was: .ring::after + @keyframes table-turn — the per-turn warm flash over the
+   whole oven. Cut 2026-10-06: a 476px overlay firing 15-30 times a round, for
+   information the queue chip, the token hop, the seat pop and the seat pill
+   already carry. The layer is gone too, not just its animation: it existed only
+   to be flashed, and an always-transparent pseudo-element on the most-repainted
+   surface in the app is not worth keeping for nothing.) */
 
 .ring-gold { position: absolute; inset: 1.1%; border-radius: 50%; border: 1px solid rgba(245,203,92,.22); z-index: 1; }
 

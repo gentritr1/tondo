@@ -739,12 +739,17 @@ function applySnapshot(snap) {
         : `${nicelyName(playerName(g.winnerId))} WINS`.toUpperCase();
     }
     showBanner(text, 'win', 0);
-    // Keyed on the pie as well as the round, so the champion gets their own
-    // burst rather than inheriting the round winner's.
-    const celebrationKey = champions.length ? `pie:${champions.join(',')}` : g.winnerId;
-    if (app.celebratedWinner !== celebrationKey) {
-      app.celebratedWinner = celebrationKey;
-      celebrate();
+    /* Confetti is for the PIE, not for a slice. It used to fire on every round
+       win — four times a pie, including for a bot's — which left the one moment
+       worth escalating to with nothing bigger to reach for. The round already
+       has a banner, a queue chip, a score title and a scoreboard; the pie now
+       has the only burst. */
+    if (champions.length) {
+      const celebrationKey = `pie:${champions.join(',')}`;
+      if (app.celebratedWinner !== celebrationKey) {
+        app.celebratedWinner = celebrationKey;
+        celebrate();
+      }
     }
     app.lastTurn = undefined;
   } else if (yourTurnNow && app.lastTurn !== g.turnPlayerId) {
@@ -840,7 +845,13 @@ function applySnapshot(snap) {
   // the frame. A generic turn pop on top of a skip's duck or a +2's throw reads
   // as two things happening, and at two players the "turn" often never moved.
   if (turnChanged && !events.some((e) => fx.CONSEQUENCES.has(e.type))) {
-    pulse(nodes.stage, 'is-turn-change', 220);
+    /* The whole-pie warm flash that used to fire here is gone. It was a 476px
+       overlay on the single most-repainted surface, 15-30 times a round, saying
+       what the queue chip, the token hop, the seat pop and the seat pill all
+       already say. An effect a player sees tens of times per round is one they
+       stop seeing; spending the pie's own surface on it devalued the
+       consequence effects that genuinely need the eye. The seat pop below is
+       the right amount for "somebody's turn moved". */
     // Whoever just took the turn: their tile pops once, so a bot's move has a
     // visible beginning as well as an end.
     popSeat(g.turnPlayerId);
