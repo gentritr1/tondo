@@ -2163,7 +2163,44 @@ function renderGame(snap) {
  * During play it is deliberately almost invisible: one chip saying which slice
  * this is. The product principle is that idle surfaces stay quiet, and a
  * running scoreboard on screen while somebody is deciding a card is noise.
+ *
+ * That principle is kept. What the chip did NOT answer is the one question a
+ * player has mid-slice — "can this still change anything?" — and without it you
+ * can play a whole slice not knowing whether the pie is already decided. The
+ * answer is a gap, not a table: one clause on the chip that already exists,
+ * never a list of names and numbers over a board somebody is reading. A
+ * standings panel during play is still the wrong thing; the distance to the
+ * leader is not.
  */
+/* " — 85 behind", or nothing at all before anybody has scored.
+ *
+ * Deliberately a GAP and not a position: "2nd of 4" tells a player where they
+ * sit and still not whether it matters, while a distance can be read against
+ * what a slice is worth. scripts/measure-scoring.js puts a four-player round at
+ * a median of 137 with p25 105 and p75 170, so 85 behind is one good slice and
+ * 300 behind is not, and the player can tell those apart without being told.
+ *
+ * Returns '' on the first slice and whenever every total is still zero, because
+ * a gap of nothing is noise — which is the principle above, applied rather than
+ * argued with.
+ */
+function standingClause(m, youId) {
+  const rows = m && Array.isArray(m.standings) ? m.standings : [];
+  if (rows.length < 2) return '';
+  const best = rows.reduce((a, b) => (b.points > a.points ? b : a), rows[0]);
+  if (!best || !best.points) return '';
+  const you = rows.find((r) => r.id === youId);
+  if (!you) return '';
+  const gap = best.points - you.points;
+  if (gap > 0) return ` — ${gap} behind`;
+  // Level at the top is worth saying; level on zero was filtered out above.
+  const tied = rows.filter((r) => r.points === you.points).length > 1;
+  // "level", not "level in front": the longer phrasing measured 243px and the
+  // strip at 320x568 could not hold it.
+  return tied ? ' — level' : ` — ${you.points - (rows.filter((r) => r.id !== youId)
+    .reduce((a, b) => (b.points > a.points ? b : a), { points: 0 }).points)} ahead`;
+}
+
 function renderMatch(snap, over) {
   const m = snap.match;
   const chip = nodes['slice-chip'];
@@ -2174,7 +2211,7 @@ function renderMatch(snap, over) {
   // the next one up, capped so a finished pie does not read "slice 5 of 4".
   const playing = Math.min(m.round + 1, m.roundsPerPie);
   chip.hidden = over;
-  if (!over) setText(chip, `Slice ${playing}/${m.roundsPerPie}`);
+  if (!over) setText(chip, `Slice ${playing}/${m.roundsPerPie}${standingClause(m, snap.youId)}`);
 
   board.hidden = !over;
   if (!over) { hideShareBtn(); return; }

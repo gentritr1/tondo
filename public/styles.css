@@ -2400,6 +2400,31 @@ body[data-screen="game"] { background: var(--page); }
   }
 }
 
+/* The same squeeze happens on a SHORT DESKTOP, and the gate never saw it: it
+   runs seat-plaque-gap at 1024x768, 1280x800 and 1440x900, and only the last of
+   those has room. On an ordinary table with no bar open:
+
+     1024x768  +2.4    1280x800  +1.4    1366x768  -2.5    1280x740  -5.9
+     1280x820  +3.8    1366x830  +5.1    1440x840  +6.3
+     1280x860  +8.7    1366x880 +11.2    1440x900 +13.8    1920x1080  +43
+
+   1366x768 is a very common laptop and it OVERLAPS. The thin band runs to about
+   840px of height, so 850px is the cut with the first comfortable row (1280x860)
+   just outside it.
+
+   Clip only, no lift. The phone band needs the lift because the plate is centred
+   on its anchor and gives back half of any height removed, but at these sizes
+   clipping alone is enough and the lift would hurt: headroom here is 8.7-11px
+   against a .3x-tile lift of ~16.6px, which would push the avatar through the
+   stage's clipped top edge. Measured with the clip alone: 1024x768 +14.6
+   (headroom 23), 1280x800 +14.7 (25.3), 1366x768 +10.3 (24.3). */
+@media (min-width: 720px) and (max-height: 850px) {
+  .stage:not(.is-compressed) .seat-top .seat-status {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+}
+
 /* On short portrait/tablet screens, contextual trays scroll internally rather
    than pushing the table or the primary controls out of the viewport. */
 /* (band raised from 700px to 780px: a 360x740 phone has the same problem the
