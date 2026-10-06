@@ -1924,6 +1924,18 @@ function renderGame(snap) {
     'is-compressed',
     g.canDeclareTondo || showCallout || !!drawnCard || wildOpen || over,
   );
+  /* Round over is its own kind of compressed. A decision bar swaps the hand out
+     and costs the stage ~84px; the scoreboard costs it 247px (tray 434 -> 547 at
+     1440x900), which `--bar-h` does not model, so the pie is sized for a stage
+     that no longer exists and the plaque rides up into a seat ring pinned at its
+     floor. Measured overlap at pie complete: -34.4px at 1024x768, -46.1px at
+     1280x800, -29.9px at 1440x900. The stage cannot hold both — at 1280x800 it
+     is 220px, and no pie size or centre offset fixes it (shrinking the table
+     from 194px to 150px moves the gap 0.8px, because the plaque tracks the
+     stage's middle rather than the pie). So the seats stand down and let the
+     scoreboard be the thing: it already lists every player with their score,
+     and the banner names the winner. See styles.css `.stage.is-over #seats`. */
+  nodes.stage.classList.toggle('is-over', over);
   if (showCallout) {
     const who = targets.map((id) => nicelyName(playerName(id))).join(' and ');
     nodes['callout-head'].textContent = `${who} forgot TONDO — call them out`;

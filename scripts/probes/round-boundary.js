@@ -47,13 +47,23 @@
 
   // `want` names the banner this step is supposed to show, so a leftover banner
   // of the other kind cannot stand in for it.
+  /* `seats` counts NODES and `seatsVisible` counts seats with real area, and the
+     difference is load-bearing now that the ring stands down at round over.
+     querySelectorAll still matches a `display: none` seat, and a zero-size rect
+     intersects nothing — so counting nodes alone would have reported
+     `seats: 3, overlaps: []` at round over and called it a pass, which is the
+     vacuous shape this probe exists to refuse. Overlaps are computed only
+     against seats that are actually on screen. */
   const bannerOverlaps = (want) => {
     const banner = $('banner');
-    const seats = [...document.querySelectorAll('#seats .seat')];
-    if (!shown(banner) || !want(banner)) return { bannerVisible: false, seats: seats.length, overlaps: [] };
+    const all = [...document.querySelectorAll('#seats .seat')];
+    const onScreen = all.filter((s) => { const r = s.getBoundingClientRect(); return r.width > 1 && r.height > 1; });
+    if (!shown(banner) || !want(banner)) {
+      return { bannerVisible: false, seats: all.length, seatsVisible: onScreen.length, overlaps: [] };
+    }
     const br = banner.getBoundingClientRect();
-    const overlaps = seats.filter((s) => intersects(br, s.getBoundingClientRect())).map((s) => s.dataset.player);
-    return { bannerVisible: true, seats: seats.length, overlaps };
+    const overlaps = onScreen.filter((s) => intersects(br, s.getBoundingClientRect())).map((s) => s.dataset.player);
+    return { bannerVisible: true, seats: all.length, seatsVisible: onScreen.length, overlaps };
   };
   // YOUR TURN also answers "is the top card clear?", and "would the low placement
   // (bottom: 8px, the win banner's) have covered it?" — forced inline for one
@@ -400,14 +410,24 @@
       && next.sweep.endsBeforeFirstCardMs !== null && next.sweep.endsBeforeFirstCardMs >= -1,
     dealVoiceOnFirstCard: voiceOnFirstCard(next, (next.deal.startDelay || 0) / 1000) && voiceOnFirstCard(lobby, 0),
   };
-  checks.bannerClearAtRoundOver = atRoundOver.bannerVisible && atRoundOver.overlaps.length === 0;
+  /* At round over the seat ring is hidden by design (styles.css
+     `.stage.is-over #seats`), because the scoreboard leaves the stage 220px at
+     1280x800 and the plaque was landing 46px into the top seat. So "the banner
+     clears the seats" is no longer a question that can be asked here, and
+     asserting it would pass against nothing. What IS worth pinning is that the
+     ring really did stand down — if it ever comes back, this check fails and
+     the overlap question returns with it. The live banner-vs-seat test is
+     `bannerClearAtYourTurn`, where the seats are on screen. */
+  checks.seatsStandDownAtRoundOver = atRoundOver.bannerVisible && atRoundOver.seatsVisible === 0;
   checks.bannerClearAtYourTurn = [atYourTurn, ...barReads].every(clearOrRuledTrade);
   checks.yourTurnClearOfTopCard = [atYourTurn, ...barReads].every((y) => y.topCardOverlap === false);
 
   const valid = audioLive && roundOverShown && atRoundOver.bannerVisible && atRoundOver.seats === SEATS
     && next.sweep.toppingsBefore > 0 && next.delivered && lobbyShown && lobby.delivered
-    && atYourTurn.bannerVisible && atYourTurn.seats === SEATS
-    && barReads.every((y) => y.bannerVisible && y.seats === SEATS && y.compressed && y.measuredAt !== null)
+    // The overlap tests below mean nothing unless the seats are ON SCREEN for
+    // them, so the premise counts area, not nodes.
+    && atYourTurn.bannerVisible && atYourTurn.seatsVisible === SEATS
+    && barReads.every((y) => y.bannerVisible && y.seatsVisible === SEATS && y.compressed && y.measuredAt !== null)
     // YOUR TURN counts only if it waited for the table to settle (the swap was
     // seen moving; reduced motion snaps it) and still landed inside its 700ms.
     && (rm || next.layoutMovingFrames > 0) && next.yourTurnMeasuredAt !== null && next.yourTurnMeasuredAt < 700

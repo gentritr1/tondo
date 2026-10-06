@@ -55,9 +55,15 @@
  *                   seat-plaque-gap scripts/probes/seat-plaque-gap.js
  *                                   `pass: true` across the desktop/tablet
  *                                   widths it was written for.
- *                   banner-clear    scripts/probes/round-boundary.js's
- *                                   `atRoundOver.overlaps` is empty — the
- *                                   round-over banner covers no seat.
+ *                   banner-clear    the seat ring stands down at round over
+ *                                   (`seatsVisible === 0`) AND the banner
+ *                                   clears the seats in the states where they
+ *                                   are on screen — YOUR TURN and all three
+ *                                   context bars. Asserting "no overlap" at
+ *                                   round over itself would pass against
+ *                                   nothing: the seats are `display: none`
+ *                                   there and a zero-size rect intersects
+ *                                   nothing.
  *                   no-page-errors  zero page errors across every page this
  *                                   run loaded (assertions AND captures),
  *                                   except the one Chrome intervention
@@ -663,9 +669,21 @@ async function runCheck(a) {
       await gotoScene('roundOver', w, h);
       const parsed = JSON.parse(await cdp.eval(roundBoundarySrc));
       const ar = parsed.atRoundOver || {};
-      const ok = parsed.valid === true && ar.bannerVisible === true && Array.isArray(ar.overlaps) && ar.overlaps.length === 0;
+      /* The seat ring stands down at round over (styles.css
+         `.stage.is-over #seats`), so "the banner covers no seat" cannot be
+         asked here any more — three `display: none` seats still answer
+         querySelectorAll and a zero-size rect intersects nothing, so the old
+         assertion would have passed against nothing at all. What this row pins
+         now is that the ring really is down AND that the banner clears the
+         seats in the state where they ARE on screen, which the probe measures
+         as `bannerClearAtYourTurn` over YOUR TURN plus all three context bars. */
+      const ok = parsed.valid === true && ar.bannerVisible === true
+        && ar.seatsVisible === 0
+        && parsed.checks.seatsStandDownAtRoundOver === true
+        && parsed.checks.bannerClearAtYourTurn === true;
       record('banner-clear', `mock:roundOver@${w}x${h}`, ok,
-        `valid=${parsed.valid} bannerVisible=${ar.bannerVisible} seats=${ar.seats} overlaps=${JSON.stringify(ar.overlaps)}`);
+        `valid=${parsed.valid} bannerVisible=${ar.bannerVisible} seatNodes=${ar.seats} seatsVisible=${ar.seatsVisible} `
+        + `standDown=${parsed.checks.seatsStandDownAtRoundOver} clearAtYourTurn=${parsed.checks.bannerClearAtYourTurn}`);
     }
 
     // ---- capture every mock scene at every reference viewport ----------

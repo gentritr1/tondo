@@ -1099,6 +1099,18 @@ body[data-screen="game"] { background: var(--page); }
    and up to 143.8px on a phone (the callout bar, which wraps two buttons). */
 .stage.is-compressed { --bar-h: 84px; }
 
+/* Once the round is over the scoreboard is the content and the board is
+   backdrop, so the seat ring stands down. This is not decoration-trimming: the
+   scoreboard's 342px at pie complete leaves the stage 220px at 1280x800, which
+   cannot fit the seat ring and the centre column at once, and the overlap it
+   produced (-46.1px at its worst) landed on the plaque at the one moment the
+   whole table is looking at the same screen. Nothing is lost that is not said
+   twice over — the scoreboard lists every player with their score and the
+   banner names the winner.
+   `#seats` is never toggled via the `hidden` attribute, so this `display` rule
+   cannot run into the global `[hidden]` guard the way earlier ones did. */
+.stage.is-over #seats { display: none; }
+
 /* --- the stone oven ----------------------------------------------------- */
 /* --- the pie: stone rim → cartoon crust → sauce ------------------------
    Full cartoon: flat saturated shapes with chunky edges, built entirely from
