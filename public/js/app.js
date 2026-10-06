@@ -77,6 +77,22 @@ function tint(hex, a) {
   const n = Number.parseInt(String(hex).slice(1), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
+/* Blend a suit colour toward the cream ink before it is used as a wash.
+   A pure suit colour laid over the sauce carries a HUE change but barely a
+   LIGHTNESS one when the suit is itself red, and the sauce is red: measured
+   against the lightest sauce stop (#A03A22) at the shipped .34 alpha, the wash
+   moves luminance by 28.1/255 for cheese and only 7.7 for pepperoni — a 3.65x
+   spread for one effect, and nothing at all for a player who cannot separate
+   those hues. Mixing 55% cream in first gives every topping a lightness
+   component: pepperoni 22.7, cheese 34.1, basil 26.6, anchovy 24.8 — spread
+   1.50x, floor three times higher, and the alpha is unchanged so the wash is
+   not heavier overall. */
+function creamed(hex, cream) {
+  const n = Number.parseInt(String(hex).slice(1), 16);
+  const C = [0xFF, 0xF7, 0xE8];
+  const mix = (v, i) => Math.round(v * (1 - cream) + C[i] * cream);
+  return [mix((n >> 16) & 255, 0), mix((n >> 8) & 255, 1), mix(n & 255, 2)];
+}
 
 /* The JS and the stylesheet must agree on what "compact" means, so both read
    the same query. Coarse pointers get tap-to-arm instead of hover previews;
@@ -205,9 +221,15 @@ fx.init({
   setSeatNote, announce,
   // A seat's display name, as the table shows it ("Carmela", not "CARMELA").
   playerName: (id) => nicelyName(playerName(id)),
-  // The Wild wash's colour: the chosen topping's light stop at 34%. Its own
-  // layer and alpha, so the resting .sauce-tint (10%) stays subtle.
-  washColor: (suit) => (SUITS[suit] ? tint(SUITS[suit].c, .34) : ''),
+  // The Wild wash's colour: the chosen topping creamed 55% toward the ink, at
+  // 34%. Its own layer and alpha, so the resting .sauce-tint (10%) stays
+  // subtle. See creamed() for why the mix is there — without it the same wash
+  // is 3.65x stronger for cheese than for pepperoni.
+  washColor: (suit) => {
+    if (!SUITS[suit]) return '';
+    const [r, g, b] = creamed(SUITS[suit].c, .55);
+    return `rgba(${r},${g},${b},.34)`;
+  },
 });
 
 /* ----------------------------------------------------------------- state */

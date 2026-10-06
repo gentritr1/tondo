@@ -35,7 +35,22 @@
     return n ? n.textContent : '';
   };
   const centre = (r) => [r.left + r.width / 2, r.top + r.height / 2];
-  const WASH_EXPECTED = 'rgba(110,158,224,0.34)';   // anchovy #6E9EE0 at .34
+  /* The wash fill is DERIVED here rather than pasted, so this check still
+     catches an accidental change without becoming a magic string nobody can
+     re-justify. app.js creams the suit 55% toward the ink before applying .34:
+     a pure suit colour over red sauce carries a hue change but barely a
+     lightness one, which made the same effect 3.65x stronger for cheese than
+     for pepperoni (measured against the lightest sauce stop #A03A22: 28.1 vs
+     7.7 out of 255). Creaming lifts the floor to 22.7 and the spread to 1.51x.
+     Keep this in step with app.js's creamed(). */
+  const CREAM = [0xFF, 0xF7, 0xE8];
+  const creamed = (hex, c) => {
+    const n = parseInt(hex.slice(1), 16);
+    const mix = (v, i) => Math.round(v * (1 - c) + CREAM[i] * c);
+    return [mix((n >> 16) & 255, 0), mix((n >> 8) & 255, 1), mix(n & 255, 2)];
+  };
+  // the mock's wild scene picks anchovy
+  const WASH_EXPECTED = `rgba(${creamed('#6E9EE0', .55).join(',')},.34)`;
 
   // Mirrors mock.js transition(): at four seats p1 is you, p2 Carmela, p4 Pina.
   const PLAN = [
