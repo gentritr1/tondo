@@ -14,6 +14,7 @@ const bot = require('./bot');
 const { RoomManager } = require('./rooms');
 const { Assets } = require('./assets');
 const { SocketLimits, maxSocketsPerIp } = require('./limits');
+const { clientIpFrom } = require('./clientip');
 
 const PORT = Number(process.env.PORT) || 4600;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -113,10 +114,10 @@ const server = http.createServer((req, res) => {
 });
 
 /** The peer address, with IPv4-mapped IPv6 folded onto the plain form so
- *  127.0.0.1 and ::ffff:127.0.0.1 count as the same household. */
+ *  127.0.0.1 and ::ffff:127.0.0.1 count as the same household. Behind a
+ *  proxy, see server/clientip.js. */
 function clientIp(req) {
-  const raw = (req && req.socket && req.socket.remoteAddress) || '';
-  return String(raw).replace(/^::ffff:/, '');
+  return clientIpFrom(req);
 }
 
 /**
