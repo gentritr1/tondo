@@ -46,12 +46,6 @@ const REFUSALS_BEFORE_CLOSE = 500;
    it before my friend was ready" twice over. */
 const MAX_ROOMS_PER_SOCKET = 3;
 
-/* Wrong codes. The first five are free, so mistyping costs a real player
-   nothing, and after that a wrong guess costs two seconds. That is what ends
-   the enumeration sweep: 42,000 guesses a second becomes 0.5. */
-const JOIN_FAIL_BURST = 5;
-const JOIN_FAIL_REFILL_MS = 2000;
-
 /* Concurrent sockets from one IP. NOT tighter, deliberately: the four friends
    this game exists for are in the same room sharing one NAT, a LAN party or a
    student flat is more, and every player's phone reconnects (a new socket) on
@@ -75,8 +69,6 @@ class SocketLimits {
     this.refusals = 0;
     this.refusalReplies = 0;
     this.roomsCreated = 0;
-    this.joinTokens = JOIN_FAIL_BURST;
-    this.joinRefilledAt = now;
   }
 
   /**
@@ -110,23 +102,75 @@ class SocketLimits {
   countRoomCreated() {
     this.roomsCreated += 1;
   }
+}
 
-  /**
-   * May this socket try a table code at all? Only WRONG codes cost a token
-   * (`countJoinFailure`), so a player who types their code correctly is never
-   * anywhere near this, and the refusal says nothing about whether the code
-   * exists — a throttled guess is not an oracle.
-   */
-  canTryJoin(now = Date.now()) {
-    const elapsed = Math.max(0, now - this.joinRefilledAt);
-    this.joinTokens = Math.min(JOIN_FAIL_BURST, this.joinTokens + elapsed / JOIN_FAIL_REFILL_MS);
-    this.joinRefilledAt = now;
-    return this.joinTokens >= 1;
+/**
+ * Budgets kept per ADDRESS, which outlive any one socket.
+ *
+ * The wrong-code ration used to live on SocketLimits, created fresh per
+ * connection — so "5 free wrong codes" really meant "5 per reconnect", and a
+ * reconnect is free. These buckets are keyed by address (server/clientip.js)
+ * and kept in a bounded LRU so one address cannot grow the map without limit.
+ *
+ * Every number is set from a scenario a real household produces, then checked
+ * by scripts/household-storm.js (4 players on one network, 3 reconnects and 2
+ * mistyped codes each), which must show zero refusals (measured 2026-10-10:
+ * household-storm: {"connects":24,"wrongCodes":8,"reconnects":12,"refusals":0}):
+ *   connect     64 burst, 1/s    2x the 32-socket concurrent cap: a full
+ *                                household can reconnect completely twice at once
+ *   joinFail    10 burst, 1/2s   4 players x 2 mistypes, plus 2 spare
+ *   crewRead    60 burst, 1/s    a household opening the crew link together and refreshing
+ *   crewCreate  10 burst, 10/h   a player makes one crew; ten is generous
+ */
+const BUDGETS = {
+  connect: { burst: 64, perMs: 1000 },
+  joinFail: { burst: 10, perMs: 2000 },
+  crewRead: { burst: 60, perMs: 1000 },
+  crewCreate: { burst: 10, perMs: 360000 },
+};
+
+class IpBudget {
+  constructor({ burst, perMs, maxKeys = 10000 }) {
+    this.burst = burst;
+    this.perMs = perMs;
+    this.maxKeys = maxKeys;
+    this.buckets = new Map(); // insertion order = recency (oldest first)
   }
 
-  countJoinFailure() {
-    this.joinTokens = Math.max(0, this.joinTokens - 1);
+  bucket(ip, now) {
+    const key = String(ip || '');
+    let b = this.buckets.get(key);
+    if (b) {
+      this.buckets.delete(key); // re-insert to mark as most recent
+      b.tokens = Math.min(this.burst, b.tokens + Math.max(0, now - b.at) / this.perMs);
+      b.at = now;
+    } else {
+      b = { tokens: this.burst, at: now };
+      if (this.buckets.size >= this.maxKeys) this.buckets.delete(this.buckets.keys().next().value);
+    }
+    this.buckets.set(key, b);
+    return b;
   }
+
+  allow(ip, now = Date.now()) { return this.bucket(ip, now).tokens >= 1; }
+
+  spend(ip, now = Date.now()) {
+    const b = this.bucket(ip, now);
+    b.tokens = Math.max(0, b.tokens - 1);
+  }
+
+  take(ip, now = Date.now()) {
+    const b = this.bucket(ip, now);
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
+    return true;
+  }
+
+  size() { return this.buckets.size; }
+}
+
+function createIpBudgets() {
+  return Object.fromEntries(Object.entries(BUDGETS).map(([k, v]) => [k, new IpBudget(v)]));
 }
 
 module.exports = {
@@ -136,7 +180,8 @@ module.exports = {
   MSG_BURST,
   REFUSALS_BEFORE_CLOSE,
   MAX_ROOMS_PER_SOCKET,
-  JOIN_FAIL_BURST,
-  JOIN_FAIL_REFILL_MS,
+  IpBudget,
+  createIpBudgets,
+  BUDGETS,
   DEFAULT_MAX_SOCKETS_PER_IP,
 };

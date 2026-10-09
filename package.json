@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node server/index.js",
-    "test": "node test/rules.test.js && node test/rooms.test.js && node test/clientip.test.js && node test/match.test.js && node test/events.test.mjs && node test/share.test.mjs",
+    "test": "node test/rules.test.js && node test/rooms.test.js && node test/clientip.test.js && node test/limits.test.js && node test/match.test.js && node test/events.test.mjs && node test/share.test.mjs",
+    "test:server": "node test/server-limits.test.mjs",
     "smoke": "node scripts/host-smoke.js && node scripts/table-smoke.js",
     "shoot": "node scripts/shoot.js --check",
     "contrast": "node scripts/check-contrast.js"

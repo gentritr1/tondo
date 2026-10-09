@@ -13,7 +13,7 @@ const game = require('./game');
 const bot = require('./bot');
 const { RoomManager } = require('./rooms');
 const { Assets } = require('./assets');
-const { SocketLimits, maxSocketsPerIp } = require('./limits');
+const { SocketLimits, maxSocketsPerIp, createIpBudgets } = require('./limits');
 const { clientIpFrom } = require('./clientip');
 
 const PORT = Number(process.env.PORT) || 4600;
@@ -31,6 +31,7 @@ const MIME = {
 
 const manager = new RoomManager();
 const assets = new Assets(PUBLIC_DIR);
+const budgets = createIpBudgets();
 
 /* The design reference (`_ref.html`, 1.7MB) and the concept pages are working
    material, not the product. They stay reachable while developing and are 404
@@ -168,17 +169,23 @@ function socketsFromIp(ip) {
 const wss = new WebSocketServer({
   server,
   maxPayload: 16 * 1024,
-  verifyClient: (info) => {
+  verifyClient: (info, done) => {
     if (!originAllowed(info.req)) {
       console.warn(`[tondo] upgrade refused: Origin ${info.req.headers.origin} != Host ${info.req.headers.host}`);
-      return false;
+      return done(false, 401);
     }
     const ip = clientIp(info.req);
+    // Attempts are budgeted before anything else is judged, so a refused
+    // attempt costs the same as an admitted one.
+    if (!budgets.connect.take(ip)) {
+      console.warn(`[tondo] upgrade refused: ${ip} is reconnecting too fast`);
+      return done(false, 429);
+    }
     if (socketsFromIp(ip) >= maxSocketsPerIp()) {
       console.warn(`[tondo] upgrade refused: ${ip} already holds ${maxSocketsPerIp()} sockets`);
-      return false;
+      return done(false, 401);
     }
-    return true;
+    return done(true);
   },
 });
 
@@ -198,10 +205,11 @@ function refuse(socket, room, seatId, message) {
 }
 
 wss.on('connection', (socket, req) => {
-  // Every budget this connection has. Per socket, never per IP: four friends on
-  // one phone network must not share a message allowance.
-  const session = { room: null, seatId: null, limits: new SocketLimits() };
-  socket.tondoIp = clientIp(req);
+  // Every budget this connection has. Message rate and table creation are per
+  // socket: four friends on one phone network must not share a message
+  // allowance. Wrong codes and connection attempts are per address (`budgets`).
+  const session = { room: null, seatId: null, limits: new SocketLimits(), ip: clientIp(req) };
+  socket.tondoIp = session.ip;
 
   socket.isAlive = true;
   socket.on('pong', () => { socket.isAlive = true; });
@@ -266,10 +274,11 @@ function handleMessage(socket, session, message) {
     if (message.type === 'createRoom' && !limits.canCreateRoom()) {
       return sendError(socket, 'You have opened enough tables. Join one instead.');
     }
-    /* Wrong codes are rationed, which is what ends a sweep of the code space —
-       and the refusal is deliberately the same whatever the code was, so it
-       tells an attacker nothing a silent drop would not. */
-    if (message.type === 'joinRoom' && !limits.canTryJoin()) {
+    /* Wrong codes are rationed per address, so a reconnect does not refill the
+       ration, which is what ends a sweep of the code space — and the refusal
+       is deliberately the same whatever the code was, so it tells an attacker
+       nothing a silent drop would not. */
+    if (message.type === 'joinRoom' && !budgets.joinFail.allow(session.ip)) {
       return sendError(socket, 'Too many wrong table codes. Wait a moment and try again.');
     }
 
@@ -282,7 +291,7 @@ function handleMessage(socket, session, message) {
     if (!result.ok) {
       // Any failed join costs a token, not only "no such code": "that round is
       // being played" is just as good an oracle for "this table exists".
-      if (message.type === 'joinRoom') limits.countJoinFailure();
+      if (message.type === 'joinRoom') budgets.joinFail.spend(session.ip);
       return sendError(socket, result.error);
     }
     if (message.type === 'createRoom') limits.countRoomCreated();

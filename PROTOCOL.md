@@ -185,8 +185,10 @@ and repaint entirely from each snapshot.
 
 None of this is authentication — the game has none and needs none. It is the
 floor that stops ONE socket denying the game to everybody, measured against what
-real play does rather than guessed. Everything except the last item is **per
-socket**, on purpose: this game is four friends in one room on their phones
+real play does rather than guessed. Message rate and table creation are per
+socket; wrong codes, connection attempts and concurrent sockets are per address
+(server/clientip.js decides the address behind a proxy). Per socket wherever
+possible is deliberate: this game is four friends in one room on their phones
 behind ONE public IP, and a tight per-IP limit would break the primary use case
 more thoroughly than the attack it prevents.
 
@@ -194,7 +196,8 @@ more thoroughly than the attack it prevents.
 |---|---|---|
 | messages | 20/s, burst 40 | `error` "Slow down — too many messages at once." and the frame is dropped. Answered for the first 10 refusals, then dropped silently (an error reply is bytes out too). 500 refusals closes the socket with code 1008 |
 | `createRoom` | 3 per socket | `error` "You have opened enough tables. Join one instead." |
-| failed `joinRoom` | 5 free, then 1 per 2s | `error` "Too many wrong table codes. Wait a moment and try again." — the code is not even looked up, and the message is the same whatever the code was. Only a FAILED join costs; a correct code costs nothing |
+| failed `joinRoom` | 10 per address, then 1 per 2s (survives reconnects) | `error` "Too many wrong table codes. Wait a moment and try again." — the code is not even looked up, and the message is the same whatever the code was. Only a FAILED join costs; a correct code costs nothing |
+| connection attempts per address | 64, then 1/s | the upgrade is refused with HTTP 429 |
 | concurrent sockets per IP | 32, `TONDO_MAX_SOCKETS_PER_IP` | the upgrade is refused with HTTP 401 |
 
 **Origin.** The WebSocket upgrade is refused (HTTP 401) when an `Origin` header
