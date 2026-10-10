@@ -126,6 +126,57 @@ test('members sort by wins before pies: one win outranks more pies without a win
   assert(crew.members[0].name === 'Arta' && crew.members[0].pies === 1, JSON.stringify(crew.members));
 });
 
+test('a device that left can rejoin: it becomes a new member, and the old pie still says former', async () => {
+  const [g, a] = [dev(), dev()];
+  const saved = await crews.savePie({ newName: 'Rejoin' }, { pieKey: key(), rounds: 4, players: [human(g, 'Gent', 9, true), human(a, 'Arta', 3)] });
+  assert(await crews.leave(saved.id, crews.hashDevice(a)) === true, 'left');
+  const back = await crews.savePie({ crewId: saved.id }, { pieKey: key(), rounds: 4, players: [human(g, 'Gent', 4), human(a, 'Arta', 8, true)] });
+  assert(back.duplicate === false, JSON.stringify(back));
+  const crew = await crews.readCrew(saved.id, crews.hashDevice(a));
+  assert(crew.members.length === 2, JSON.stringify(crew.members));
+  const me = crew.members.filter((m) => m.you);
+  assert(me.length === 1 && me[0].name === 'Arta' && me[0].pies === 1 && me[0].wins === 1, `the new member starts fresh: ${JSON.stringify(crew.members)}`);
+  assert(crew.recent.length === 2, `recent ${crew.recent.length}`);
+  const oldKinds = crew.recent[1].players.map((p) => p.kind).sort().join(',');
+  assert(oldKinds === 'former,member', `old pie still says former: ${oldKinds}`);
+  assert(crew.recent[0].players.every((p) => p.kind === 'member'), 'new pie lists both as members');
+});
+
+test('an empty or blank crew name is refused with a clear message, not "That crew is gone."', async () => {
+  for (const newName of ['', '   ', '\n\t']) {
+    let err = null;
+    try { await crews.savePie({ newName }, { pieKey: key(), rounds: 4, players: [human(dev(), 'Gent', 1, true)] }); } catch (e) { err = e; }
+    assert(err && err.publicMessage === 'Give the crew a name.', `${JSON.stringify(newName)} -> ${err && (err.publicMessage || err.message)}`);
+  }
+});
+
+test('a save stamps last_pie_at on the crew', async () => {
+  const saved = await crews.savePie({ newName: 'Stamped' }, { pieKey: key(), rounds: 4, players: [human(dev(), 'Gent', 1, true)] });
+  const r = await db.tx((cl) => cl.query('SELECT last_pie_at FROM crews WHERE id = $1', [saved.id]));
+  assert(r.rows[0].last_pie_at != null, 'last_pie_at is set after a save');
+});
+
+test('members tied on wins sort by pies desc, then by name asc', async () => {
+  const [z, a, b, c] = [dev(), dev(), dev(), dev()];
+  // Join order is Zed, Ann, Bob, Cal. Nobody wins, so wins tie at 0.
+  const first = await crews.savePie({ newName: 'Ties' }, { pieKey: key(), rounds: 4, players: [human(z, 'Zed', 1), human(a, 'Ann', 1), human(b, 'Bob', 1), human(c, 'Cal', 1)] });
+  await crews.savePie({ crewId: first.id }, { pieKey: key(), rounds: 4, players: [human(c, 'Cal', 1)] });
+  const names = (await crews.readCrew(first.id, null)).members.map((m) => `${m.name}:${m.pies}`).join(',');
+  assert(names === 'Cal:2,Ann:1,Bob:1,Zed:1', names);
+});
+
+test('the ok log line of a NEW crew carries its minted id, not a placeholder', async () => {
+  const lines = [];
+  const { log } = console;
+  console.log = (m) => lines.push(String(m));
+  let saved;
+  try {
+    saved = await crews.savePie({ newName: 'Logged' }, { pieKey: key(), rounds: 4, players: [human(dev(), 'Gent', 1, true)] });
+  } finally { console.log = log; }
+  const ok = lines.find((l) => /^\[crews\] save ok /.test(l));
+  assert(ok && ok.startsWith(`[crews] save ok crew=${saved.id} ms=`), JSON.stringify(lines));
+});
+
 let passed = 0;
 const failures = [];
 for (const [name, fn] of tests) {

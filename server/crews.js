@@ -34,10 +34,10 @@ function cleanCrewName(raw) {
 }
 
 function savePie(target, record) {
-  const crewLabel = target.crewId || 'new';
+  const meta = { crew: target.crewId || 'new' }; // becomes the minted id, so the ok line carries it
   return db.run('save', () => db.tx(async (c) => {
     let crew;
-    if (target.newName) {
+    if (target.newName != null) {
       const name = cleanCrewName(target.newName);
       if (!name) throw new db.CrewStoreError('bad name', 'Give the crew a name.');
       // 32^10 ids: a collision is astronomically unlikely, but retried rather than assumed away.
@@ -46,6 +46,7 @@ function savePie(target, record) {
         crew = r.rows[0];
       }
       if (!crew) throw new Error('could not mint a crew id');
+      meta.crew = crew.id;
     } else {
       const r = await c.query('SELECT id, name FROM crews WHERE id = $1 FOR UPDATE', [target.crewId]);
       crew = r.rows[0];
@@ -73,6 +74,7 @@ function savePie(target, record) {
     const pieId = pie.rows[0].id;
 
     for (const p of members) {
+      // Caller contract: p.name is already a clean, non-empty string (the room cleans it); not re-validated here.
       const m = await c.query(
         `INSERT INTO members (crew_id, device_hash, name) VALUES ($1, $2, $3)
          ON CONFLICT (crew_id, device_hash) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
@@ -82,7 +84,7 @@ function savePie(target, record) {
     }
     await c.query('UPDATE crews SET last_pie_at = now() WHERE id = $1', [crew.id]);
     return { id: crew.id, name: crew.name, duplicate: false };
-  }), { crew: crewLabel });
+  }), meta);
 }
 
 /** "Gent", "Gent 2": collisions numbered by join order, case-insensitively, at read time. */

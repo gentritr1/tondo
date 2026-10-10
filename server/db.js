@@ -105,22 +105,23 @@ async function tx(fn) {
 /** One store operation: timed, logged, classified. CrewStoreErrors pass through untouched. */
 async function run(op, fn, meta = {}) {
   const t0 = Date.now();
-  const crew = meta.crew ? ` crew=${meta.crew}` : '';
+  // Read at log time: a caller may fill meta.crew in once it knows the id (a new crew).
+  const crewSuffix = () => (meta.crew ? ` crew=${meta.crew}` : '');
   try {
     const out = await fn();
     if (ready) setState('on', null);
-    console.log(`[crews] ${op} ok${crew} ms=${Date.now() - t0}`);
+    console.log(`[crews] ${op} ok${crewSuffix()} ms=${Date.now() - t0}`);
     return out;
   } catch (err) {
     if (err instanceof CrewStoreError) {
-      console.log(`[crews] ${op} refused: ${err.reason}${crew}`);
+      console.log(`[crews] ${op} refused: ${err.reason}${crewSuffix()}`);
       throw err;
     }
     const reason = classify(err);
     // Once migrated, status stays 'on' (a later success must be able to
     // recover); the last op's failure reason stays visible in /health.
     setState(ready ? 'on' : 'failing', reason);
-    console.warn(`[crews] ${op} failed: ${reason}${crew}`);
+    console.warn(`[crews] ${op} failed: ${reason}${crewSuffix()}`);
     throw new CrewStoreError(reason);
   }
 }
