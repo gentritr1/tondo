@@ -434,6 +434,9 @@ function emit(message) {
 function route(msg) {
   switch (msg.type) {
     case 'createRoom':
+      // `?mockrefuse=1` refuses a create the way the server does; `?mockdrop=1` never answers it.
+      if (new URLSearchParams(location.search).has('mockdrop')) return;
+      if (new URLSearchParams(location.search).has('mockrefuse')) { emit({ type: 'error', message: 'The table book is full right now.' }); return; }
       table.name = msg.name || 'You';
       table.seats = [{ id: 'p1', name: table.name, isBot: false, connected: true }];
       table.phase = 'lobby';

@@ -310,7 +310,13 @@ const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', crew: 'crew-tit
  * behaviour off it.
  */
 function setScreen(name, opts) {
-  if (document.body.dataset.screen === name) return false;
+  const from = document.body.dataset.screen;
+  if (from === name) return false;
+  // The ONE place the crew view's state is cleared: whatever takes the player
+  // off this screen (the table's first snapshot after Start, Home, a refused
+  // rejoin, "Leave table" after a restored seat) takes `app.crewId` and `?crew=`
+  // with it. Nothing clears them at send time, so a refused create leaves both.
+  if (from === 'crew') leaveCrewView();
   document.body.dataset.screen = name;
   const title = document.getElementById(SCREEN_TITLE[name]);
   if (title) title.focus({ preventScroll: true });
@@ -540,6 +546,9 @@ function endAutoJoinWait() {
 function revealHome() {
   endAutoJoinWait();
   nodes['home-card'].hidden = false;
+  // The crews this device has been in can have changed since boot (a view that
+  // remembered one, a leave that forgot one): the row is rebuilt every time home returns.
+  renderCrewsRow();
   setScreen('home');
 }
 
@@ -604,6 +613,8 @@ function handleMessage(msg, context) {
     return;
   }
   if (msg.type === 'joined') {
+    clearTimeout(app.crewStartTimer);   // answered: the screen change takes it from here
+    app.crewStartTimer = 0;
     app.roomCode = msg.roomCode;
     app.youId = msg.youId;
     app.rejoinAttempt = false;
@@ -630,6 +641,12 @@ function handleMessage(msg, context) {
   }
   if (msg.type === 'error') {
     const text = msg.message || 'That did not work.';
+    // A refused "Start a table" from the crew page: the crew screen is where the
+    // player is looking, so say it there (the other regions are on hidden screens).
+    if (document.body.dataset.screen === 'crew' && app.crewStarting) {
+      crewStartFailed(text);
+      return;
+    }
     // A shortcut into a table nobody is sitting at any more is not an error
     // the player did anything about; it is a dead end with a way out.
     const fromMemory = app.rejoinAttempt;
@@ -1550,6 +1567,7 @@ nodes['home-card'].addEventListener('click', (e) => {
 const CREW_DOWN = "Can't reach the crew book right now — try again in a minute.";
 const CREW_GONE = 'That crew does not exist — the link may have been cut short.';
 const CREW_NAME_FIRST = 'Put a name on the ticket first.';
+const CREW_START_IDLE = 'Start a table';
 
 /* #live-now and #live-polite live inside #screen-game, which is display:none
    on every other screen — and a hidden subtree is not in the accessibility
@@ -1583,7 +1601,7 @@ function renderCrewsRow() {
     b.textContent = c.name;
     b.title = c.name;   // the button ellipsizes a long name; the full one is here
     b.addEventListener('click', () => {
-      history.replaceState(null, '', `${location.pathname}?crew=${c.id}`);
+      setCrewParam(c.id);
       openCrewView(c.id);
     });
     box.appendChild(b);
@@ -1694,21 +1712,42 @@ async function openCrewView(id, opts) {
   return true;
 }
 
+/** Sets or clears only `crew` in the address bar; every other param stays (mock mode lives in `?mock=1`). */
+function setCrewParam(id) {
+  const q = new URLSearchParams(location.search);
+  if (id) q.set('crew', id); else q.delete('crew');
+  const qs = q.toString();
+  history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : ''));
+}
+
+/** Called from setScreen when the player leaves the crew screen, and from Home. */
 function leaveCrewView() {
   app.crewId = null;
+  app.crewStarting = false;
+  clearTimeout(app.crewStartTimer);
+  app.crewStartTimer = 0;
+  nodes['crew-start'].textContent = CREW_START_IDLE;
   disarmCrewLeave();
-  history.replaceState(null, '', location.pathname);
+  setCrewParam(null);
+}
+
+/** A create that was refused, or never answered: the page is as it was, and says why. */
+function crewStartFailed(text) {
+  app.crewStarting = false;
+  clearTimeout(app.crewStartTimer);
+  app.crewStartTimer = 0;
+  nodes['crew-start'].disabled = false;
+  nodes['crew-start'].textContent = CREW_START_IDLE;
+  crewSay(text);
 }
 
 nodes['crew-home'].addEventListener('click', () => {
-  leaveCrewView();
-  renderCrewsRow();
   revealHome();
 });
 
 nodes['crew-start'].addEventListener('click', () => {
   const id = app.crewId;
-  if (!id) return;
+  if (!id || app.crewStarting) return;
   let name = '';
   try { name = localStorage.getItem('tondo.name') || ''; } catch { /* ignore */ }
   if (!name) {
@@ -1726,7 +1765,18 @@ nodes['crew-start'].addEventListener('click', () => {
     crewSay('Not connected — try again in a moment.');
     return;
   }
-  leaveCrewView(); // the `joined` reply takes the player to the lobby as usual
+  // Neither the crew id nor `?crew=` is touched here: a refused or dropped create
+  // must leave the page able to try again (and to be reloaded). The `joined` reply
+  // and the snapshot that follows it move the screen on, and setScreen clears them.
+  app.crewStarting = true;
+  nodes['crew-start'].disabled = true;
+  nodes['crew-start'].textContent = 'Starting…';
+  nodes['crew-view-msg'].textContent = '';
+  clearTimeout(app.crewStartTimer);
+  app.crewStartTimer = setTimeout(() => {
+    app.crewStartTimer = 0;
+    if (app.crewStarting && document.body.dataset.screen === 'crew') crewStartFailed('That did not go through — try again.');
+  }, AUTOJOIN_MS);
 });
 
 nodes['crew-name-input'].addEventListener('input', () => {
@@ -1774,9 +1824,11 @@ nodes['crew-leave'].addEventListener('click', async () => {
     ok = r.status === 204;
   } catch { ok = false; }
   crewLeaving = false;
+  // The server has the leave whether or not the player is still looking: this
+  // device forgets the crew either way (Home mid-request must not keep it listed).
+  if (ok) { forgetCrew(id); renderCrewsRow(); }   // home may already be showing the old row
   if (app.crewId !== id) return;
   if (!ok) { crewSay(CREW_DOWN); return; }
-  forgetCrew(id);
   await openCrewView(id, { refresh: true });
   if (app.crewId !== id) return;
   btn.hidden = true; // whatever the refresh said, this device has left
