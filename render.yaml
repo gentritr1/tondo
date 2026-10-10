@@ -15,10 +15,13 @@ services:
         value: production
       - key: NODE_VERSION
         value: "20"
-      # Render's load balancer appends the real client address as the last
-      # X-Forwarded-For entry. UNVERIFIED until the live check in DEPLOY.md.
-      - key: TONDO_TRUST_PROXY
-        value: "1"
+      # Render serves through Cloudflare, which sets CF-Connecting-IP to the
+      # visitor's address and rejects (403) requests that forge it. Measured
+      # live 2026-10-10: TONDO_TRUST_PROXY=1 read a shared internal 10.x hop
+      # (X-Forwarded-For had 4 entries), so every player shared one budget;
+      # this header logged the real client address. See docs/DEPLOY.md 3.3.
+      - key: TONDO_CLIENT_IP_HEADER
+        value: CF-Connecting-IP
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_URL_DIRECT

@@ -12,8 +12,8 @@ hosts never moves data.
 | `NODE_ENV` | `production` |
 | `DATABASE_URL` | Neon **pooled** connection string (has `-pooler` in the host) |
 | `DATABASE_URL_DIRECT` | Neon **direct** connection string (same, without `-pooler`) |
-| `TONDO_TRUST_PROXY` | `1` on Render |
-| `TONDO_CLIENT_IP_HEADER` | `Fly-Client-IP` on Fly (instead of TONDO_TRUST_PROXY) |
+| `TONDO_CLIENT_IP_HEADER` | `CF-Connecting-IP` on Render (it sits behind Cloudflare); `Fly-Client-IP` on Fly |
+| `TONDO_TRUST_PROXY` | not used on Render or Fly — `1` was measured wrong on Render (it read an internal 10.x hop); keep it for a plain single reverse proxy only |
 
 Optional tuning variables also exist, all with working defaults:
 `TONDO_MAX_SOCKETS_PER_IP`, `TONDO_DB_POOL_MAX`, `TONDO_DB_RETRY_MS`,
@@ -47,10 +47,12 @@ Optional tuning variables also exist, all with working defaults:
    `[crews] http refused: budget ip=<address> xff_entries=<n>`.
    It must show the REAL client address (the one `curl -s https://api.ipify.org`
    prints from the same machine), never 6.6.6.6. If it shows a balancer address
-   (10.x or similar), or a `[tondo] TONDO_TRUST_PROXY=<n> but X-Forwarded-For has
-   <m> entries; using the socket address` line appears, the hop count is wrong:
-   set `TONDO_TRUST_PROXY` to match the chain and redeploy. The log shows only how
-   many entries the header had, never what they said.
+   (10.x or similar), every player shares one budget: check that
+   `TONDO_CLIENT_IP_HEADER=CF-Connecting-IP` is set and redeploy. Also run the same
+   burst with `-H 'CF-Connecting-IP: 7.7.7.7'`: Cloudflare must answer 403 (it
+   refuses a forged copy). Use `curl -4` for both commands. The log shows only how
+   many X-Forwarded-For entries there were, never what they said.
+   Verified live 2026-10-10: log showed the real client address, xff_entries=3.
 4. Restart persistence: Render → Manual Deploy → Restart; reload the crew link
    → same tally.
 
