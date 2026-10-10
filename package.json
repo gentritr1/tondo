@@ -12,6 +12,8 @@
     "test:server": "node test/server-limits.test.mjs",
     "test:db": "node test/db.test.mjs && node test/crews.test.mjs && node test/crew-actions.test.mjs && node test/crew-server.test.mjs && node test/crew-wire.test.mjs",
     "smoke": "node scripts/host-smoke.js && node scripts/table-smoke.js",
+    "smoke:crew": "node scripts/crew-smoke.js",
+    "check:portable": "node scripts/portable-check.mjs",
     "shoot": "node scripts/shoot.js --check",
     "contrast": "node scripts/check-contrast.js"
   },

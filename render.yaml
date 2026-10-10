@@ -1,0 +1,25 @@
+# Render Blueprint — Tondo on the free plan (testing). Nothing in the server is
+# Render-specific: these are the only settings it reads. To move to Fly, see
+# docs/DEPLOY.md.
+services:
+  - type: web
+    name: tondo
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
+      # Render's load balancer appends the real client address as the last
+      # X-Forwarded-For entry. UNVERIFIED until the live check in DEPLOY.md.
+      - key: TONDO_TRUST_PROXY
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_DIRECT
+        sync: false
