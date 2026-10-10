@@ -11,11 +11,14 @@
  * not merely DETECT other people's tables, it seats you at them.
  *
  * The shape of the defence is set by what this game is for: four friends in one
- * room, on their phones, behind ONE public IP. A tight per-IP limit would break
- * the primary use case, which is worse than the attack it prevents. So almost
- * everything here is PER SOCKET, where a legitimate player has enormous
- * headroom and an attacker has none, and the only per-IP number (concurrent
- * sockets) is set where a LAN party cannot reach it.
+ * room, on their phones, behind ONE public IP. A per-IP limit sized for one
+ * person would break the primary use case, which is worse than the attack it
+ * prevents. So message rate and table creation are PER SOCKET, where a
+ * legitimate player has enormous headroom and an attacker has none; wrong
+ * codes, connection attempts and concurrent sockets are PER ADDRESS, because a
+ * reconnect is free and would refill anything kept on the socket — and every
+ * one of those numbers is sized for a household behind one NAT (see BUDGETS),
+ * where a LAN party cannot reach it.
  *
  * Every budget below is a measured multiple of real play, not a guess:
  * `scripts/host-smoke.js` and `scripts/table-smoke.js` drive whole matches, and

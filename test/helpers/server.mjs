@@ -22,7 +22,7 @@ export async function spawnServer(env = {}) {
   proc.stdout.on('data', (d) => { logs += d; });
   proc.stderr.on('data', (d) => { logs += d; });
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`server did not open within 10s:\n${logs}`)), 10000);
+    const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error(`server did not open within 10s:\n${logs}`)); }, 10000);
     const onData = () => { if (logs.includes('Tondo is open')) { clearTimeout(timer); resolve(); } };
     proc.stdout.on('data', onData);
     proc.once('exit', (code) => { clearTimeout(timer); reject(new Error(`server exited (${code}) before opening:\n${logs}`)); });

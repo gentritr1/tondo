@@ -175,7 +175,7 @@ const wss = new WebSocketServer({
       return done(false, 401);
     }
     const ip = clientIp(info.req);
-    // Attempts are budgeted before anything else is judged, so a refused
+    // Attempts are budgeted before the socket cap is judged, so a refused
     // attempt costs the same as an admitted one.
     if (!budgets.connect.take(ip)) {
       console.warn(`[tondo] upgrade refused: ${ip} is reconnecting too fast`);

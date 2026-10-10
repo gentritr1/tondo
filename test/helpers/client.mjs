@@ -13,10 +13,11 @@ export function client(url, headers = {}) {
   return {
     ws,
     inbox,
-    open: () => new Promise((resolve, reject) => {
-      ws.once('open', resolve);
-      ws.once('unexpected-response', (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
-      ws.once('error', reject);
+    open: (ms = 5000) => new Promise((resolve, reject) => {
+      const t = setTimeout(() => { ws.terminate(); reject(new Error(`open timed out after ${ms}ms`)); }, ms);
+      ws.once('open', () => { clearTimeout(t); resolve(); });
+      ws.once('unexpected-response', (_req, res) => { clearTimeout(t); reject(new Error(`HTTP ${res.statusCode}`)); });
+      ws.once('error', (err) => { clearTimeout(t); reject(err); });
     }),
     send: (msg) => ws.send(JSON.stringify(msg)),
     next(pred, ms = 5000) {

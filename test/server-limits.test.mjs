@@ -41,9 +41,9 @@ test('connection attempts past the burst are refused with 429', async () => {
     const c = as(ip);
     try { await c.open(); await c.close(); } catch (err) { if (/HTTP 429/.test(err.message)) refusedAt = i; else throw err; }
   }
-  // Refill is 1/s, so a slow run earns a few extra admissions: allow for the
-  // elapsed seconds rather than pinning exactly 65.
-  const slack = Math.ceil((Date.now() - t0) / 1000);
+  // Refill is 1/s, so a slow run earns extra admissions: allow only for the
+  // whole seconds actually elapsed (a fast run must refuse at exactly 65).
+  const slack = Math.floor((Date.now() - t0) / 1000);
   assert(refusedAt > 0, `never refused within 100 attempts (${Date.now() - t0}ms)`);
   assert(refusedAt >= 65 && refusedAt <= 65 + slack, `refused at attempt ${refusedAt}, expected 65..${65 + slack}`);
 });

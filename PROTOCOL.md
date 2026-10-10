@@ -187,10 +187,11 @@ None of this is authentication — the game has none and needs none. It is the
 floor that stops ONE socket denying the game to everybody, measured against what
 real play does rather than guessed. Message rate and table creation are per
 socket; wrong codes, connection attempts and concurrent sockets are per address
-(server/clientip.js decides the address behind a proxy). Per socket wherever
-possible is deliberate: this game is four friends in one room on their phones
-behind ONE public IP, and a tight per-IP limit would break the primary use case
-more thoroughly than the attack it prevents.
+(server/clientip.js decides the address behind a proxy). The per-address
+numbers are sized for a household behind one NAT: this game is four friends in
+one room on their phones behind ONE public IP, and a per-address limit sized for
+one person would break the primary use case more thoroughly than the attack it
+prevents.
 
 | limit | value | over it |
 |---|---|---|
