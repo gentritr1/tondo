@@ -77,7 +77,11 @@
  *                                   same page minus the crew control: the first
  *                                   stacked layout did exactly that, by 20px at
  *                                   1366x768, and no assertion on the crew
- *                                   button's own box could see it). Swept over
+ *                                   button's own box could see it) and is not
+ *                                   covered by anything (elementFromPoint at its
+ *                                   centre). The check is INVALID, so a FAIL, when
+ *                                   it has nothing to measure against: no visible
+ *                                   sibling, or #newround-btn hidden. Swept over
  *                                   widths 320..1440 in 40px steps at height
  *                                   700, plus 320x568, 390x844, 1366x768 and
  *                                   heights 560..900 in 20px steps at widths
@@ -761,7 +765,12 @@ async function runCheck(a) {
         return -Math.min(Math.min(a.right, b.right) - Math.max(a.left, b.left),
                          Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
       };
-      let minClear = Infinity, minWith = '(none visible)', bottomOver = -Infinity, sideOver = -Infinity;
+      // Premises, asserted rather than assumed: with nothing to measure against, or
+      // with New pie hidden, minClear stays Infinity and every comparison below
+      // passes vacuously.
+      if (others.length === 0) return JSON.stringify({ valid: false, reason: 'no sibling (#share-btn, #slice-pips, #newround-btn, #hold-btn) has a visible box to measure against' });
+      if (!visible(document.getElementById('newround-btn'))) return JSON.stringify({ valid: false, reason: '#newround-btn has no visible box (the displacement check has nothing to look at)' });
+      let minClear = Infinity, minWith = '(none visible)', bottomOver = -Infinity, sideOver = -Infinity, occluded = null;
       for (const pos of ['top', 'end']) {
         for (const n of scrollers) n.scrollTop = pos === 'top' ? 0 : n.scrollHeight;
         const t = target.getBoundingClientRect();
@@ -770,6 +779,14 @@ async function runCheck(a) {
           if (c < minClear) { minClear = c; minWith = '#' + o.id; }
         }
         if (pos === 'end') {
+          // Occlusion: something drawn over the control is not "fitting". The
+          // point is the centre; off screen there is nothing to hit-test.
+          const cx = t.left + t.width / 2, cy = t.top + t.height / 2;
+          if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) occluded = 'centre off screen (' + Math.round(cx) + ',' + Math.round(cy) + ')';
+          else {
+            const hit = document.elementFromPoint(cx, cy);
+            if (!hit || !target.contains(hit)) occluded = 'covered by ' + (hit ? (hit.id ? '#' + hit.id : hit.tagName.toLowerCase() + '.' + String(hit.className).split(' ')[0]) : 'nothing');
+          }
           bottomOver = t.bottom - innerHeight;           // > 0: still below the fold at the scroll end
           sideOver = Math.max(-t.left, t.right - innerWidth);
         }
@@ -803,7 +820,7 @@ async function runCheck(a) {
         valid: true, scrollers: scrollers.map((n) => n.className || n.tagName).join('+') || '(none needed)',
         others: others.map((o) => o.id).join(','), minClear: rd(minClear), minWith,
         bottomOver: rd(bottomOver), sideOver: rd(sideOver),
-        pass: minClear >= 0 && bottomOver <= 1 && sideOver <= 0.5 && !displaced,
+        occluded, pass: minClear >= 0 && bottomOver <= 1 && sideOver <= 0.5 && !displaced && occluded === null,
       });
     })()`;
     const CREW_FIT_SIZES = [];
@@ -842,10 +859,10 @@ async function runCheck(a) {
       const worstBottom = valid.reduce((m, r) => Math.max(m, r.parsed.bottomOver), -Infinity);
       const flip = rows.find((r, i) => i > 0 && i < 29 && r.ok !== rows[i - 1].ok);   // along the 700px width sweep
       record('crew-save-fits', `mock:pieComplete ${state} x${rows.length} sizes  `, failures === 0 && valid.length === rows.length,
-        `newPieSpareMin=${tightPie ? -tightPie.parsed.newPieBelowFold : 'n/a'}px@${tightPie ? tightPie.w + 'x' + tightPie.h : 'n/a'} (baseline without the crew control there: ${tightPie ? -tightPie.parsed.newPieBelowFoldWithout : 'n/a'}px) `
+        `valid=${valid.length}/${rows.length} newPieSpareMin=${tightPie ? -tightPie.parsed.newPieBelowFold : 'n/a'}px@${tightPie ? tightPie.w + 'x' + tightPie.h : 'n/a'} (baseline without the crew control there: ${tightPie ? -tightPie.parsed.newPieBelowFoldWithout : 'n/a'}px) `
         + `minClearance=${worst ? worst.parsed.minClear : 'n/a'}px (vs ${worst ? worst.parsed.minWith : 'n/a'} @${worst ? worst.w + 'x' + worst.h : 'n/a'}) `
-        + `maxBelowFoldAtScrollEnd=${worstBottom}px signFlip=${flip ? '@' + flip.w + 'x' + flip.h : 'none'} `
-        + `failing=${failures}${failures ? ' (first 5): ' + rows.filter((r) => !r.ok).slice(0, 5).map((r) => `${r.w}x${r.h}${r.parsed.valid ? `(clear ${r.parsed.minClear} with ${r.parsed.minWith}, below fold ${r.parsed.bottomOver}, side ${r.parsed.sideOver}, New pie ${r.parsed.newPieBelowFold} below fold vs ${r.parsed.newPieBelowFoldWithout} without)` : '(INVALID: ' + r.parsed.reason + ')'}`).join('; ') : ''}`);
+        + `maxBelowFoldAtScrollEnd=${valid.length ? worstBottom + 'px' : 'n/a'} signFlip=${flip ? '@' + flip.w + 'x' + flip.h : 'none'} `
+        + `failing=${failures}${failures ? ' (first 5): ' + rows.filter((r) => !r.ok).slice(0, 5).map((r) => `${r.w}x${r.h}${r.parsed.valid ? `(clear ${r.parsed.minClear} with ${r.parsed.minWith}, below fold ${r.parsed.bottomOver}, side ${r.parsed.sideOver}, New pie ${r.parsed.newPieBelowFold} below fold vs ${r.parsed.newPieBelowFoldWithout} without, ${r.parsed.occluded || 'not occluded'})` : '(INVALID: ' + r.parsed.reason + ')'}`).join('; ') : ''}`);
       console.log(`crew-save-fits ${state} sweep (width x height -> min clearance px | scrollers):\n  `
         + rows.map((r) => `${r.w}x${r.h}=${r.parsed.valid ? r.parsed.minClear : 'INVALID'}`).join('  '));
     }

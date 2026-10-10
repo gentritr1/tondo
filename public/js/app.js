@@ -1720,6 +1720,27 @@ function hideShareBtn() {
    (one arrives every time anyone at the table does anything); `crewSavedSaid`
    makes "Saved to …" announce once per pie, not once per snapshot. */
 function renderCrewSave(snap, over) {
+  // Whatever held focus inside the Save button or the picker may be about to
+  // be hidden (one-tap save, a chip, another seat's save arriving while this
+  // seat's picker is open): a hidden element drops focus to <body>, and a
+  // keyboard or screen-reader user is then back at the top of the page.
+  const had = document.activeElement;
+  const inCrew = !!had && (had === nodes['crew-save-btn'] || nodes['crew-picker'].contains(had));
+  paintCrewSave(snap, over);
+  if (inCrew && had.getClientRects().length === 0) crewFocusFallback();
+}
+
+/* Where focus lands when the control it was on goes away: Copy result if it is
+   on screen (the next thing worth doing with a finished pie), else New pie,
+   else wherever it already is. */
+function crewFocusFallback() {
+  for (const id of ['share-btn', 'newround-btn']) {
+    const e = nodes[id];
+    if (e && !e.hidden && !e.disabled && e.getClientRects().length) { e.focus(); return; }
+  }
+}
+
+function paintCrewSave(snap, over) {
   const m = snap && snap.match;
   const btn = nodes['crew-save-btn'];
   const show = !!m && over && m.complete && snap.crews === 'on';
@@ -1735,6 +1756,7 @@ function renderCrewSave(snap, over) {
     nodes['crew-picker'].hidden = true;
     app.crewPickerOpen = false;
     app.crewSavedSaid = false;
+    app.crewSavingSaid = false;
     setText(nodes['crew-msg'], '');
     return;
   }
@@ -1742,10 +1764,11 @@ function renderCrewSave(snap, over) {
     btn.hidden = true;
     nodes['crew-picker'].hidden = true;
     app.crewPickerOpen = false;
-    rememberCrew(m.savedTo);
     setText(nodes['crew-msg'], `Saved to ${m.savedTo.name}`);
     if (!app.crewSavedSaid) {
       app.crewSavedSaid = true;
+      app.crewSavingSaid = false;
+      rememberCrew(m.savedTo);   // first sight only: a snapshot arrives on every move at the table
       // After this repaint, not during it: renderGame writes the same live
       // region later in the same pass (memory 2026-09-26-live-region-same-tick.md).
       setTimeout(() => announce(`Saved to ${m.savedTo.name}.`), 0);
@@ -1755,6 +1778,10 @@ function renderCrewSave(snap, over) {
   nodes['crew-picker'].hidden = !picking;
   btn.hidden = picking;
   btn.disabled = !!m.saving;
+  if (m.saving && !app.crewSavingSaid) {
+    app.crewSavingSaid = true;
+    setTimeout(() => announce('Saving…'), 0);   // after this repaint, as for "Saved to"
+  } else if (!m.saving) app.crewSavingSaid = false;
   btn.textContent = m.saving ? 'Saving…' : (snap.crew ? `Save to ${snap.crew.name}` : 'Save to crew');
 }
 
@@ -1774,10 +1801,16 @@ function openCrewPicker() {
   }
   // No stored name (a guest who never typed one): "Our crew", not "Our's crew".
   nodes['crew-new-name'].value = (app.name ? `${nicelyName(app.name)}'s crew` : 'Our crew').slice(0, 24);
+  nodes['crew-new-name'].removeAttribute('aria-invalid');
   app.crewPickerOpen = true;
   setText(nodes['crew-msg'], '');
-  renderCrewSave(app.snap, true);
-  nodes['crew-new-name'].focus();
+  // paint, not renderCrewSave: the button this focus came from is meant to go,
+  // and focus is handed straight to the picker, not to the fallback.
+  paintCrewSave(app.snap, true);
+  // With remembered crews the first chip takes focus: the name field would
+  // raise the phone keyboard over the chips. No crews, no chips: the field.
+  const first = list.firstElementChild;
+  (first || nodes['crew-new-name']).focus();
 }
 
 nodes['crew-save-btn'].addEventListener('click', () => {
@@ -1788,19 +1821,36 @@ nodes['crew-save-btn'].addEventListener('click', () => {
 });
 
 nodes['crew-new-btn'].addEventListener('click', () => {
-  const name = nodes['crew-new-name'].value.replace(/\s+/g, ' ').trim();
-  if (!name) { setText(nodes['crew-msg'], 'Give the crew a name.'); nodes['crew-new-name'].focus(); return; }
+  const field = nodes['crew-new-name'];
+  const name = field.value.replace(/\s+/g, ' ').trim();
+  if (!name) {
+    setText(nodes['crew-msg'], 'Give the crew a name.');
+    announce('Give the crew a name.');
+    field.setAttribute('aria-invalid', 'true');
+    field.focus();
+    return;
+  }
+  field.removeAttribute('aria-invalid');
   if (send({ type: 'saveToCrew', newCrewName: name })) { app.crewPickerOpen = false; renderCrewSave(app.snap, true); }
 });
+nodes['crew-new-name'].addEventListener('input', () => nodes['crew-new-name'].removeAttribute('aria-invalid'));
 nodes['crew-new-name'].addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') nodes['crew-new-btn'].click();
-  else if (e.key === 'Escape') nodes['crew-cancel-btn'].click();
+  if (e.key === 'Enter' && !e.isComposing) nodes['crew-new-btn'].click();
+});
+// Escape closes the picker from anywhere inside it (a chip, "Not now", the
+// field). preventDefault is the claim the document-level Escape handler honours
+// (`defaultPrevented`), so it stands down instead of cancelling a half-chosen Wild.
+nodes['crew-picker'].addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  e.preventDefault();
+  nodes['crew-cancel-btn'].click();
 });
 nodes['crew-cancel-btn'].addEventListener('click', () => {
   app.crewPickerOpen = false;
+  nodes['crew-new-name'].removeAttribute('aria-invalid');
   setText(nodes['crew-msg'], '');
   renderCrewSave(app.snap, true);
-  nodes['crew-save-btn'].focus();
+  if (!nodes['crew-save-btn'].hidden && !nodes['crew-save-btn'].disabled) nodes['crew-save-btn'].focus();
 });
 
 /**
