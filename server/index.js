@@ -15,6 +15,10 @@ const { RoomManager } = require('./rooms');
 const { Assets } = require('./assets');
 const { SocketLimits, maxSocketsPerIp, createIpBudgets } = require('./limits');
 const { clientIpFrom } = require('./clientip');
+const db = require('./db');
+const crews = require('./crews');
+const crewHttp = require('./crew-http');
+const crewActions = require('./crew-actions');
 
 const PORT = Number(process.env.PORT) || 4600;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -29,7 +33,7 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-const manager = new RoomManager();
+const manager = new RoomManager({ crewsStatus: () => db.publicStatus() });
 const assets = new Assets(PUBLIC_DIR);
 const budgets = createIpBudgets();
 
@@ -102,8 +106,17 @@ function serveStatic(req, res) {
 const server = http.createServer((req, res) => {
   try {
     if (req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, rooms: manager.rooms.size }));
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      // Never queries the database: the host polls this, and a poll that woke
+      // Neon every few minutes would spend its free compute hours (spec §4.2).
+      res.end(JSON.stringify({ ok: true, rooms: manager.rooms.size, crews: db.state() }));
+      return;
+    }
+    if (crewHttp.matches(req.url)) {
+      crewHttp.handle(req, res, { ip: clientIp(req), budgets }).catch((err) => {
+        console.error('[crews] http failed:', err && err.message);
+        if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"error":"server"}'); }
+      });
       return;
     }
     serveStatic(req, res);
@@ -284,9 +297,10 @@ function handleMessage(socket, session, message) {
 
     // The new table is granted BEFORE the old seat is torn down: a bad code
     // or a full house must not leave the sender seatless.
+    const deviceHash = crews.hashDevice(message.device);
     const result = message.type === 'createRoom'
-      ? manager.createRoom(message.name, socket)
-      : manager.joinRoom(message.code, message.name, socket, message.token);
+      ? manager.createRoom(message.name, socket, { deviceHash })
+      : manager.joinRoom(message.code, message.name, socket, message.token, { deviceHash });
 
     if (!result.ok) {
       // Any failed join costs a token, not only "no such code": "that round is
@@ -311,6 +325,16 @@ function handleMessage(socket, session, message) {
       reconnected: Boolean(result.reconnected),
     });
     result.room.broadcast();
+
+    if (message.type === 'createRoom' && crews.validCrewId(message.crewId) && db.publicStatus() === 'on') {
+      const room = result.room;
+      const crewId = message.crewId;
+      // Looked up off the hot path: the table opens at once, and gains its
+      // crew a moment later (or never, if the crew is gone or the book is down).
+      crews.crewName(crewId).then((name) => {
+        if (name && !room.crew) { room.crew = { id: crewId, name }; room.broadcast(); }
+      }, () => {});
+    }
     return;
   }
 
@@ -386,6 +410,18 @@ function handleMessage(socket, session, message) {
       break;
     }
 
+    case 'saveToCrew': {
+      const out = crewActions.saveToCrew({ room, seat, message, ip: session.ip, budgets });
+      if (out.refuse) return refuse(socket, room, seatId, out.refuse);
+      if (out.started) {
+        out.started.then((r) => {
+          room.broadcast();
+          if (!r.ok) sendError(socket, r.message);
+        });
+      }
+      break; // the broadcast below shows `saving: true` at once
+    }
+
     case 'sync':
       send(socket, room.snapshotFor(seatId));
       return;
@@ -443,12 +479,14 @@ try {
 server.listen(PORT, () => {
   console.log(`\n  Tondo is open. http://localhost:${PORT}\n`);
 });
+db.start(); // never rejects; crews come up (or report why not) in the background
 
 function shutdown() {
   clearInterval(heartbeat);
   manager.stop();
+  const dbClosed = db.stop(); // never rejects; ends the pool so Postgres sees a clean goodbye
   for (const socket of wss.clients) socket.close();
-  server.close(() => process.exit(0));
+  server.close(() => dbClosed.finally(() => process.exit(0)));
   setTimeout(() => process.exit(0), 2000).unref();
 }
 

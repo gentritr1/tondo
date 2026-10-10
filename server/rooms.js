@@ -102,12 +102,19 @@ function freshPie() {
     complete: false,
     championIds: [],
     lastRound: null,     // what the round just finished was worth
+    // `pieKey` names this pie to the crew store so a double save is one row; it
+    // never goes on the wire.
+    pieKey: crypto.randomBytes(8).toString('hex'),
+    savedTo: null,       // {id, name}: the crew this pie was saved to
+    saving: false,       // a save is in flight
   };
 }
 
 class Room {
-  constructor(code) {
+  constructor(code, { crewsStatus = () => 'off' } = {}) {
     this.code = code;
+    this.crewsStatus = crewsStatus;
+    this.crew = null; // {id, name}: the crew this table was started from, or first saved to
     this.seats = []; // { id, name, isBot, token, socket, connected, disconnectedAt }
     this.hostId = null;
     this.phase = 'lobby'; // 'lobby' | 'playing' | 'roundOver'
@@ -208,6 +215,24 @@ class Room {
     }
   }
 
+  /**
+   * The finished pie as the crew store records it — built from the server's
+   * own standings, never from anything a client sent. Seats that left before
+   * the end are not in standings(), exactly as the scoreboard shows.
+   */
+  pieRecord() {
+    const champions = new Set(this.pie.championIds);
+    return {
+      pieKey: this.pie.pieKey,
+      rounds: this.pie.roundsPerPie,
+      players: this.standings().map((r) => {
+        if (r.isBot) return { kind: 'bot', name: r.name, points: r.points, won: champions.has(r.id) };
+        const seat = this.findSeat(r.id);
+        return { kind: 'human', deviceHash: (seat && seat.deviceHash) || null, name: r.name, points: r.points, won: champions.has(r.id) };
+      }),
+    };
+  }
+
   // -- seats ---------------------------------------------------------------
 
   humanSeats() {
@@ -228,7 +253,7 @@ class Room {
     return this.seats.find((s) => s.token && s.token === key) || null;
   }
 
-  addSeat({ name, isBot = false, socket = null }) {
+  addSeat({ name, isBot = false, socket = null, deviceHash = null }) {
     const seat = {
       id: nextSeatId(),
       name,
@@ -239,6 +264,8 @@ class Room {
       socket,
       connected: isBot ? true : Boolean(socket),
       disconnectedAt: null,
+      // sha256 of the browser's device secret; it never goes on the wire.
+      deviceHash: isBot ? null : deviceHash,
     };
     this.seats.push(seat);
     if (!isBot) this.peakHumans = Math.max(this.peakHumans, this.humanSeats().length);
@@ -406,6 +433,8 @@ class Room {
       youId: seatId,
       hostId: this.hostId,
       isHost: this.isActingHost(seatId),
+      crews: this.crewsStatus(),
+      crew: this.crew,
       seats: this.seats.map((s) => ({
         id: s.id,
         name: s.name,
@@ -425,6 +454,8 @@ class Room {
         // client can render a countdown without the server ticking at it.
         nextDueAt: this.nextDueAt || null,
         held: this.held,
+        savedTo: this.pie.savedTo,
+        saving: this.pie.saving,
       },
     };
   }
@@ -446,7 +477,8 @@ class Room {
 // ---------------------------------------------------------------------------
 
 class RoomManager {
-  constructor() {
+  constructor({ crewsStatus } = {}) {
+    this.crewsStatus = crewsStatus || (() => 'off');
     this.rooms = new Map();
     this.timer = setInterval(() => this.tick(), TICK_MS);
     if (this.timer.unref) this.timer.unref();
@@ -488,7 +520,7 @@ class RoomManager {
     return this.rooms.get(String(code || '').trim().toUpperCase()) || null;
   }
 
-  createRoom(name, socket) {
+  createRoom(name, socket, { deviceHash = null } = {}) {
     const cleaned = cleanName(name);
     if (!cleaned) return { ok: false, error: 'Enter your name first.' };
     if (this.rooms.size >= MAX_ROOMS) {
@@ -498,13 +530,13 @@ class RoomManager {
     // Unreachable while 9,000,000 codes hold at most 500 rooms, but a room
     // without a code is not something to construct on a maybe.
     if (!code) return { ok: false, error: 'The pizzeria is full. Try again in a minute.' };
-    const room = new Room(code);
+    const room = new Room(code, { crewsStatus: this.crewsStatus });
     this.rooms.set(room.code, room);
-    const seat = room.addSeat({ name: cleaned, socket });
+    const seat = room.addSeat({ name: cleaned, socket, deviceHash });
     return { ok: true, room, seat };
   }
 
-  joinRoom(code, name, socket, token) {
+  joinRoom(code, name, socket, token, { deviceHash = null } = {}) {
     const cleaned = cleanName(name);
     if (!cleaned) return { ok: false, error: 'Enter your name first.' };
     const room = this.getRoom(code);
@@ -525,6 +557,7 @@ class RoomManager {
       claimed.socket = socket;
       claimed.connected = true;
       claimed.disconnectedAt = null;
+      if (deviceHash && !claimed.deviceHash) claimed.deviceHash = deviceHash;
       room.emptySince = 0;
       room.syncConnectionFlags();
       room.scheduleTimers(true);
@@ -538,7 +571,7 @@ class RoomManager {
       return { ok: false, error: 'That table is full.' };
     }
     // Lobby or round over: either way there is a seat to take before the deal.
-    const seat = room.addSeat({ name: cleaned, socket });
+    const seat = room.addSeat({ name: cleaned, socket, deviceHash });
     room.emptySince = 0;
     return { ok: true, room, seat };
   }
