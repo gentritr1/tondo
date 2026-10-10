@@ -17,6 +17,7 @@ import * as sound from './sound.js';
 import * as haptics from './haptics.js';
 import * as fx from './fx.js';
 import { pieResultText, sliceWord } from './share.js';
+import { getDevice, withDevice, readCrews, rememberCrew, forgetCrew, crewLink, CREW_ID } from './crews.js';
 
 /* ------------------------------------------------------------- constants */
 
@@ -284,7 +285,7 @@ const app = {
   seatNoteTimer: 0,
 };
 
-const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus });
+const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus, getDevice });
 
 /* --------------------------------------------------------------- helpers */
 
@@ -501,7 +502,7 @@ function sendAutoJoin() {
   app.autoJoin = '';
   const seat = conn.seatFor(code);
   app.rejoinAttempt = true;
-  const ok = conn.send({ type: 'joinRoom', code, name: app.name, token: seat ? seat.token : undefined });
+  const ok = conn.send(withDevice({ type: 'joinRoom', code, name: app.name, token: seat ? seat.token : undefined }));
   if (!ok) {
     // The socket went away between the status hook and here. Hand the player
     // the ordinary front door with the code already in the box.
@@ -1418,7 +1419,7 @@ nodes['create-btn'].addEventListener('click', () => {
   const name = readName();
   if (!name) return;
   nodes['home-msg'].textContent = '';
-  send({ type: 'createRoom', name });
+  send(withDevice({ type: 'createRoom', name }));
 });
 
 /* One tap instead of create, add three bots, deal. No stats, no record, no
@@ -1426,7 +1427,7 @@ nodes['create-btn'].addEventListener('click', () => {
 function startQuickPie(name) {
   nodes['home-msg'].textContent = '';
   app.quickPie = 'creating';
-  if (!send({ type: 'createRoom', name })) app.quickPie = null;
+  if (!send(withDevice({ type: 'createRoom', name }))) app.quickPie = null;
 }
 
 nodes['quickpie-btn'].addEventListener('click', () => {
@@ -1458,7 +1459,7 @@ nodes['join-btn'].addEventListener('click', () => {
   nodes['home-msg'].textContent = '';
   const seat = conn.seatFor(code);
   app.rejoinAttempt = fromMemory;
-  if (!send({ type: 'joinRoom', code, name, token: seat ? seat.token : undefined })) app.rejoinAttempt = false;
+  if (!send(withDevice({ type: 'joinRoom', code, name, token: seat ? seat.token : undefined }))) app.rejoinAttempt = false;
 });
 
 /* Always an explicit tap: the row offers the table, it never takes it. */

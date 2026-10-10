@@ -3,8 +3,9 @@
  *
  * Plain text because it pastes everywhere. It names everyone and spoils
  * nothing, and it asks the reader for nothing: no reward, no "join my table" —
- * a room code is dead 60 seconds after the table empties, so the link offers
- * a NEW table instead of promising the old one.
+ * a room code is dead 60 seconds after the table empties, so an unsaved pie's
+ * link offers a NEW table, and a pie saved to a crew links the crew page,
+ * which does not die.
  */
 
 const listNames = (names) => (names.length <= 2
@@ -89,7 +90,7 @@ function championName(id, standings, resolveName) {
   return resolved ? nicelyName(resolved) : '';
 }
 
-export function pieResultText(match, { origin = '', resolveName } = {}) {
+export function pieResultText(match, { origin = '', resolveName, crewUrl = '' } = {}) {
   if (!match || !match.complete) return '';
   const standings = match.standings || [];
   const championIds = match.championIds || [];
@@ -131,5 +132,8 @@ export function pieResultText(match, { origin = '', resolveName } = {}) {
     return `${nicelyName(r.name)} ${Number.isFinite(pts) ? pts : 0}`;
   }).join(' · ');
 
-  return `🍕 TONDO — ${headline}\n${scores}\n${sliceSentence(sliceCount(match))} Start a new table: ${origin}`;
+  // A saved pie points at the crew, which outlives the table; an unsaved one
+  // still offers a NEW table, because its room code dies 60s after it empties.
+  const tail = crewUrl ? `See the crew: ${crewUrl}` : `Start a new table: ${origin}`;
+  return `🍕 TONDO — ${headline}\n${scores}\n${sliceSentence(sliceCount(match))} ${tail}`;
 }
