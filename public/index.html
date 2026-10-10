@@ -59,6 +59,13 @@
       <p id="last-table-sub" class="home-hook last-table-sub"></p>
     </div>
 
+    <!-- Crews this device has played into, newest first. Decided before first
+         paint (read synchronously at boot), like the last-table row above. -->
+    <div id="crews-row" class="last-table" hidden>
+      <span class="field-label">Your crews</span>
+      <div id="crews-list" class="crews-list"></div>
+    </div>
+
     <div class="join-row">
       <label class="field field-grow" for="code-input">
         <span class="field-label">Table code</span>
@@ -103,6 +110,28 @@
          the home card's. -->
     <button type="button" class="btn btn-tiny" data-help-open>How to play</button>
     <button id="leave-btn" type="button" class="btn btn-ghost btn-block">Leave table</button>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ CREW -->
+<section id="screen-crew" class="screen crew" role="main" aria-labelledby="crew-title">
+  <div class="lobby-card crew-card">
+    <h1 id="crew-title" class="crew-title" tabindex="-1">Your crew</h1>
+    <p id="crew-sub" class="home-hook crew-sub"></p>
+    <ol id="crew-rows" class="crew-rows"></ol>
+    <div id="crew-recent" class="crew-recent"></div>
+    <label id="crew-name-field" class="field" for="crew-name-input" hidden>
+      <span class="field-label">Your name</span>
+      <input id="crew-name-input" class="input" type="text" maxlength="14" autocomplete="nickname" placeholder="Chef">
+    </label>
+    <button id="crew-start" type="button" class="btn btn-primary btn-block">Start a table</button>
+    <!-- Not a live region itself: #screen-game holds the shared ones and is
+         display:none here, which silences them. Everything this view says is
+         ALSO written to #crew-live (see crewAnnounce), so a line is read once. -->
+    <p id="crew-view-msg" class="msg"></p>
+    <button id="crew-home" type="button" class="btn btn-tiny">Home</button>
+    <button id="crew-leave" type="button" class="btn btn-tiny btn-forget" hidden>Leave this crew</button>
+    <p id="crew-live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
   </div>
 </section>
 

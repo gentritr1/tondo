@@ -91,6 +91,22 @@
  *                                   detail line reports the minimum clearance
  *                                   (px) and where it is, and the sign flip if
  *                                   there is one.
+ *                   crew-card-fits  the crew page (`/?mock=1&crew=…`, a lived-in
+ *                                   crew and a worst-case one with 24-char crew
+ *                                   and 14-char member names in the widest
+ *                                   glyph) has nothing sticking out of its
+ *                                   card, no horizontal scroll, and "Start a
+ *                                   table" reachable by scrolling the SCREEN's
+ *                                   own container (#screen-crew; the document
+ *                                   never scrolls) and not covered by anything
+ *                                   (elementFromPoint at its centre). INVALID,
+ *                                   so a FAIL, unless the card exists, rows
+ *                                   rendered and #crew-start has a visible
+ *                                   box. Swept over widths 320..1440 in 40px
+ *                                   steps at height 700, plus 320x568, 390x844
+ *                                   and 1366x768 (sampled sizes have missed
+ *                                   overlaps here before). Captures go to
+ *                                   `.superpowers/qa-crew/`, not qa-latest.
  *                   seat-plaque-gap scripts/probes/seat-plaque-gap.js
  *                                   `pass: true` across the desktop/tablet
  *                                   widths it was written for.
@@ -906,6 +922,95 @@ async function runCheck(a) {
         // floors and an isolated run has the machine to itself.
         + (parsed.valid ? '' : ` FAILED PREMISES: ${(parsed.failedPremises || ['(probe predates failedPremises)']).join(', ')}`
             + ` [frames next=${parsed.next && parsed.next.frames}/60 lobby=${parsed.lobby && parsed.lobby.frames}/45]`));
+    }
+
+    // ---- crew-card-fits -------------------------------------------------
+    // The crew page is a new screen at every size: nothing in the card may
+    // stick out sideways (a long crew or member name must wrap, not overflow),
+    // and "Start a table" must be reachable by scrolling the SCREEN's own
+    // container (#screen-crew is overflow:auto; the document never scrolls —
+    // html, body { overflow: hidden }) with nothing drawn over it.
+    // Measured with two fixtures: the lived-in crew, and the widest names the
+    // server allows in the widest glyph (a short-name fixture cannot fail a
+    // `white-space: nowrap` regression, which is what the sabotage run uses).
+    const CREW_CARD_PROBE = `(() => {
+      const card = document.querySelector('.crew-card');
+      const screen = document.getElementById('screen-crew');
+      const start = document.getElementById('crew-start');
+      if (!card || !screen || !start) return JSON.stringify({ valid: false, reason: 'crew screen/card/#crew-start missing' });
+      if (document.body.dataset.screen !== 'crew') return JSON.stringify({ valid: false, reason: 'not on the crew screen' });
+      const rows = document.getElementById('crew-rows').children.length;
+      if (rows === 0) return JSON.stringify({ valid: false, reason: 'no rows rendered (fixture not loaded?)' });
+      const cs = getComputedStyle(start), sr0 = start.getBoundingClientRect();
+      if (start.hidden || cs.display === 'none' || cs.visibility === 'hidden' || sr0.width <= 0 || sr0.height <= 0) {
+        return JSON.stringify({ valid: false, reason: '#crew-start has no visible box' });
+      }
+      const label = (n) => n.id || String(n.className).split(' ')[0] || n.tagName.toLowerCase();
+      screen.scrollTop = 0;
+      const topAt0 = Math.round(card.getBoundingClientRect().top * 10) / 10;
+      // The CONTENT box: the card's 22px side padding is not spare room, and
+      // measuring against the border box let anything up to 22px of overflow pass.
+      const cr = card.getBoundingClientRect(), ccs = getComputedStyle(card);
+      const c = { left: cr.left + parseFloat(ccs.paddingLeft), right: cr.right - parseFloat(ccs.paddingRight) };
+      let slack = Infinity, slackAt = '(none)';
+      const outside = [];
+      for (const n of card.querySelectorAll('*')) {
+        if (n.classList.contains('sr-only')) continue;
+        const r = n.getBoundingClientRect();
+        if (r.width <= 0) continue;
+        const s = Math.min(r.left - c.left, c.right - r.right, r.left, innerWidth - r.right);
+        if (s < slack) { slack = s; slackAt = label(n); }
+        if (s < -0.5) outside.push(label(n));
+      }
+      const hScroll = Math.max(screen.scrollWidth - screen.clientWidth, card.scrollWidth - card.clientWidth);
+      screen.scrollTop = screen.scrollHeight;
+      const s = start.getBoundingClientRect();
+      const cx = s.left + s.width / 2, cy = s.top + s.height / 2;
+      let occluded = null;
+      if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) occluded = 'centre off screen (' + Math.round(cx) + ',' + Math.round(cy) + ')';
+      else {
+        const hit = document.elementFromPoint(cx, cy);
+        if (!hit || !start.contains(hit)) occluded = 'covered by ' + (hit ? label(hit) : 'nothing');
+      }
+      const rd = (x) => Math.round(x * 10) / 10;
+      const startBelow = rd(s.bottom - innerHeight);
+      return JSON.stringify({ valid: true, rows, slack: rd(slack), slackAt, outside: [...new Set(outside)].slice(0, 5), hScroll, topAt0, startBottom: rd(s.bottom), innerHeight, startBelow, occluded,
+        pass: outside.length === 0 && hScroll <= 1 && topAt0 >= -0.5 && startBelow <= 1 && occluded === null });
+    })()`;
+    const CREW_CARD_SIZES = [];
+    for (let w = 320; w <= 1440; w += 40) CREW_CARD_SIZES.push([w, 700]);
+    CREW_CARD_SIZES.push([320, 568], [390, 844], [1366, 768]);
+    const qaCrew = path.join(root, '.superpowers', 'qa-crew');
+    for (const [fixture, id] of [['lived-in', 'k7m2q9xh3p'], ['widest-names', 'wwwwwwwwww']]) {
+      const rows = [];
+      for (const [w, h] of CREW_CARD_SIZES) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 768 });
+        await cdp.send('Page.navigate', { url: `${origin}/?mock=1&crew=${id}` });
+        await cdp.until(`document.readyState === 'complete'`, { what: `load crew ${id}@${w}x${h}` });
+        // Rows OR the failure line: a fixture that never loads must reach the probe
+        // and come back INVALID, not time out here as a harness error.
+        await cdp.until(`document.body.dataset.screen === 'crew' && (document.getElementById('crew-rows').children.length > 0 || document.getElementById('crew-start').disabled === false || /reach|exist/.test(document.getElementById('crew-sub').textContent))`, { what: `crew view ${id}@${w}x${h}` });
+        await cdp.eval(`(() => { document.getAnimations().forEach(x => { try { x.finish(); } catch {} });
+          return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+        const parsed = JSON.parse(await cdp.eval(CREW_CARD_PROBE));
+        rows.push({ w, h, parsed, ok: parsed.valid === true && parsed.pass === true });
+        // Its own folder: the capture block below clears qa-latest before it writes.
+        if ([[320, 568], [390, 844], [1366, 768]].some(([cw, ch]) => cw === w && ch === h)) {
+          await shoot(cdp, path.join(qaCrew, `fits-${fixture}-${w}x${h}.png`), { settle: true });
+        }
+      }
+      const valid = rows.filter((r) => r.parsed.valid);
+      const failing = rows.filter((r) => !r.ok);
+      const worstSlack = valid.reduce((m, r) => (m === null || r.parsed.slack < m.parsed.slack ? r : m), null);
+      const worstBelow = valid.reduce((m, r) => (m === null || r.parsed.startBelow > m.parsed.startBelow ? r : m), null);
+      record('crew-card-fits', `crew ${fixture} x${rows.length} sizes  `, failing.length === 0 && valid.length === rows.length,
+        `valid=${valid.length}/${rows.length} minHorizontalSlack=${worstSlack ? worstSlack.parsed.slack : 'n/a'}px (${worstSlack ? worstSlack.parsed.slackAt + ' @' + worstSlack.w + 'x' + worstSlack.h : 'n/a'}) `
+        + `startBottom-innerHeight max=${worstBelow ? worstBelow.parsed.startBelow : 'n/a'}px @${worstBelow ? worstBelow.w + 'x' + worstBelow.h : 'n/a'} failing=${failing.length}`
+        + (failing.length ? ' (first 5): ' + failing.slice(0, 5).map((r) => `${r.w}x${r.h}` + (r.parsed.valid
+          ? `(outside=[${r.parsed.outside.join(',')}] slack ${r.parsed.slack} at ${r.parsed.slackAt}, hScroll ${r.parsed.hScroll}, top ${r.parsed.topAt0}, start bottom ${r.parsed.startBottom}/${r.parsed.innerHeight}, ${r.parsed.occluded || 'not occluded'})`
+          : `(INVALID: ${r.parsed.reason})`)).join('; ') : ''));
+      console.log(`crew-card-fits ${fixture} sweep (width x height -> min horizontal slack px | start bottom - innerHeight px):\n  `
+        + rows.map((r) => `${r.w}x${r.h}=${r.parsed.valid ? r.parsed.slack + '|' + r.parsed.startBelow : 'INVALID'}`).join('  '));
     }
 
     // ---- capture every mock scene at every reference viewport ----------

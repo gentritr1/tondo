@@ -199,6 +199,8 @@ const nodes = {};
  'wild-bar', 'wild-corner', 'wild-centre', 'wild-ghost', 'wild-grid',
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
  'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips', 'share-btn', 'score-share-msg',
+ 'crews-row', 'crews-list', 'crew-title', 'crew-sub', 'crew-rows', 'crew-recent', 'crew-name-field', 'crew-name-input',
+ 'crew-start', 'crew-view-msg', 'crew-home', 'crew-leave', 'crew-live',
  'crew-save-btn', 'crew-picker', 'crew-picker-list', 'crew-new-name', 'crew-new-btn', 'crew-cancel-btn', 'crew-msg',
  'action-row', 'draw-btn', 'newround-btn', 'hold-btn', 'message', 'hint', 'game-leave', 'net-banner',
  'celebration',
@@ -292,7 +294,7 @@ const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus, g
 
 /* The heading of each screen, made focusable (`tabindex="-1"` in the markup)
    so there is somewhere real to put focus when a screen is swapped. */
-const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', game: 'game-title' };
+const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', crew: 'crew-title', game: 'game-title' };
 
 /**
  * Swap the visible screen — and take the keyboard with it.
@@ -322,7 +324,8 @@ function setScreen(name, opts) {
   const code = String(app.roomCode || '').toUpperCase();
   const line = name === 'home' ? 'Home.'
     : name === 'lobby' ? (code ? `Lobby for table ${code}.` : 'Lobby.')
-      : 'Game started.';
+      : name === 'crew' ? 'Crew.'
+        : 'Game started.';
   /* One arrival, one announcement. Arriving at the table and "Your turn" land
      in the SAME synchronous snapshot, and #live-now is role="alert"
      aria-live="assertive": it preempts the polite region, so the orientation
@@ -1398,6 +1401,12 @@ function bootHome() {
   const code = (params.get('code') || '').trim().toUpperCase();
   if (code) nodes['code-input'].value = code;
   renderLastTable();
+  renderCrewsRow();
+  const crewParam = (params.get('crew') || '').trim().toLowerCase();
+  if (crewParam) {
+    if (CREW_ID.test(crewParam)) app.bootCrew = crewParam;
+    else nodes['home-msg'].textContent = 'That crew link is not right.';
+  }
   // A friend tapping an invite link has already told us the two things the
   // front door asks for. Only a ?code= on THIS load may do this — a
   // remembered table never seats you without a tap.
@@ -1525,6 +1534,7 @@ nodes['forget-btn'].addEventListener('click', () => {
   nodes['name-input'].value = '';
   app.name = '';
   renderLastTable();
+  renderCrewsRow();
   nodes['home-msg'].textContent = FORGET_DONE;
 });
 
@@ -1533,6 +1543,246 @@ nodes['forget-btn'].addEventListener('click', () => {
 nodes['forget-btn'].addEventListener('blur', disarmForget);
 nodes['home-card'].addEventListener('click', (e) => {
   if (!nodes['forget-btn'].contains(e.target)) disarmForget();
+});
+
+/* ----------------------------------------------------------------- crews */
+
+const CREW_DOWN = "Can't reach the crew book right now — try again in a minute.";
+const CREW_GONE = 'That crew does not exist — the link may have been cut short.';
+const CREW_NAME_FIRST = 'Put a name on the ticket first.';
+
+/* #live-now and #live-polite live inside #screen-game, which is display:none
+   on every other screen — and a hidden subtree is not in the accessibility
+   tree, so nothing written there is read. This view therefore owns a region of
+   its own. Cleared now, written on the next tick: a repeat of the same line
+   (a second empty Start) is a real mutation again, and a write that lands in
+   the same repaint as the focus move is not clobbered by it (memory
+   2026-09-26-live-region-same-tick.md). */
+function crewAnnounce(text) {
+  const live = nodes['crew-live'];
+  live.textContent = '';
+  setTimeout(() => { live.textContent = text; }, 0);
+}
+
+/** A line the player can see AND hear. */
+function crewSay(text) {
+  nodes['crew-view-msg'].textContent = text;
+  crewAnnounce(text);
+}
+
+/** "Your crews" on the home card: up to three, newest first. */
+function renderCrewsRow() {
+  const list = readCrews().slice(0, 3);
+  nodes['crews-row'].hidden = list.length === 0;
+  const box = nodes['crews-list'];
+  box.textContent = '';
+  for (const c of list) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn btn-block';
+    b.textContent = c.name;
+    b.title = c.name;   // the button ellipsizes a long name; the full one is here
+    b.addEventListener('click', () => {
+      history.replaceState(null, '', `${location.pathname}?crew=${c.id}`);
+      openCrewView(c.id);
+    });
+    box.appendChild(b);
+  }
+}
+
+function crewPlayerName(p) {
+  if (p.kind === 'former') return 'a former member';
+  if (p.kind === 'guest') return 'a guest';
+  return nicelyName(p.name);
+}
+
+function renderCrew(crew) {
+  app.crewData = crew;
+  // textContent, always: a crew's name is whatever its founder typed.
+  nodes['crew-title'].textContent = crew.name;
+  const n = crew.members.length;
+  nodes['crew-sub'].textContent = crew.pies
+    ? `${n} ${n === 1 ? 'member' : 'members'} · ${crew.pies} ${crew.pies === 1 ? 'pie' : 'pies'}`
+    : 'No pies yet — play one and save it.';
+  const rows = nodes['crew-rows'];
+  rows.textContent = '';
+  for (const m of crew.members) {
+    const li = document.createElement('li');
+    li.className = `crew-row${m.you ? ' is-you' : ''}`;
+    const name = document.createElement('span');
+    name.className = 'crew-row-name';
+    name.textContent = nicelyName(m.name);
+    const stat = document.createElement('span');
+    stat.className = 'crew-row-stat';
+    stat.textContent = `${m.wins} ${m.wins === 1 ? 'win' : 'wins'} · ${m.pies} ${m.pies === 1 ? 'pie' : 'pies'}`;
+    li.append(name, stat);
+    rows.appendChild(li);
+  }
+  const recent = nodes['crew-recent'];
+  recent.textContent = '';
+  for (const pie of crew.recent) {
+    const p = document.createElement('p');
+    p.className = 'crew-pie';
+    const when = new Date(pie.playedAt).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    p.append(`${when} — `);
+    pie.players.forEach((pl, i) => {
+      if (i) p.append(' · ');
+      const label = `${crewPlayerName(pl)} ${pl.points}`;
+      if (pl.won) { const b = document.createElement('b'); b.textContent = label; p.append(b); } else p.append(label);
+    });
+    recent.appendChild(p);
+  }
+  const you = crew.members.some((m) => m.you);
+  if (you) rememberCrew({ id: crew.id, name: crew.name });
+  nodes['crew-leave'].hidden = !you;
+  let stored = '';
+  try { stored = localStorage.getItem('tondo.name') || ''; } catch { /* ignore */ }
+  nodes['crew-name-field'].hidden = Boolean(stored);
+  nodes['crew-start'].disabled = false;
+}
+
+let crewReq = 0;
+
+/**
+ * Opens the crew page and fetches the book. `refresh` re-reads it in place
+ * (after leaving) without blanking the page or disabling Start, so the
+ * control focus is standing on is never taken away mid-flight. Resolves true
+ * when the book was rendered.
+ */
+async function openCrewView(id, opts) {
+  const refresh = !!(opts && opts.refresh);
+  const req = ++crewReq;
+  app.crewId = id;
+  setScreen('crew');
+  if (!refresh) {
+    disarmCrewLeave();
+    nodes['crew-title'].textContent = 'Your crew';
+    nodes['crew-sub'].textContent = 'Opening the crew book…';
+    nodes['crew-rows'].textContent = '';
+    nodes['crew-recent'].textContent = '';
+    nodes['crew-leave'].hidden = true;
+    nodes['crew-start'].disabled = true;
+    nodes['crew-view-msg'].textContent = '';
+    nodes['crew-name-input'].removeAttribute('aria-invalid');
+  }
+  let res = null;
+  try { res = await fetch(`/api/crew/${id}`, { headers: { 'X-Tondo-Device': getDevice() } }); } catch { res = null; }
+  if (req !== crewReq || app.crewId !== id) return false; // the player moved on while this was in flight
+  if (res && res.status === 404) {
+    forgetCrew(id);
+    nodes['crew-sub'].textContent = CREW_GONE;
+    nodes['crew-leave'].hidden = true;
+    nodes['crew-start'].disabled = true;
+    crewAnnounce(CREW_GONE);
+    return false;
+  }
+  const crew = res && res.ok ? await res.json().catch(() => null) : null;
+  if (req !== crewReq || app.crewId !== id) return false;
+  if (!crew) {
+    if (refresh) { nodes['crew-leave'].hidden = true; return false; } // the page stays as it was
+    nodes['crew-sub'].textContent = CREW_DOWN;
+    crewAnnounce(CREW_DOWN);
+    return false;
+  }
+  renderCrew(crew);
+  if (!refresh) {
+    const n = crew.members.length;
+    crewAnnounce(crew.pies
+      ? `${crew.name}: ${n} ${n === 1 ? 'member' : 'members'}, ${crew.pies} ${crew.pies === 1 ? 'pie' : 'pies'}.`
+      : `${crew.name}: no pies yet.`);
+  }
+  return true;
+}
+
+function leaveCrewView() {
+  app.crewId = null;
+  disarmCrewLeave();
+  history.replaceState(null, '', location.pathname);
+}
+
+nodes['crew-home'].addEventListener('click', () => {
+  leaveCrewView();
+  renderCrewsRow();
+  revealHome();
+});
+
+nodes['crew-start'].addEventListener('click', () => {
+  const id = app.crewId;
+  if (!id) return;
+  let name = '';
+  try { name = localStorage.getItem('tondo.name') || ''; } catch { /* ignore */ }
+  if (!name) {
+    name = (nodes['crew-name-input'].value || '').trim().slice(0, 14);
+    if (!name) {
+      crewSay(CREW_NAME_FIRST);
+      nodes['crew-name-input'].setAttribute('aria-invalid', 'true');
+      nodes['crew-name-input'].focus();
+      return;
+    }
+    try { localStorage.setItem('tondo.name', name); } catch { /* ignore */ }
+  }
+  app.name = name;
+  if (!send(withDevice({ type: 'createRoom', name, crewId: id }))) {
+    crewSay('Not connected — try again in a moment.');
+    return;
+  }
+  leaveCrewView(); // the `joined` reply takes the player to the lobby as usual
+});
+
+nodes['crew-name-input'].addEventListener('input', () => {
+  nodes['crew-name-input'].removeAttribute('aria-invalid');
+  if (nodes['crew-view-msg'].textContent === CREW_NAME_FIRST) nodes['crew-view-msg'].textContent = '';
+});
+nodes['crew-name-input'].addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) nodes['crew-start'].click();
+});
+
+/* Two taps on one button, like Forget this device: leaving cannot be undone
+   from this screen (the crew link brings you back as a new member). The armed
+   state is announced, not only relabelled, and puts itself away after
+   FORGET_MS or as soon as focus moves on. */
+const CREW_LEAVE_IDLE = 'Leave this crew';
+let crewLeaveTimer = 0;
+let crewLeaving = false;
+
+function disarmCrewLeave() {
+  if (!crewLeaveTimer) return;
+  clearTimeout(crewLeaveTimer);
+  crewLeaveTimer = 0;
+  nodes['crew-leave'].textContent = CREW_LEAVE_IDLE;
+}
+
+nodes['crew-leave'].addEventListener('blur', disarmCrewLeave);
+nodes['crew-leave'].addEventListener('click', async () => {
+  const btn = nodes['crew-leave'];
+  if (crewLeaving) return;
+  if (!crewLeaveTimer) {
+    btn.textContent = 'Tap again to leave';
+    crewLeaveTimer = setTimeout(disarmCrewLeave, FORGET_MS);
+    crewAnnounce('Tap again to leave the crew.');
+    return;
+  }
+  disarmCrewLeave();
+  const id = app.crewId;
+  if (!id) return;
+  crewLeaving = true;
+  let ok = false;
+  try {
+    const r = await fetch(`/api/crew/${id}/leave`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device: getDevice() }),
+    });
+    ok = r.status === 204;
+  } catch { ok = false; }
+  crewLeaving = false;
+  if (app.crewId !== id) return;
+  if (!ok) { crewSay(CREW_DOWN); return; }
+  forgetCrew(id);
+  await openCrewView(id, { refresh: true });
+  if (app.crewId !== id) return;
+  btn.hidden = true; // whatever the refresh said, this device has left
+  crewSay('You left the crew.');
+  // The Leave button just went away and took focus to <body> with it.
+  (nodes['crew-start'].disabled ? nodes['crew-home'] : nodes['crew-start']).focus();
 });
 
 nodes['code-input'].addEventListener('keydown', (e) => { if (e.key === 'Enter') nodes['join-btn'].click(); });
@@ -3859,6 +4109,7 @@ nodes['hold-btn'].addEventListener('click', () => {
 
 bootHome();
 setScreen('home');
+if (app.bootCrew) openCrewView(app.bootCrew);
 
 /* A reload is a drop that lost its variables: arm the seat first, then dial. */
 let room = '';

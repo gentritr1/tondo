@@ -624,6 +624,62 @@ MockSocket.OPEN = 1;
 MockSocket.CLOSING = 2;
 MockSocket.CLOSED = 3;
 
+/* Crew pages, faked at the fetch layer the way the table is faked at the socket
+   layer: the real app code runs unchanged. Three fixtures: a lived-in crew, an
+   empty one whose name is HTML (it must render as literal text), and one whose
+   book is down. */
+const CREW_FIXTURES = {
+  k7m2q9xh3p: { status: 200, body: {
+    id: 'k7m2q9xh3p', name: 'Friday Pie', pies: 6,
+    members: [
+      { name: 'Gent', pies: 6, wins: 3, you: true },
+      { name: 'Arta', pies: 6, wins: 2, you: false },
+      { name: 'Dren', pies: 4, wins: 1, you: false },
+      { name: 'Gent 2', pies: 1, wins: 0, you: false },
+    ],
+    recent: [
+      { playedAt: '2026-10-09T19:40:00Z', rounds: 4, players: [
+        { name: 'Gent', points: 212, won: true, kind: 'member' }, { name: 'Arta', points: 180, won: false, kind: 'member' },
+        { name: 'Chef Bot', points: 40, won: false, kind: 'bot' }, { name: null, points: 12, won: false, kind: 'former' }] },
+      { playedAt: '2026-10-02T20:10:00Z', rounds: 4, players: [
+        { name: 'Arta', points: 166, won: true, kind: 'member' }, { name: 'Gent', points: 81, won: false, kind: 'member' },
+        { name: null, points: 30, won: false, kind: 'guest' }] },
+    ],
+  } },
+  empty00000: { status: 200, body: { id: 'empty00000', name: '<b>New</b> crew', pies: 0, members: [], recent: [] } },
+  dead000000: { status: 503, body: { reason: 'timeout' } },
+  // The widest names the server allows (24 for a crew, 14 for a player) in the
+  // widest glyph, with no break opportunity: what `crew-card-fits` stresses.
+  wwwwwwwwww: { status: 200, body: {
+    id: 'wwwwwwwwww', name: 'W'.repeat(24), pies: 128,
+    members: [
+      { name: 'W'.repeat(14), pies: 128, wins: 99, you: true },
+      { name: 'M'.repeat(14), pies: 126, wins: 21, you: false },
+      { name: 'Q'.repeat(14), pies: 40, wins: 8, you: false },
+    ],
+    recent: [
+      { playedAt: '2026-10-09T19:40:00Z', rounds: 4, players: [
+        { name: 'W'.repeat(14), points: 1212, won: true, kind: 'member' }, { name: 'M'.repeat(14), points: 1180, won: false, kind: 'member' },
+        { name: 'B'.repeat(14), points: 1040, won: false, kind: 'bot' }, { name: null, points: 112, won: false, kind: 'former' }] },
+    ],
+  } },
+};
+const crewsLeft = new Set(); // POST .../leave: the next GET no longer marks anyone `you`
+const realFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+  const m = url.pathname.match(/^\/api\/crew\/([^/]+)(\/leave)?$/);
+  if (!m) return realFetch(input, init);
+  await new Promise((r) => setTimeout(r, 120)); // a visible loading beat
+  if (m[2]) { crewsLeft.add(m[1]); return new Response(null, { status: 204 }); }
+  const f = CREW_FIXTURES[m[1]];
+  if (!f) return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+  const body = crewsLeft.has(m[1]) && f.body.members
+    ? { ...f.body, members: f.body.members.map((x) => ({ ...x, you: false })) }
+    : f.body;
+  return new Response(JSON.stringify(body), { status: f.status, headers: { 'Content-Type': 'application/json' } });
+};
+
 window.WebSocket = MockSocket;
 // `emit` is exposed so a check can push a hand-written snapshot (a two- or
 // three-seat table, say) through the same path the server would use.

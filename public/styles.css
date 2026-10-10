@@ -629,7 +629,8 @@ body { height: 100dvh; }
 
 .screen { display: none; height: 100%; }
 body[data-screen="home"]  #screen-home,
-body[data-screen="lobby"] #screen-lobby { display: flex; align-items: center; justify-content: center; padding: 20px; overflow: auto; }
+body[data-screen="lobby"] #screen-lobby,
+body[data-screen="crew"]  #screen-crew { display: flex; align-items: center; justify-content: center; padding: 20px; overflow: auto; }
 body[data-screen="game"]  #screen-game { display: flex; flex-direction: column; }
 
 /* Stale game actions quiet down while reconnecting; help and leave stay usable. */
@@ -647,7 +648,8 @@ body.is-offline #newround-btn { opacity: .55; cursor: wait; }
    ========================================================================== */
 
 body[data-screen="home"] #screen-home,
-body[data-screen="lobby"] #screen-lobby {
+body[data-screen="lobby"] #screen-lobby,
+body[data-screen="crew"] #screen-crew {
   background: radial-gradient(ellipse 62% 48% at 50% 38%, var(--page-glow), var(--page) 78%);
 }
 
@@ -2764,3 +2766,21 @@ body[data-screen="game"] { background: var(--page); }
   .score-row { grid-template-columns: 20px 1fr auto 48px; gap: 8px; padding: 6px 8px; }
   .score-total { font-size: 17px; }
 }
+
+/* CREW — the lobby card's shell, a standings list and the last few pies. */
+.crew-title { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 30px; line-height: 1.05; overflow-wrap: anywhere; }
+.crew-sub { margin: 0; max-width: none; text-align: left; }   /* .home-hook centres; the title above is flush left */
+.crew-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.crew-rows:empty { display: none; }
+.crew-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.crew-row-name { font-weight: 700; overflow-wrap: anywhere; }
+.crew-row.is-you .crew-row-name::after { content: ' · you'; font-weight: 400; color: var(--ink-3); }
+.crew-row-stat { font-family: var(--font-mono); font-size: 13px; color: var(--ink-3); white-space: nowrap; }
+.crew-recent { display: flex; flex-direction: column; gap: 6px; }
+.crew-recent:empty { display: none; }
+.crew-pie { margin: 0; font-size: 14px; line-height: 1.4; color: var(--ink-3); overflow-wrap: anywhere; }
+.crew-pie b { color: var(--ink-1); }
+.crews-list { display: flex; flex-direction: column; gap: 6px; }
+/* A 24-character crew name in a wide glyph is wider than the button on a 320px phone: ellipsize (the full name is the button's title), never spill. */
+.crews-list .btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crew-card > .btn-tiny { align-self: center; }
