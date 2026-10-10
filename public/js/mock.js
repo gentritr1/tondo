@@ -42,7 +42,11 @@ const table = {
   phase: 'lobby',
   game: null,
   scene: 'lobby',
+  crew: null,
+  savedTo: null,
 };
+// `?mockcrew=1` puts a crew on the table at load, so the one-tap state can be seen.
+if (new URLSearchParams(location.search).has('mockcrew')) table.crew = { id: 'k7m2q9xh3p', name: 'Friday Pie' };
 
 let sock = null;
 let timer = 0;
@@ -111,6 +115,7 @@ function matchBlock() {
     // is shown at rest rather than counting toward a deal that cannot happen.
     nextDueAt: null,
     held: false,
+    savedTo: table.savedTo || null, saving: false,
   };
 }
 
@@ -125,6 +130,8 @@ function snapshot() {
     seats: table.seats,
     game: table.game,
     match: matchBlock(),
+    crews: 'on',
+    crew: table.crew || null,
   };
 }
 
@@ -546,6 +553,16 @@ function route(msg) {
       table.phase = 'lobby';
       table.game = null;
       emit({ type: 'left' });
+      return;
+
+    case 'saveToCrew':
+      // The real server records its own scores and answers with the crew; the
+      // mock just names it, so the saved state can be shown.
+      table.savedTo = msg.crewId
+        ? { id: msg.crewId, name: (table.crew && table.crew.id === msg.crewId) ? table.crew.name : 'Friday Pie' }
+        : { id: 'k7m2q9xh3p', name: String(msg.newCrewName || 'Crew').slice(0, 24) };
+      if (!table.crew) table.crew = table.savedTo;
+      emit(snapshot());
       return;
 
     case 'sync':

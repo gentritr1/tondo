@@ -303,7 +303,31 @@
       </div>
       <ol id="score-rows" class="score-rows"></ol>
       <div id="slice-pips" class="slice-pips" role="img" aria-label=""></div>
-      <button id="share-btn" type="button" class="btn btn-quiet score-share" hidden>Copy result</button>
+      <!-- Copy result and Save to crew share one row: stacked they cost 56px more
+           of column height, which pushed New pie 20px below the fold at 1366x768,
+           where nothing scrolls. -->
+      <div class="score-actions">
+        <button id="share-btn" type="button" class="btn btn-quiet score-share" hidden>Copy result</button>
+        <!-- Save to crew: only on a FINISHED pie and only when the server's crew
+             book is on. With a crew already attached to the table it is one tap;
+             otherwise it opens the picker in its place. -->
+        <button id="crew-save-btn" type="button" class="btn btn-quiet score-share" hidden>Save to crew</button>
+      </div>
+      <div id="crew-picker" class="crew-picker" role="group" aria-labelledby="crew-picker-label" hidden>
+        <div class="crew-picker-head">
+          <p id="crew-picker-label" class="field-label">Save this pie to</p>
+          <button id="crew-cancel-btn" type="button" class="btn btn-tiny">Not now</button>
+        </div>
+        <div id="crew-picker-list" class="crew-picker-list"></div>
+        <div class="join-row">
+          <label class="field field-grow" for="crew-new-name">
+            <span class="sr-only">New crew name</span>
+            <input id="crew-new-name" class="input" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="Or start a new crew">
+          </label>
+          <button id="crew-new-btn" type="button" class="btn">Save</button>
+        </div>
+      </div>
+      <p id="crew-msg" class="score-share-msg"></p>
       <!-- Its own node, never touched by renderMatch: #score-sub is
            rewritten on every snapshot (someone leaving, a bot added, a
            hold, even a resize), which was silently erasing the share

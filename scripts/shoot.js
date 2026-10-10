@@ -62,6 +62,31 @@
  *                                   standings clause was signed off by
  *                                   measuring the CHIP at 1280x800 and shipped
  *                                   `?` 17.2px off screen at 390x844.
+ *                   crew-save-fits  on the finished-pie scoreboard (mock
+ *                                   `pieComplete`, which carries
+ *                                   `crews: 'on'`) the Save to crew control —
+ *                                   the button, and again the open picker with
+ *                                   two remembered crews — has a real box, does
+ *                                   not intersect #share-btn, #slice-pips,
+ *                                   #newround-btn or #hold-btn (whichever are
+ *                                   visible), ends inside the viewport once
+ *                                   the game screen's own scroll container(s)
+ *                                   are scrolled to the end (the document never
+ *                                   scrolls; see leave-reachable), and does not
+ *                                   push New pie off screen (compared with the
+ *                                   same page minus the crew control: the first
+ *                                   stacked layout did exactly that, by 20px at
+ *                                   1366x768, and no assertion on the crew
+ *                                   button's own box could see it). Swept over
+ *                                   widths 320..1440 in 40px steps at height
+ *                                   700, plus 320x568, 390x844, 1366x768 and
+ *                                   heights 560..900 in 20px steps at widths
+ *                                   360/390/768/1024/1366,
+ *                                   because three sampled viewports once passed
+ *                                   while 1366x768 overlapped by 2.5px; the
+ *                                   detail line reports the minimum clearance
+ *                                   (px) and where it is, and the sign flip if
+ *                                   there is one.
  *                   seat-plaque-gap scripts/probes/seat-plaque-gap.js
  *                                   `pass: true` across the desktop/tablet
  *                                   widths it was written for.
@@ -705,6 +730,124 @@ async function runCheck(a) {
         parsed.valid
           ? `children=${parsed.visibleChildren} chip="${parsed.chip}" helpRight=${parsed.helpRight} limit=${parsed.limit} slack=${parsed.slack}${parsed.past.length ? ' PAST: ' + parsed.past.join(', ') : ''}`
           : `INVALID: ${parsed.reason}`);
+    }
+
+
+    // ---- crew-save-fits ----------------------------------------------------
+    // A SWEEP, not three samples: the Save to crew control sits in the
+    // scoreboard's column between Copy result and the pips, and the column's
+    // height changes with the width (text wraps, the tray scrolls on phones).
+    // Clearance is signed: > 0 is the gap in px, < 0 is the overlap depth.
+    // Measured at the scroll top AND the scroll end of every scrollable
+    // ancestor (the document never scrolls), the worse of the two kept.
+    const CREW_FIT_PROBE = (targetId) => `(() => {
+      const target = document.getElementById(${JSON.stringify(targetId)});
+      if (!target) return JSON.stringify({ valid: false, reason: 'no #${targetId}' });
+      const visible = (e) => { if (!e) return false; const cs = getComputedStyle(e);
+        const r = e.getBoundingClientRect();
+        return !e.hidden && cs.display !== 'none' && cs.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+      if (!visible(target)) return JSON.stringify({ valid: false, reason: '#${targetId} has no visible box' });
+      const scrollers = [];
+      for (let n = target.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+        const oy = getComputedStyle(n).overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) scrollers.push(n);
+      }
+      const others = ['share-btn', 'slice-pips', 'newround-btn', 'hold-btn']
+        .map((id) => document.getElementById(id)).filter(visible);
+      const clearance = (a, b) => {
+        const gx = Math.max(a.left - b.right, b.left - a.right);
+        const gy = Math.max(a.top - b.bottom, b.top - a.bottom);
+        if (gx > 0 || gy > 0) return Math.max(gx, gy);
+        return -Math.min(Math.min(a.right, b.right) - Math.max(a.left, b.left),
+                         Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+      };
+      let minClear = Infinity, minWith = '(none visible)', bottomOver = -Infinity, sideOver = -Infinity;
+      for (const pos of ['top', 'end']) {
+        for (const n of scrollers) n.scrollTop = pos === 'top' ? 0 : n.scrollHeight;
+        const t = target.getBoundingClientRect();
+        for (const o of others) {
+          const c = clearance(t, o.getBoundingClientRect());
+          if (c < minClear) { minClear = c; minWith = '#' + o.id; }
+        }
+        if (pos === 'end') {
+          bottomOver = t.bottom - innerHeight;           // > 0: still below the fold at the scroll end
+          sideOver = Math.max(-t.left, t.right - innerWidth);
+        }
+      }
+      // New pie must not be pushed below the fold BY the crew control. Absolute
+      // reachability of the bottom row is a separate, older matter (the Leave
+      // button already sits below the fold at 1366x768), so this compares the
+      // same page with the crew control taken out: displaced = off screen with
+      // it, on screen without it.
+      const nr = document.getElementById('newround-btn');
+      let newPieBelowFold = null, newPieBelowFoldWithout = null, displaced = false;
+      if (visible(nr)) {
+        const atEnd = () => { for (const n of scrollers) n.scrollTop = n.scrollHeight; return nr.getBoundingClientRect().bottom - innerHeight; };
+        newPieBelowFold = atEnd();
+        const hiddenBefore = [...document.querySelectorAll('#crew-save-btn, #crew-picker')].map((e) => [e, e.hidden]);
+        // is-picking also hides the pips and Copy result; the baseline is the page
+        // as it stands with no crew control at all, so those come back too.
+        const sb = document.getElementById('scoreboard');
+        const picking = sb.classList.contains('is-picking');
+        sb.classList.remove('is-picking');
+        hiddenBefore.forEach(([e]) => { e.hidden = true; });
+        newPieBelowFoldWithout = atEnd();
+        hiddenBefore.forEach(([e, h]) => { e.hidden = h; });
+        sb.classList.toggle('is-picking', picking);
+        displaced = newPieBelowFold > 1 && newPieBelowFoldWithout <= 1;
+      }
+      const rd = (x) => Math.round(x * 10) / 10;
+      return JSON.stringify({
+        newPieBelowFold: newPieBelowFold === null ? null : rd(newPieBelowFold),
+        newPieBelowFoldWithout: newPieBelowFoldWithout === null ? null : rd(newPieBelowFoldWithout), displaced,
+        valid: true, scrollers: scrollers.map((n) => n.className || n.tagName).join('+') || '(none needed)',
+        others: others.map((o) => o.id).join(','), minClear: rd(minClear), minWith,
+        bottomOver: rd(bottomOver), sideOver: rd(sideOver),
+        pass: minClear >= 0 && bottomOver <= 1 && sideOver <= 0.5 && !displaced,
+      });
+    })()`;
+    const CREW_FIT_SIZES = [];
+    for (let w = 320; w <= 1440; w += 40) CREW_FIT_SIZES.push([w, 700]);
+    CREW_FIT_SIZES.push([320, 568], [390, 844], [1366, 768]);
+    // Heights too: 390x844 and 1366x768 each failed (New pie pushed below the
+    // fold) at a height the 700px width sweep never visits, in the layout bands
+    // above the 720px-tall compact one.
+    for (const w of [360, 390, 768, 1024, 1366]) {
+      for (let h = 560; h <= 900; h += 20) CREW_FIT_SIZES.push([w, h]);
+    }
+    for (const state of ['button', 'picker']) {
+      const rows = [];
+      let failures = 0;
+      for (const [w, h] of CREW_FIT_SIZES) {
+        await gotoScene('pieComplete', w, h);
+        if (state === 'picker') {
+          await cdp.eval(`(() => { localStorage.setItem('tondo.crews', JSON.stringify([
+            { id: 'abcdefgh01', name: 'Friday Night Pie Crew XXL', at: 1 }, { id: 'abcdefgh02', name: 'Uni Lads And Their Mates', at: 2 },
+            { id: 'abcdefgh03', name: 'Neighbours From Number 12', at: 3 }]));
+            document.getElementById('crew-save-btn').click();
+            return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+          await cdp.eval(`(() => { document.getAnimations().forEach(x => { try { x.finish(); } catch {} });
+            return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+        }
+        const parsed = JSON.parse(await cdp.eval(CREW_FIT_PROBE(state === 'picker' ? 'crew-picker' : 'crew-save-btn')));
+        const ok = parsed.valid === true && parsed.pass === true;
+        if (!ok) failures++;
+        rows.push({ w, h, ok, parsed });
+      }
+      const valid = rows.filter((r) => r.parsed.valid);
+      const worst = valid.reduce((m, r) => (m === null || r.parsed.minClear < m.parsed.minClear ? r : m), null);
+      // The thinnest margin that matters: how far New pie still is above the fold.
+      const withPie = valid.filter((r) => r.parsed.newPieBelowFold !== null);
+      const tightPie = withPie.reduce((m, r) => (m === null || -r.parsed.newPieBelowFold < -m.parsed.newPieBelowFold ? r : m), null);
+      const worstBottom = valid.reduce((m, r) => Math.max(m, r.parsed.bottomOver), -Infinity);
+      const flip = rows.find((r, i) => i > 0 && i < 29 && r.ok !== rows[i - 1].ok);   // along the 700px width sweep
+      record('crew-save-fits', `mock:pieComplete ${state} x${rows.length} sizes  `, failures === 0 && valid.length === rows.length,
+        `newPieSpareMin=${tightPie ? -tightPie.parsed.newPieBelowFold : 'n/a'}px@${tightPie ? tightPie.w + 'x' + tightPie.h : 'n/a'} (baseline without the crew control there: ${tightPie ? -tightPie.parsed.newPieBelowFoldWithout : 'n/a'}px) `
+        + `minClearance=${worst ? worst.parsed.minClear : 'n/a'}px (vs ${worst ? worst.parsed.minWith : 'n/a'} @${worst ? worst.w + 'x' + worst.h : 'n/a'}) `
+        + `maxBelowFoldAtScrollEnd=${worstBottom}px signFlip=${flip ? '@' + flip.w + 'x' + flip.h : 'none'} `
+        + `failing=${failures}${failures ? ' (first 5): ' + rows.filter((r) => !r.ok).slice(0, 5).map((r) => `${r.w}x${r.h}${r.parsed.valid ? `(clear ${r.parsed.minClear} with ${r.parsed.minWith}, below fold ${r.parsed.bottomOver}, side ${r.parsed.sideOver}, New pie ${r.parsed.newPieBelowFold} below fold vs ${r.parsed.newPieBelowFoldWithout} without)` : '(INVALID: ' + r.parsed.reason + ')'}`).join('; ') : ''}`);
+      console.log(`crew-save-fits ${state} sweep (width x height -> min clearance px | scrollers):\n  `
+        + rows.map((r) => `${r.w}x${r.h}=${r.parsed.valid ? r.parsed.minClear : 'INVALID'}`).join('  '));
     }
 
     // ---- seat-plaque-gap ---------------------------------------------------

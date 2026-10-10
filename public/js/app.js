@@ -199,6 +199,7 @@ const nodes = {};
  'wild-bar', 'wild-corner', 'wild-centre', 'wild-ghost', 'wild-grid',
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
  'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips', 'share-btn', 'score-share-msg',
+ 'crew-save-btn', 'crew-picker', 'crew-picker-list', 'crew-new-name', 'crew-new-btn', 'crew-cancel-btn', 'crew-msg',
  'action-row', 'draw-btn', 'newround-btn', 'hold-btn', 'message', 'hint', 'game-leave', 'net-banner',
  'celebration',
 ].forEach((id) => { nodes[id] = el(id); });
@@ -1715,6 +1716,93 @@ function hideShareBtn() {
   setText(nodes['score-share-msg'], '');
 }
 
+/* Save to crew. `crewPickerOpen` keeps the picker standing across snapshots
+   (one arrives every time anyone at the table does anything); `crewSavedSaid`
+   makes "Saved to …" announce once per pie, not once per snapshot. */
+function renderCrewSave(snap, over) {
+  const m = snap && snap.match;
+  const btn = nodes['crew-save-btn'];
+  const show = !!m && over && m.complete && snap.crews === 'on';
+  // While the picker is open it takes the room of the pips and Copy result
+  // too (CSS, `.is-picking`): the picker is ~100px taller than the button it
+  // replaces, and at 390x844 nothing scrolls, so New pie would go below the
+  // fold. Copy result is better after the save anyway: it then carries the
+  // crew link.
+  const picking = show && !m.savedTo && !!app.crewPickerOpen;
+  nodes.scoreboard.classList.toggle('is-picking', picking);
+  if (!show) {
+    btn.hidden = true;
+    nodes['crew-picker'].hidden = true;
+    app.crewPickerOpen = false;
+    app.crewSavedSaid = false;
+    setText(nodes['crew-msg'], '');
+    return;
+  }
+  if (m.savedTo) {
+    btn.hidden = true;
+    nodes['crew-picker'].hidden = true;
+    app.crewPickerOpen = false;
+    rememberCrew(m.savedTo);
+    setText(nodes['crew-msg'], `Saved to ${m.savedTo.name}`);
+    if (!app.crewSavedSaid) {
+      app.crewSavedSaid = true;
+      // After this repaint, not during it: renderGame writes the same live
+      // region later in the same pass (memory 2026-09-26-live-region-same-tick.md).
+      setTimeout(() => announce(`Saved to ${m.savedTo.name}.`), 0);
+    }
+    return;
+  }
+  nodes['crew-picker'].hidden = !picking;
+  btn.hidden = picking;
+  btn.disabled = !!m.saving;
+  btn.textContent = m.saving ? 'Saving…' : (snap.crew ? `Save to ${snap.crew.name}` : 'Save to crew');
+}
+
+function openCrewPicker() {
+  const list = nodes['crew-picker-list'];
+  list.textContent = '';
+  for (const c of readCrews().slice(0, 3)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn';
+    b.textContent = c.name;
+    b.title = c.name;   // the chip ellipsizes a long name; the full one is here
+    b.addEventListener('click', () => {
+      if (send({ type: 'saveToCrew', crewId: c.id })) { app.crewPickerOpen = false; renderCrewSave(app.snap, true); }
+    });
+    list.appendChild(b);
+  }
+  // No stored name (a guest who never typed one): "Our crew", not "Our's crew".
+  nodes['crew-new-name'].value = (app.name ? `${nicelyName(app.name)}'s crew` : 'Our crew').slice(0, 24);
+  app.crewPickerOpen = true;
+  setText(nodes['crew-msg'], '');
+  renderCrewSave(app.snap, true);
+  nodes['crew-new-name'].focus();
+}
+
+nodes['crew-save-btn'].addEventListener('click', () => {
+  const s = app.snap;
+  if (!s || !s.match || !s.match.complete) return;
+  if (s.crew) { send({ type: 'saveToCrew', crewId: s.crew.id }); return; }
+  openCrewPicker();
+});
+
+nodes['crew-new-btn'].addEventListener('click', () => {
+  const name = nodes['crew-new-name'].value.replace(/\s+/g, ' ').trim();
+  if (!name) { setText(nodes['crew-msg'], 'Give the crew a name.'); nodes['crew-new-name'].focus(); return; }
+  if (send({ type: 'saveToCrew', newCrewName: name })) { app.crewPickerOpen = false; renderCrewSave(app.snap, true); }
+});
+nodes['crew-new-name'].addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') nodes['crew-new-btn'].click();
+  else if (e.key === 'Escape') nodes['crew-cancel-btn'].click();
+});
+nodes['crew-cancel-btn'].addEventListener('click', () => {
+  app.crewPickerOpen = false;
+  setText(nodes['crew-msg'], '');
+  renderCrewSave(app.snap, true);
+  nodes['crew-save-btn'].focus();
+});
+
 /**
  * `navigator.clipboard` is undefined outside a secure context — and Tondo is
  * a LAN game people open at `http://192.168.x.x` from another phone, which is
@@ -1739,7 +1827,8 @@ nodes['share-btn'].addEventListener('click', async () => {
   const m = app.snap && app.snap.match;
   if (!m) return;
   const origin = location.origin + location.pathname.replace(/index\.html$/, '');
-  const text = pieResultText(m, { origin, resolveName: playerName });
+  const crewUrl = m.savedTo ? crewLink(origin, m.savedTo.id) : '';
+  const text = pieResultText(m, { origin, resolveName: playerName, crewUrl });
   if (!text) return;
   const copied = await copyToClipboard(text);
   if (shareFallbackEl) { shareFallbackEl.remove(); shareFallbackEl = null; }
@@ -1762,7 +1851,8 @@ nodes['share-btn'].addEventListener('click', async () => {
   ta.rows = 3;
   ta.value = text;
   ta.setAttribute('aria-label', 'Pie result — select and copy');
-  nodes['share-btn'].insertAdjacentElement('afterend', ta);
+  // After the row that holds Copy result and Save to crew, not inside it.
+  nodes['share-btn'].parentElement.insertAdjacentElement('afterend', ta);
   ta.focus();
   // setSelectionRange, not select(): the durable idiom on the one platform
   // this fallback exists for (a non-secure-context LAN game opened on a
@@ -2218,6 +2308,7 @@ function standingClause(m, youId) {
 
 function renderMatch(snap, over) {
   const m = snap.match;
+  renderCrewSave(snap, over);
   const chip = nodes['slice-chip'];
   const board = nodes.scoreboard;
   if (!m) { chip.hidden = true; board.hidden = true; hideShareBtn(); return; }

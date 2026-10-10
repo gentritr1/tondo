@@ -2722,6 +2722,31 @@ body[data-screen="game"] { background: var(--page); }
 }
 .score-share-msg:empty { display: none; }
 
+/* Copy result and Save to crew share one row (they wrap onto two when a long
+   crew name makes "Save to <name>" too wide). With neither shown the row is
+   removed outright, so a mid-pie boundary does not gain an empty 12px gap. */
+.score-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 10px; }
+.score-actions:not(:has(> :not([hidden]))) { display: none; }
+
+/* Save to crew. The picker replaces the button in place, inside the scoreboard
+   that already replaced the hand, so it adds no new layer to the table. */
+.crew-picker { display: flex; flex-direction: column; gap: 8px; }
+.crew-picker[hidden] { display: none; }
+/* One row of chips, never more: a wrapping or stacked list made the picker's
+   height depend on how many crews this browser remembers and how long their
+   names are, and at 390x844 (no scroll) three long names pushed New pie off
+   screen. Long names ellipsize; the full name is the button's title. */
+.crew-picker-list { display: flex; gap: 6px; }
+.crew-picker-list .btn { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 10px; padding-right: 10px; }
+/* While it is open the picker stands in for the standings, the pips and Copy
+   result (measured: with them kept, New pie went 44px below the fold at
+   1366x768 and 33px at 390x844, where nothing scrolls). "Not now" brings them
+   back. */
+.scoreboard.is-picking .score-rows, .scoreboard.is-picking .slice-pips, .scoreboard.is-picking .score-actions { display: none; }
+.crew-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.crew-picker-head .field-label { margin: 0; }
+.crew-picker-list:empty { display: none; }
+
 /* Shown only when the clipboard write did not land (absent, denied, or a
    non-secure LAN origin). Read-only and pre-selected so a long-press on a
    phone copies it without the player having to find the start of the text.
