@@ -200,7 +200,7 @@ const nodes = {};
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
  'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips', 'share-btn', 'score-share-msg',
  'crews-row', 'crews-list', 'crew-title', 'crew-sub', 'crew-rows', 'crew-recent', 'crew-name-field', 'crew-name-input',
- 'crew-start', 'crew-view-msg', 'crew-home', 'crew-leave', 'crew-live',
+ 'crew-start', 'crew-view-msg', 'crew-home', 'crew-leave',
  'crew-save-btn', 'crew-picker', 'crew-picker-list', 'crew-new-name', 'crew-new-btn', 'crew-cancel-btn', 'crew-msg',
  'action-row', 'draw-btn', 'newround-btn', 'hold-btn', 'message', 'hint', 'game-leave', 'net-banner',
  'celebration',
@@ -658,7 +658,12 @@ function handleMessage(msg, context) {
       : text;
     nodes['lobby-msg'].textContent = text;
     setMessage(text, 'bad');
-    nodes['live-now'].textContent = text; // refusals are announced, not just shown
+    /* Refusals are announced, not just shown. #home-msg and #lobby-msg are live
+       regions of their own, so on those screens the line is already spoken once;
+       the assertive region would say it a second time. Everywhere else (the crew
+       page, the table) it is the only voice. */
+    const sc = document.body.dataset.screen;
+    if (sc !== 'home' && sc !== 'lobby') nodes['live-now'].textContent = text;
   }
 }
 
@@ -1569,17 +1574,30 @@ const CREW_GONE = 'That crew does not exist — the link may have been cut short
 const CREW_NAME_FIRST = 'Put a name on the ticket first.';
 const CREW_START_IDLE = 'Start a table';
 
-/* #live-now and #live-polite live inside #screen-game, which is display:none
-   on every other screen — and a hidden subtree is not in the accessibility
-   tree, so nothing written there is read. This view therefore owns a region of
-   its own. Cleared now, written on the next tick: a repeat of the same line
-   (a second empty Start) is a real mutation again, and a write that lands in
+/* The shared live regions sit at the end of <body>, outside every .screen (they
+   used to live inside #screen-game, which is display:none on every other screen,
+   and a hidden subtree is not in the accessibility tree, so nothing written
+   there was read). The crew page therefore speaks through #live-polite like the
+   rest of the app. Cleared now, written on the next tick: a repeat of the same
+   line (a second empty Start) is a real mutation again, and a write that lands in
    the same repaint as the focus move is not clobbered by it (memory
-   2026-09-26-live-region-same-tick.md). */
+   2026-09-26-live-region-same-tick.md).
+
+   The region is SHARED, so the deferred write is guarded both ways. It stands
+   down if the player has left the crew screen by the time it fires (the table's
+   first snapshot lands on 'game' and setScreen/renderGame have already put
+   "Game started." / the game log in this very region; a late crew line must not
+   overwrite them), and a newer crew line cancels an older pending one. */
+let crewAnnounceTimer = 0;
 function crewAnnounce(text) {
-  const live = nodes['crew-live'];
+  const live = nodes['live-polite'];
+  clearTimeout(crewAnnounceTimer);
   live.textContent = '';
-  setTimeout(() => { live.textContent = text; }, 0);
+  crewAnnounceTimer = setTimeout(() => {
+    crewAnnounceTimer = 0;
+    if (document.body.dataset.screen !== 'crew') return;
+    live.textContent = text;
+  }, 0);
 }
 
 /** A line the player can see AND hear. */

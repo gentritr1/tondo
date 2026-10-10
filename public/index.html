@@ -125,13 +125,12 @@
       <input id="crew-name-input" class="input" type="text" maxlength="14" autocomplete="nickname" placeholder="Chef" aria-describedby="crew-view-msg">
     </label>
     <button id="crew-start" type="button" class="btn btn-primary btn-block">Start a table</button>
-    <!-- Not a live region itself: #screen-game holds the shared ones and is
-         display:none here, which silences them. Everything this view says is
-         ALSO written to #crew-live (see crewAnnounce), so a line is read once. -->
+    <!-- Not a live region itself: everything this view says is ALSO written to
+         the shared #live-polite at the end of <body> (see crewAnnounce), so a
+         line is read once. -->
     <p id="crew-view-msg" class="msg"></p>
     <button id="crew-home" type="button" class="btn btn-tiny">Home</button>
     <button id="crew-leave" type="button" class="btn btn-tiny btn-forget" hidden>Leave this crew</button>
-    <p id="crew-live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
   </div>
 </section>
 
@@ -247,11 +246,6 @@
   <div id="celebration" class="celebration" aria-hidden="true"></div>
 
   <div class="tray">
-    <p id="live-polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-    <p id="live-alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></p>
-    <!-- event-time announcements (your turn, rejections); never rewritten by repaints -->
-    <p id="live-now" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></p>
-
     <div id="you-strip" class="you-strip">
       <span id="you-ticket" class="you-ticket" aria-hidden="true"></span>
       <span class="you-seat">
@@ -417,6 +411,16 @@
   </ul>
   <button id="help-close" type="button" class="btn btn-primary btn-block">Got it</button>
 </dialog>
+
+<!-- The three shared live regions. They live here, outside every .screen, because
+     a live region inside a display:none subtree is not in the accessibility tree
+     and announces nothing: they used to sit in #screen-game, so every line said
+     on the home, lobby or crew screen was silent. .sr-only is a 1px clip, not
+     display:none or visibility:hidden, so they stay rendered on every screen. -->
+<p id="live-polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+<p id="live-alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></p>
+<!-- event-time announcements (your turn, rejections); never rewritten by repaints -->
+<p id="live-now" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></p>
 
 <script type="module">
   const params = new URLSearchParams(location.search);

@@ -107,6 +107,21 @@
  *                                   and 1366x768 (sampled sizes have missed
  *                                   overlaps here before). Captures go to
  *                                   `.superpowers/qa-crew/`, not qa-latest.
+ *                   live-regions-rendered
+ *                                   #live-now, #live-polite and #live-alert each
+ *                                   have `getClientRects().length > 0` on the
+ *                                   home, lobby, game (`mock yourTurn`) and crew
+ *                                   (`/?mock=1&crew=k7m2q9xh3p`) screens. A
+ *                                   live region inside a display:none subtree is
+ *                                   not in the accessibility tree and announces
+ *                                   nothing; they used to sit in #screen-game,
+ *                                   so every line said on any other screen was
+ *                                   silent, and `.sr-only` (a 1px clip) is what
+ *                                   keeps them rendered. INVALID, so a FAIL with
+ *                                   the reason, unless the page reaches the
+ *                                   expected `body[data-screen]` and every one
+ *                                   of the three elements exists: a missing
+ *                                   element or the wrong screen never passes.
  *                   seat-plaque-gap scripts/probes/seat-plaque-gap.js
  *                                   `pass: true` across the desktop/tablet
  *                                   widths it was written for.
@@ -574,7 +589,7 @@ async function runCheck(a) {
 
   const record = (group, label, pass, detail) => {
     results.push({ group, label, pass, detail });
-    console.log(`${pass ? 'PASS' : 'FAIL'}  ${group.padEnd(16)}${label.padEnd(28)}${detail}`);
+    console.log(`${pass ? 'PASS' : 'FAIL'}  ${group.padEnd(16)}${group.length >= 16 ? ' ' : ''}${label.padEnd(28)}${detail}`);
   };
 
   const port = await getFreePort();
@@ -1013,6 +1028,63 @@ async function runCheck(a) {
         + rows.map((r) => `${r.w}x${r.h}=${r.parsed.valid ? r.parsed.slack + '|' + r.parsed.startBelow : 'INVALID'}`).join('  '));
     }
 
+    // ---- live-regions-rendered ------------------------------------------
+    // The shared live regions must have a rendered box on EVERY screen. A region
+    // inside a display:none subtree has no client rects and announces nothing,
+    // which is exactly where they used to be (#screen-game). Each screen is
+    // reached for real (the lobby by pressing Create table on the mock) and the
+    // probe is INVALID unless the expected screen is showing and all three
+    // elements exist, so a missing element or a screen that never arrives is a
+    // FAIL with its reason, not a pass against nothing.
+    {
+      const LIVE_IDS = ['live-now', 'live-polite', 'live-alert'];
+      const liveProbe = (screen) => `(async () => {
+        const want = ${JSON.stringify(screen)};
+        const ids = ${JSON.stringify(LIVE_IDS)};
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const t0 = Date.now();
+        while (document.body.dataset.screen !== want && Date.now() - t0 < 10000) {
+          if (want === 'lobby') {
+            const n = document.getElementById('name-input');
+            const b = document.getElementById('create-btn');
+            if (n && b) { n.value = 'Gent'; n.dispatchEvent(new Event('input', { bubbles: true })); b.click(); }
+          }
+          await wait(150);
+        }
+        const got = document.body.dataset.screen || '(none)';
+        if (got !== want) return JSON.stringify({ valid: false, reason: 'screen is "' + got + '", wanted "' + want + '"' });
+        await wait(300);
+        const rects = {}; const missing = [];
+        for (const id of ids) {
+          const el = document.getElementById(id);
+          if (!el) { missing.push(id); continue; }
+          rects[id] = el.getClientRects().length;
+        }
+        if (missing.length) return JSON.stringify({ valid: false, reason: 'missing element(s): ' + missing.join(', ') });
+        const hidden = ids.filter((id) => !(rects[id] > 0));
+        return JSON.stringify({ valid: true, screen: got, rects, hidden, pass: hidden.length === 0 });
+      })()`;
+      const LIVE_SCREENS = [
+        ['home', '/?mock=1'],
+        ['lobby', '/?mock=1'],
+        ['game', '/?mock=1&scene=yourTurn'],
+        ['crew', '/?mock=1&crew=k7m2q9xh3p'],
+      ];
+      const liveRows = [];
+      for (const [screen, url] of LIVE_SCREENS) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+        await cdp.send('Page.navigate', { url: `${origin}${url}` });
+        await cdp.until(`document.readyState === 'complete'`, { what: `load ${screen} for live-regions-rendered` });
+        liveRows.push({ screen, parsed: JSON.parse(await cdp.eval(liveProbe(screen))) });
+      }
+      const liveFailing = liveRows.filter((r) => !(r.parsed.valid === true && r.parsed.pass === true));
+      record('live-regions-rendered', `${LIVE_SCREENS.length} screens @390x844  `, liveFailing.length === 0,
+        liveRows.map((r) => r.parsed.valid
+          ? `${r.screen}[now=${r.parsed.rects['live-now']} polite=${r.parsed.rects['live-polite']} alert=${r.parsed.rects['live-alert']}]`
+          : `${r.screen}[INVALID: ${r.parsed.reason}]`).join(' ')
+        + (liveFailing.length ? ` FAILING: ${liveFailing.map((r) => r.screen + (r.parsed.valid ? ' (no rendered box: ' + r.parsed.hidden.join(',') + ')' : '')).join('; ')}` : ''));
+    }
+
     // ---- capture every mock scene at every reference viewport ----------
     const qaLatest = path.join(root, '.superpowers', 'qa-latest');
     fs.rmSync(qaLatest, { recursive: true, force: true });
@@ -1104,7 +1176,7 @@ async function runCheck(a) {
   for (const [group, rs] of byGroup) {
     const fails = rs.filter((r) => !r.pass).length;
     if (fails) anyFail = true;
-    console.log(`${fails ? 'FAIL' : 'PASS'}  ${group.padEnd(16)}${rs.length - fails}/${rs.length} passed`);
+    console.log(`${fails ? 'FAIL' : 'PASS'}  ${group.padEnd(16)}${group.length >= 16 ? ' ' : ''}${rs.length - fails}/${rs.length} passed`);
   }
   if (hardError) {
     console.error(`\nHARD FAILURE (infra, not an assertion): ${hardError.message}`);
