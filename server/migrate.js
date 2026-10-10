@@ -17,8 +17,14 @@ const LOCK = 7310;
 
 async function migrate(url) {
   const client = new Client({ connectionString: url, connectionTimeoutMillis: 5000 });
+  // A dropped connection is re-emitted as 'error'; with no listener it is an
+  // uncaught exception. The pending query still rejects, and start() retries.
+  client.on('error', () => console.warn('[crews] migration connection dropped'));
   await client.connect();
   try {
+    // Another instance may hold the lock (overlapping deploys): wait, but not forever.
+    await client.query("SET lock_timeout = '10s'");
+    await client.query("SET statement_timeout = '30s'");
     await client.query('SELECT pg_advisory_lock($1)', [LOCK]);
     await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
     const done = new Set((await client.query('SELECT version FROM schema_migrations')).rows.map((r) => Number(r.version)));
