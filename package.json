@@ -8,12 +8,21 @@
   },
   "scripts": {
     "start": "node server/index.js",
-    "test": "node test/rules.test.js && node test/rooms.test.js && node test/match.test.js && node test/events.test.mjs && node test/share.test.mjs",
+    "test": "node test/rules.test.js && node test/rooms.test.js && node test/clientip.test.js && node test/limits.test.js && node test/match.test.js && node test/events.test.mjs && node test/share.test.mjs && node test/crews-client.test.mjs",
+    "test:server": "node test/server-limits.test.mjs",
+    "test:db": "node test/db.test.mjs && node test/crews.test.mjs && node test/crew-actions.test.mjs && node test/crew-server.test.mjs && node test/crew-wire.test.mjs",
     "smoke": "node scripts/host-smoke.js && node scripts/table-smoke.js",
+    "smoke:crew": "node scripts/crew-smoke.js",
+    "check:portable": "node scripts/portable-check.mjs",
     "shoot": "node scripts/shoot.js --check",
     "contrast": "node scripts/check-contrast.js"
   },
   "dependencies": {
+    "pg": "^8.23.1",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11"
   }
 }

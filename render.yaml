@@ -1,0 +1,28 @@
+# Render Blueprint — Tondo on the free plan (testing). Nothing in the server is
+# Render-specific: these are the only settings it reads. To move to Fly, see
+# docs/DEPLOY.md.
+services:
+  - type: web
+    name: tondo
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
+      # Render serves through Cloudflare, which sets CF-Connecting-IP to the
+      # visitor's address and rejects (403) requests that forge it. Measured
+      # live 2026-10-10: TONDO_TRUST_PROXY=1 read a shared internal 10.x hop
+      # (X-Forwarded-For had 4 entries), so every player shared one budget;
+      # this header logged the real client address. See docs/DEPLOY.md 3.3.
+      - key: TONDO_CLIENT_IP_HEADER
+        value: CF-Connecting-IP
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_DIRECT
+        sync: false

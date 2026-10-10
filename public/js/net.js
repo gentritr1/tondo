@@ -29,7 +29,7 @@ const SEAT_KEY = 'tondo.seat.';
  *  `createRoom`, `joinRoom` and `sync` are how a client GETS synchronized. */
 const STATE_DEPENDENT = new Set([
   'play', 'draw', 'pass', 'tondo', 'callout',
-  'startGame', 'newRound', 'addBot', 'removeSeat', 'leaveRoom',
+  'startGame', 'newRound', 'addBot', 'removeSeat', 'leaveRoom', 'saveToCrew',
 ]);
 
 const seatKey = (code) => SEAT_KEY + String(code || '').toUpperCase();
@@ -46,8 +46,9 @@ function writeSeat(code, value) {
 }
 
 export class Connection {
-  constructor({ onMessage, onStatus }) {
+  constructor({ onMessage, onStatus, getDevice }) {
     this.onMessage = onMessage;
+    this.getDevice = getDevice || (() => '');
     this.onStatus = onStatus || (() => {});
     this.socket = null;
     this.retry = 0;
@@ -97,6 +98,7 @@ export class Connection {
           name: this.credentials.name,
           code: this.credentials.code,
           token: this.credentials.token,
+          device: this.getDevice() || undefined,
         }));
         return;
       }

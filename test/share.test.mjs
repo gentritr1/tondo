@@ -234,6 +234,18 @@ test('a standings row missing points prints 0, never the word "undefined"', () =
   assert(!/undefined/i.test(text), text);
 });
 
+test('a pie saved to a crew links the crew, not a new table', () => {
+  const text = pieResultText({ complete: true, championIds: ['p4'], standings }, { origin: 'https://tondo.example/', crewUrl: 'https://tondo.example/?crew=k7m2q9xh3p' });
+  const last = text.split('\n')[2];
+  assert(last === 'Four slices. See the crew: https://tondo.example/?crew=k7m2q9xh3p', last);
+});
+
+test('without crewUrl the text is byte-identical to before', () => {
+  const a = pieResultText({ complete: true, championIds: ['p4'], standings }, { origin: 'https://tondo.example' });
+  const b = pieResultText({ complete: true, championIds: ['p4'], standings }, { origin: 'https://tondo.example', crewUrl: '' });
+  assert(a === b && a.endsWith('Four slices. Start a new table: https://tondo.example'), a);
+});
+
 if (failures.length) {
   for (const f of failures) console.error(`\n  FAIL  ${f.name}\n        ${f.err && f.err.message}`);
   console.error(`\n${passed} passed, ${failures.length} failed\n`);

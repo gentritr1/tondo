@@ -11,11 +11,14 @@
  * not merely DETECT other people's tables, it seats you at them.
  *
  * The shape of the defence is set by what this game is for: four friends in one
- * room, on their phones, behind ONE public IP. A tight per-IP limit would break
- * the primary use case, which is worse than the attack it prevents. So almost
- * everything here is PER SOCKET, where a legitimate player has enormous
- * headroom and an attacker has none, and the only per-IP number (concurrent
- * sockets) is set where a LAN party cannot reach it.
+ * room, on their phones, behind ONE public IP. A per-IP limit sized for one
+ * person would break the primary use case, which is worse than the attack it
+ * prevents. So message rate and table creation are PER SOCKET, where a
+ * legitimate player has enormous headroom and an attacker has none; wrong
+ * codes, connection attempts and concurrent sockets are PER ADDRESS, because a
+ * reconnect is free and would refill anything kept on the socket — and every
+ * one of those numbers is sized for a household behind one NAT (see BUDGETS),
+ * where a LAN party cannot reach it.
  *
  * Every budget below is a measured multiple of real play, not a guess:
  * `scripts/host-smoke.js` and `scripts/table-smoke.js` drive whole matches, and
@@ -46,12 +49,6 @@ const REFUSALS_BEFORE_CLOSE = 500;
    it before my friend was ready" twice over. */
 const MAX_ROOMS_PER_SOCKET = 3;
 
-/* Wrong codes. The first five are free, so mistyping costs a real player
-   nothing, and after that a wrong guess costs two seconds. That is what ends
-   the enumeration sweep: 42,000 guesses a second becomes 0.5. */
-const JOIN_FAIL_BURST = 5;
-const JOIN_FAIL_REFILL_MS = 2000;
-
 /* Concurrent sockets from one IP. NOT tighter, deliberately: the four friends
    this game exists for are in the same room sharing one NAT, a LAN party or a
    student flat is more, and every player's phone reconnects (a new socket) on
@@ -75,8 +72,6 @@ class SocketLimits {
     this.refusals = 0;
     this.refusalReplies = 0;
     this.roomsCreated = 0;
-    this.joinTokens = JOIN_FAIL_BURST;
-    this.joinRefilledAt = now;
   }
 
   /**
@@ -110,23 +105,107 @@ class SocketLimits {
   countRoomCreated() {
     this.roomsCreated += 1;
   }
+}
 
-  /**
-   * May this socket try a table code at all? Only WRONG codes cost a token
-   * (`countJoinFailure`), so a player who types their code correctly is never
-   * anywhere near this, and the refusal says nothing about whether the code
-   * exists — a throttled guess is not an oracle.
-   */
-  canTryJoin(now = Date.now()) {
-    const elapsed = Math.max(0, now - this.joinRefilledAt);
-    this.joinTokens = Math.min(JOIN_FAIL_BURST, this.joinTokens + elapsed / JOIN_FAIL_REFILL_MS);
-    this.joinRefilledAt = now;
-    return this.joinTokens >= 1;
+/**
+ * Budgets kept per ADDRESS, which outlive any one socket.
+ *
+ * The wrong-code ration used to live on SocketLimits, created fresh per
+ * connection — so "5 free wrong codes" really meant "5 per reconnect", and a
+ * reconnect is free. These buckets are keyed by address (server/clientip.js)
+ * and kept in a bounded LRU so one address cannot grow the map without limit.
+ *
+ * Every number is set from a scenario a real household produces, then checked
+ * by scripts/household-storm.js (4 players on one network, 3 reconnects and 2
+ * mistyped codes each), which must show zero refusals (measured 2026-10-10:
+ * household-storm: {"connects":24,"wrongCodes":8,"reconnects":12,"refusals":0}):
+ *   connect     64 burst, 1/s    2x the 32-socket concurrent cap: a full
+ *                                household can reconnect completely twice at once
+ *   joinFail    10 burst, 1/2s   4 players x 2 mistypes, plus 2 spare
+ *   crewRead    60 burst, 1/s    a household opening the crew link together and refreshing
+ *   crewCreate  10 burst, 10/h   a player makes one crew; ten is generous
+ */
+const BUDGETS = {
+  connect: { burst: 64, perMs: 1000 },
+  joinFail: { burst: 10, perMs: 2000 },
+  crewRead: { burst: 60, perMs: 1000 },
+  crewCreate: { burst: 10, perMs: 360000 },
+};
+
+/**
+ * What a per-address budget is charged to. IPv4 is the address itself. IPv6 is
+ * the /64 prefix: an ISP hands one household (or one attacker's VPS) a whole
+ * /64, so keying on the full address would give them 2^64 free buckets and
+ * every budget here would be decoration. The address is expanded first, so
+ * `2001:db8::1` and `2001:db8:0:0::2` land on the same key. An IPv4-mapped
+ * IPv6 address (::ffff:1.2.3.4) is that IPv4 address. Anything unparseable is
+ * kept as it came: a fail-safe that charges it to itself and nobody else.
+ */
+function budgetKey(ip) {
+  let a = String(ip || '').trim().toLowerCase().replace(/%.*$/, '');
+  if (!a.includes(':')) return a; // IPv4, empty, or not an address at all
+  const mapped = a.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) return mapped[1];
+  // An embedded dotted quad in the last group becomes two hextets.
+  const quad = a.match(/^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (quad) {
+    const o = quad.slice(2).map(Number);
+    if (o.some((n) => n > 255)) return a;
+    a = `${quad[1]}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const halves = a.split('::');
+  if (halves.length > 2) return a;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return a;
+  const groups = [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...tail];
+  if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return a;
+  return `${groups.slice(0, 4).map((g) => g.padStart(4, '0')).join(':')}::/64`;
+}
+
+class IpBudget {
+  constructor({ burst, perMs, maxKeys = 10000 }) {
+    this.burst = burst;
+    this.perMs = perMs;
+    this.maxKeys = maxKeys;
+    this.buckets = new Map(); // insertion order = recency (oldest first)
   }
 
-  countJoinFailure() {
-    this.joinTokens = Math.max(0, this.joinTokens - 1);
+  bucket(ip, now) {
+    const key = budgetKey(ip);
+    let b = this.buckets.get(key);
+    if (b) {
+      this.buckets.delete(key); // re-insert to mark as most recent
+      b.tokens = Math.min(this.burst, b.tokens + Math.max(0, now - b.at) / this.perMs);
+      b.at = now;
+    } else {
+      b = { tokens: this.burst, at: now };
+      if (this.buckets.size >= this.maxKeys) this.buckets.delete(this.buckets.keys().next().value);
+    }
+    this.buckets.set(key, b);
+    return b;
   }
+
+  allow(ip, now = Date.now()) { return this.bucket(ip, now).tokens >= 1; }
+
+  spend(ip, now = Date.now()) {
+    const b = this.bucket(ip, now);
+    b.tokens = Math.max(0, b.tokens - 1);
+  }
+
+  take(ip, now = Date.now()) {
+    const b = this.bucket(ip, now);
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
+    return true;
+  }
+
+  size() { return this.buckets.size; }
+}
+
+function createIpBudgets() {
+  return Object.fromEntries(Object.entries(BUDGETS).map(([k, v]) => [k, new IpBudget(v)]));
 }
 
 module.exports = {
@@ -136,7 +215,9 @@ module.exports = {
   MSG_BURST,
   REFUSALS_BEFORE_CLOSE,
   MAX_ROOMS_PER_SOCKET,
-  JOIN_FAIL_BURST,
-  JOIN_FAIL_REFILL_MS,
+  IpBudget,
+  budgetKey,
+  createIpBudgets,
+  BUDGETS,
   DEFAULT_MAX_SOCKETS_PER_IP,
 };

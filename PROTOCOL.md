@@ -1,8 +1,15 @@
-# TONDO — wire protocol (v1.3)
+# TONDO — wire protocol (v1.4)
 
 This file is the contract between `server/` and `public/js/`. Neither side may
 deviate from it without updating this file first. All messages are JSON objects
 with a `type` field, sent over a single WebSocket at the same origin (`ws://host/`).
+
+**v1.4 (2026-10-10)** adds crews — a durable group that outlives a room — and
+is purely ADDITIVE: every v1.3 message and field keeps its meaning, and a
+client that ignores the new fields plays exactly as before. New: an optional
+`device` on `createRoom`/`joinRoom`, an optional `crewId` on `createRoom`, the
+`saveToCrew` message, four snapshot fields, and three HTTP routes. Limits gain
+per-address budgets (see *Limits*).
 
 **v1.3 (2026-10-06)** adds per-socket limits and an Origin check on the
 WebSocket upgrade (see *Limits*), and widens the room-code space. The code
@@ -45,8 +52,8 @@ Bots: fill seats via host's `addBot`. Each named bot has a personality (`server/
 
 | type | payload | notes |
 |---|---|---|
-| `createRoom` | `{name}` | creates room, seats sender as host |
-| `joinRoom` | `{code, name, token?}` | `token` reclaims its seat — even over a half-open socket the server still believes in (the token outranks the stale socket, which is terminated). New players may join in `lobby` or `roundOver`, never mid-round |
+| `createRoom` | `{name, device?, crewId?}` | creates room, seats sender as host. `device` (v1.4) is 32 lowercase hex characters, a per-browser secret the server stores only hashed; without one the seat plays normally but is never a crew member. `crewId` links the table to that crew |
+| `joinRoom` | `{code, name, token?, device?}` | `token` reclaims its seat — even over a half-open socket the server still believes in (the token outranks the stale socket, which is terminated). New players may join in `lobby` or `roundOver`, never mid-round |
 | `addBot` | `{}` | host, lobby or roundOver, up to 4 seats |
 | `removeSeat` | `{seatId}` | host, lobby or roundOver, bot seats only |
 | `startGame` | `{}` | host, lobby only, ≥2 seats |
@@ -58,6 +65,7 @@ Bots: fill seats via host's `addBot`. Each named bot has a personality (`server/
 | `pass` | `{}` | only valid while deciding a playable drawn card |
 | `tondo` | `{}` | declare TONDO |
 | `callout` | `{targetId}` | punish a missed TONDO |
+| `saveToCrew` | `{crewId}` or `{newCrewName}` | v1.4. A seated human, after the pie is complete. It carries no scores; the server records its own. One crew per pie: re-saving to the same crew is a no-op; another crew is refused. Accepted only from a seat that PLAYED the finished pie: someone who sits down after it ended (joins are allowed in `roundOver`) sees the scoreboard but is refused ("Only the players of this pie can save it.") and is not recorded. A `{crewId}` save spends the crew-read budget of the sender's address (see *Limits*); over it: "Too many crew lookups. Try again in a moment." |
 | `sync` | `{}` | request a fresh snapshot |
 
 Unknown/invalid → `error` + fresh `state` snapshot (once seated; before a seat exists only the `error` is possible).
@@ -83,6 +91,8 @@ never freeze the table; the title snaps back when they reconnect.
   phase: 'lobby' | 'playing' | 'roundOver',
   roomCode: 'BASIL-4821',
   youId: 'p1', hostId: 'p1', isHost: true,
+  crews: 'off' | 'on' | 'failing',                  // v1.4: whether the crew book is available
+  crew: null | { id, name },                        // v1.4: the crew this table belongs to
   seats: [{ id, name, isBot, connected }],          // lobby order = seating order
   game: null | {                                    // null in lobby
     direction: 1 | -1,
@@ -133,7 +143,9 @@ match: {
     breakdown: [{ id, cards, points }]
   },
   nextDueAt: null | 1757430000000,  // epoch ms the next slice deals itself (v1.2)
-  held: false                       // a human asked the table to wait (v1.2)
+  held: false,                      // a human asked the table to wait (v1.2)
+  savedTo: null | { id, name },     // the crew this pie was saved to (v1.4)
+  saving: false                     // a save is in flight (v1.4)
 }
 ```
 
@@ -181,21 +193,28 @@ and repaint entirely from each snapshot.
   a second human (see *Limits*).
 - Ping/pong heartbeat every 30s; no pong → terminate.
 
-## Limits (v1.3)
+## Limits (v1.3, v1.4)
 
 None of this is authentication — the game has none and needs none. It is the
 floor that stops ONE socket denying the game to everybody, measured against what
-real play does rather than guessed. Everything except the last item is **per
-socket**, on purpose: this game is four friends in one room on their phones
-behind ONE public IP, and a tight per-IP limit would break the primary use case
-more thoroughly than the attack it prevents.
+real play does rather than guessed. Message rate and table creation are per
+socket; wrong codes, connection attempts and concurrent sockets are per address
+(server/clientip.js decides the address behind a proxy). The per-address
+numbers are sized for a household behind one NAT: this game is four friends in
+one room on their phones behind ONE public IP, and a per-address limit sized for
+one person would break the primary use case more thoroughly than the attack it
+prevents.
 
 | limit | value | over it |
 |---|---|---|
 | messages | 20/s, burst 40 | `error` "Slow down — too many messages at once." and the frame is dropped. Answered for the first 10 refusals, then dropped silently (an error reply is bytes out too). 500 refusals closes the socket with code 1008 |
 | `createRoom` | 3 per socket | `error` "You have opened enough tables. Join one instead." |
-| failed `joinRoom` | 5 free, then 1 per 2s | `error` "Too many wrong table codes. Wait a moment and try again." — the code is not even looked up, and the message is the same whatever the code was. Only a FAILED join costs; a correct code costs nothing |
+| failed `joinRoom` | 10 per address, then 1 per 2s (survives reconnects) | `error` "Too many wrong table codes. Wait a moment and try again." — the code is not even looked up, and the message is the same whatever the code was. Only a FAILED join costs; a correct code costs nothing |
+| connection attempts per address | 64, then 1/s | the upgrade is refused with HTTP 429 |
 | concurrent sockets per IP | 32, `TONDO_MAX_SOCKETS_PER_IP` | the upgrade is refused with HTTP 401 |
+| crew HTTP requests per address (v1.4) | 60, then 1/s | `429 {error: 'slow down'}` on `/api/crew/*` and `/health/crews` |
+| crew lookups by socket message (v1.4) | share the crew-read budget above | a `saveToCrew {crewId}` is refused ("Too many crew lookups. Try again in a moment."); the crew-name lookup after `createRoom {crewId}` is skipped silently, so the table opens without its crew |
+| new crews per address (v1.4) | 10, then 1 per 6 min | `saveToCrew` is refused: "You have started enough crews for now. Try again later." |
 
 **Origin.** The WebSocket upgrade is refused (HTTP 401) when an `Origin` header
 is present and its host:port differs from `Host`. An ABSENT `Origin` is allowed
@@ -213,5 +232,15 @@ slots were exhausted.
 ## HTTP
 
 - Static files from `public/` (index at `/`).
-- `GET /health` → `{ok: true, rooms: n}`.
+- `GET /health` → `{ok: true, rooms: n, crews: {status, ...}}` (v1.4). It NEVER queries the
+  database: the host polls it, and a poll that woke Neon every few minutes would spend its
+  free compute hours (spec §4.2).
+- `GET /api/crew/:id` (v1.4, header `X-Tondo-Device`, the unhashed device secret, optional;
+  it marks your row `you`) → 200 with the crew (name, pies, members, recent), `404
+  {error: 'not found'}` for an unknown or malformed id, `503 {reason}` while crews are off
+  or failing, or `429` over the per-address read budget.
+- `POST /api/crew/:id/leave` (v1.4, JSON body `{device}`) → `204` (the member row and the
+  name are erased), `400` for a bad body or device secret, `503 {reason}`, or `429`.
+- `GET /health/crews` (v1.4, a query string is ignored) → `200 {ok: true}` after a real database round trip, or `503
+  {ok: false, reason}`. For drills, not for the host's poller.
 - Port: `process.env.PORT || 4600`.

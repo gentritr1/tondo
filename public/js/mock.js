@@ -42,10 +42,16 @@ const table = {
   phase: 'lobby',
   game: null,
   scene: 'lobby',
+  crew: null,
+  savedTo: null,
+  saving: false,
 };
+// `?mockcrew=1` puts a crew on the table at load, so the one-tap state can be seen.
+if (new URLSearchParams(location.search).has('mockcrew')) table.crew = { id: 'k7m2q9xh3p', name: 'Friday Pie' };
 
 let sock = null;
 let timer = 0;
+let saveTimer = 0; // its own timer: `later()` is one shared slot and a save must not cancel a scripted beat
 const later = (ms, fn) => { clearTimeout(timer); timer = setTimeout(fn, ms); };
 
 /** `?scene=` pins the table to one beat, so a reconnect or a rejoin (the tab
@@ -111,6 +117,7 @@ function matchBlock() {
     // is shown at rest rather than counting toward a deal that cannot happen.
     nextDueAt: null,
     held: false,
+    savedTo: table.savedTo || null, saving: table.saving,
   };
 }
 
@@ -125,6 +132,8 @@ function snapshot() {
     seats: table.seats,
     game: table.game,
     match: matchBlock(),
+    crews: 'on',
+    crew: table.crew || null,
   };
 }
 
@@ -427,7 +436,11 @@ function emit(message) {
 function route(msg) {
   switch (msg.type) {
     case 'createRoom':
+      // `?mockrefuse=1` refuses a create the way the server does; `?mockdrop=1` never answers it.
+      if (new URLSearchParams(location.search).has('mockdrop')) return;
+      if (new URLSearchParams(location.search).has('mockrefuse')) { emit({ type: 'error', message: 'The table book is full right now.' }); return; }
       table.name = msg.name || 'You';
+      table.savedTo = null; table.saving = false; clearTimeout(saveTimer);
       table.seats = [{ id: 'p1', name: table.name, isBot: false, connected: true }];
       table.phase = 'lobby';
       table.game = null;
@@ -437,6 +450,8 @@ function route(msg) {
       return;
 
     case 'joinRoom':
+      // `?mockrefusejoin=1` refuses a join the way the server does for an unknown code.
+      if (new URLSearchParams(location.search).has('mockrefusejoin')) { emit({ type: 'error', message: 'No table has that code.' }); return; }
       table.name = msg.name || 'You';
       table.seats = [{ id: 'p1', name: table.name, isBot: false, connected: true }];
       fullTable();
@@ -539,6 +554,8 @@ function route(msg) {
     }
 
     case 'newRound':
+      // A new pie is not the saved one: the server's room.pie is replaced, so savedTo is null again.
+      table.savedTo = null; table.saving = false; clearTimeout(saveTimer);
       go('yourTurn');
       return;
 
@@ -547,6 +564,42 @@ function route(msg) {
       table.game = null;
       emit({ type: 'left' });
       return;
+
+    case 'saveToCrew': {
+      // The real server records its own scores and answers with the crew; the
+      // mock just names it, so the saved state can be shown.
+      //   ?mocksaving=1    the save takes 1.5s: a snapshot with `saving: true` first
+      //   ?mockfailsave=1  the save fails: `saving` clears, then the player-facing error
+      const qs = new URLSearchParams(location.search);
+      const land = () => {
+        table.savedTo = msg.crewId
+          ? { id: msg.crewId, name: (table.crew && table.crew.id === msg.crewId) ? table.crew.name : 'Friday Pie' }
+          : { id: 'k7m2q9xh3p', name: String(msg.newCrewName || 'Crew').slice(0, 24) };
+        if (!table.crew) table.crew = table.savedTo;
+        table.saving = false;
+        emit(snapshot());
+      };
+      if (qs.has('mockfailsave')) {
+        table.saving = true;
+        emit(snapshot());
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          table.saving = false;
+          emit(snapshot());
+          emit({ type: 'error', message: "Can't reach the crew book right now — your game is fine." });
+        }, 600);
+        return;
+      }
+      if (qs.has('mocksaving')) {
+        table.saving = true;
+        emit(snapshot());
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(land, 1500);
+        return;
+      }
+      land();
+      return;
+    }
 
     case 'sync':
       emit(snapshot());
@@ -606,6 +659,62 @@ MockSocket.CONNECTING = 0;
 MockSocket.OPEN = 1;
 MockSocket.CLOSING = 2;
 MockSocket.CLOSED = 3;
+
+/* Crew pages, faked at the fetch layer the way the table is faked at the socket
+   layer: the real app code runs unchanged. Three fixtures: a lived-in crew, an
+   empty one whose name is HTML (it must render as literal text), and one whose
+   book is down. */
+const CREW_FIXTURES = {
+  k7m2q9xh3p: { status: 200, body: {
+    id: 'k7m2q9xh3p', name: 'Friday Pie', pies: 6,
+    members: [
+      { name: 'Gent', pies: 6, wins: 3, you: true },
+      { name: 'Arta', pies: 6, wins: 2, you: false },
+      { name: 'Dren', pies: 4, wins: 1, you: false },
+      { name: 'Gent 2', pies: 1, wins: 0, you: false },
+    ],
+    recent: [
+      { playedAt: '2026-10-09T19:40:00Z', rounds: 4, players: [
+        { name: 'Gent', points: 212, won: true, kind: 'member' }, { name: 'Arta', points: 180, won: false, kind: 'member' },
+        { name: 'Chef Bot', points: 40, won: false, kind: 'bot' }, { name: null, points: 12, won: false, kind: 'former' }] },
+      { playedAt: '2026-10-02T20:10:00Z', rounds: 4, players: [
+        { name: 'Arta', points: 166, won: true, kind: 'member' }, { name: 'Gent', points: 81, won: false, kind: 'member' },
+        { name: null, points: 30, won: false, kind: 'guest' }] },
+    ],
+  } },
+  empty00000: { status: 200, body: { id: 'empty00000', name: '<b>New</b> crew', pies: 0, members: [], recent: [] } },
+  dead000000: { status: 503, body: { reason: 'timeout' } },
+  // The widest names the server allows (24 for a crew, 14 for a player) in the
+  // widest glyph, with no break opportunity: what `crew-card-fits` stresses.
+  wwwwwwwwww: { status: 200, body: {
+    id: 'wwwwwwwwww', name: 'W'.repeat(24), pies: 128,
+    members: [
+      { name: 'W'.repeat(14), pies: 128, wins: 99, you: true },
+      { name: 'M'.repeat(14), pies: 126, wins: 21, you: false },
+      { name: 'Q'.repeat(14), pies: 40, wins: 8, you: false },
+    ],
+    recent: [
+      { playedAt: '2026-10-09T19:40:00Z', rounds: 4, players: [
+        { name: 'W'.repeat(14), points: 1212, won: true, kind: 'member' }, { name: 'M'.repeat(14), points: 1180, won: false, kind: 'member' },
+        { name: 'B'.repeat(14), points: 1040, won: false, kind: 'bot' }, { name: null, points: 112, won: false, kind: 'former' }] },
+    ],
+  } },
+};
+const crewsLeft = new Set(); // POST .../leave: the next GET no longer marks anyone `you`
+const realFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+  const m = url.pathname.match(/^\/api\/crew\/([^/]+)(\/leave)?$/);
+  if (!m) return realFetch(input, init);
+  await new Promise((r) => setTimeout(r, 120)); // a visible loading beat
+  if (m[2]) { crewsLeft.add(m[1]); return new Response(null, { status: 204 }); }
+  const f = CREW_FIXTURES[m[1]];
+  if (!f) return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+  const body = crewsLeft.has(m[1]) && f.body.members
+    ? { ...f.body, members: f.body.members.map((x) => ({ ...x, you: false })) }
+    : f.body;
+  return new Response(JSON.stringify(body), { status: f.status, headers: { 'Content-Type': 'application/json' } });
+};
 
 window.WebSocket = MockSocket;
 // `emit` is exposed so a check can push a hand-written snapshot (a two- or

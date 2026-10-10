@@ -62,6 +62,74 @@
  *                                   standings clause was signed off by
  *                                   measuring the CHIP at 1280x800 and shipped
  *                                   `?` 17.2px off screen at 390x844.
+ *                   crew-save-fits  on the finished-pie scoreboard (mock
+ *                                   `pieComplete`, which carries
+ *                                   `crews: 'on'`) the Save to crew control —
+ *                                   the button, and again the open picker with
+ *                                   two remembered crews — has a real box, does
+ *                                   not intersect #share-btn, #slice-pips,
+ *                                   #newround-btn or #hold-btn (whichever are
+ *                                   visible), ends inside the viewport once
+ *                                   the game screen's own scroll container(s)
+ *                                   are scrolled to the end (the document never
+ *                                   scrolls; see leave-reachable), and does not
+ *                                   push New pie off screen (compared with the
+ *                                   same page minus the crew control: the first
+ *                                   stacked layout did exactly that, by 20px at
+ *                                   1366x768, and no assertion on the crew
+ *                                   button's own box could see it) and is not
+ *                                   covered by anything (elementFromPoint at its
+ *                                   centre). The check is INVALID, so a FAIL, when
+ *                                   it has nothing to measure against: no visible
+ *                                   sibling, or #newround-btn hidden. Swept over
+ *                                   widths 320..1440 in 40px steps at height
+ *                                   700, plus 320x568, 390x844, 1366x768 and
+ *                                   heights 560..900 in 20px steps at widths
+ *                                   360/390/768/1024/1366,
+ *                                   because three sampled viewports once passed
+ *                                   while 1366x768 overlapped by 2.5px; the
+ *                                   detail line reports the minimum clearance
+ *                                   (px) and where it is, and the sign flip if
+ *                                   there is one.
+ *                   crew-card-fits  the crew page (`/?mock=1&crew=…`, a lived-in
+ *                                   crew and a worst-case one with 24-char crew
+ *                                   and 14-char member names in the widest
+ *                                   glyph) has nothing sticking out of its
+ *                                   card, no horizontal scroll, and "Start a
+ *                                   table" reachable by scrolling the SCREEN's
+ *                                   own container (#screen-crew; the document
+ *                                   never scrolls) and not covered by anything
+ *                                   (elementFromPoint at its centre). INVALID,
+ *                                   so a FAIL, unless the card exists, rows
+ *                                   rendered and #crew-start has a visible
+ *                                   box. Swept over widths 320..1440 in 40px
+ *                                   steps at height 700, plus 320x568, 390x844
+ *                                   and 1366x768 (sampled sizes have missed
+ *                                   overlaps here before). Captures go to
+ *                                   `.superpowers/qa-crew/`, not qa-latest.
+ *                   live-regions-rendered
+ *                                   #live-now, #live-polite and #live-alert are
+ *                                   rendered and not hidden from assistive tech
+ *                                   by anything the page controls, on the home,
+ *                                   lobby, game (`mock yourTurn`) and crew
+ *                                   (`/?mock=1&crew=k7m2q9xh3p`) screens. Each
+ *                                   needs `getClientRects().length > 0`,
+ *                                   computed `visibility: visible`, no ancestor
+ *                                   (or itself) matching `[aria-hidden="true"],
+ *                                   [inert], [hidden]`, and its expected
+ *                                   `role`/`aria-live` (status/polite for
+ *                                   polite, alert/assertive for the other two).
+ *                                   A live region inside a display:none subtree
+ *                                   has no box and announces nothing; they used
+ *                                   to sit in #screen-game, so every line said
+ *                                   on any other screen was silent, and
+ *                                   `.sr-only` (a 1px clip) keeps them rendered.
+ *                                   INVALID, so a FAIL with the reason, unless
+ *                                   the page reaches the expected
+ *                                   `body[data-screen]` and every one of the
+ *                                   three elements exists. This proves the
+ *                                   regions are exposed, NOT that a screen
+ *                                   reader speaks them: that is a device check.
  *                   seat-plaque-gap scripts/probes/seat-plaque-gap.js
  *                                   `pass: true` across the desktop/tablet
  *                                   widths it was written for.
@@ -529,7 +597,7 @@ async function runCheck(a) {
 
   const record = (group, label, pass, detail) => {
     results.push({ group, label, pass, detail });
-    console.log(`${pass ? 'PASS' : 'FAIL'}  ${group.padEnd(16)}${label.padEnd(28)}${detail}`);
+    console.log(`${pass ? 'PASS' : 'FAIL'}  ${group.padEnd(16)}${group.length >= 16 ? ' ' : ''}${label.padEnd(28)}${detail}`);
   };
 
   const port = await getFreePort();
@@ -707,6 +775,137 @@ async function runCheck(a) {
           : `INVALID: ${parsed.reason}`);
     }
 
+
+    // ---- crew-save-fits ----------------------------------------------------
+    // A SWEEP, not three samples: the Save to crew control sits in the
+    // scoreboard's column between Copy result and the pips, and the column's
+    // height changes with the width (text wraps, the tray scrolls on phones).
+    // Clearance is signed: > 0 is the gap in px, < 0 is the overlap depth.
+    // Measured at the scroll top AND the scroll end of every scrollable
+    // ancestor (the document never scrolls), the worse of the two kept.
+    const CREW_FIT_PROBE = (targetId) => `(() => {
+      const target = document.getElementById(${JSON.stringify(targetId)});
+      if (!target) return JSON.stringify({ valid: false, reason: 'no #${targetId}' });
+      const visible = (e) => { if (!e) return false; const cs = getComputedStyle(e);
+        const r = e.getBoundingClientRect();
+        return !e.hidden && cs.display !== 'none' && cs.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+      if (!visible(target)) return JSON.stringify({ valid: false, reason: '#${targetId} has no visible box' });
+      const scrollers = [];
+      for (let n = target.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+        const oy = getComputedStyle(n).overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) scrollers.push(n);
+      }
+      const others = ['share-btn', 'slice-pips', 'newround-btn', 'hold-btn']
+        .map((id) => document.getElementById(id)).filter(visible);
+      const clearance = (a, b) => {
+        const gx = Math.max(a.left - b.right, b.left - a.right);
+        const gy = Math.max(a.top - b.bottom, b.top - a.bottom);
+        if (gx > 0 || gy > 0) return Math.max(gx, gy);
+        return -Math.min(Math.min(a.right, b.right) - Math.max(a.left, b.left),
+                         Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+      };
+      // Premises, asserted rather than assumed: with nothing to measure against, or
+      // with New pie hidden, minClear stays Infinity and every comparison below
+      // passes vacuously.
+      if (others.length === 0) return JSON.stringify({ valid: false, reason: 'no sibling (#share-btn, #slice-pips, #newround-btn, #hold-btn) has a visible box to measure against' });
+      if (!visible(document.getElementById('newround-btn'))) return JSON.stringify({ valid: false, reason: '#newround-btn has no visible box (the displacement check has nothing to look at)' });
+      let minClear = Infinity, minWith = '(none visible)', bottomOver = -Infinity, sideOver = -Infinity, occluded = null;
+      for (const pos of ['top', 'end']) {
+        for (const n of scrollers) n.scrollTop = pos === 'top' ? 0 : n.scrollHeight;
+        const t = target.getBoundingClientRect();
+        for (const o of others) {
+          const c = clearance(t, o.getBoundingClientRect());
+          if (c < minClear) { minClear = c; minWith = '#' + o.id; }
+        }
+        if (pos === 'end') {
+          // Occlusion: something drawn over the control is not "fitting". The
+          // point is the centre; off screen there is nothing to hit-test.
+          const cx = t.left + t.width / 2, cy = t.top + t.height / 2;
+          if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) occluded = 'centre off screen (' + Math.round(cx) + ',' + Math.round(cy) + ')';
+          else {
+            const hit = document.elementFromPoint(cx, cy);
+            if (!hit || !target.contains(hit)) occluded = 'covered by ' + (hit ? (hit.id ? '#' + hit.id : hit.tagName.toLowerCase() + '.' + String(hit.className).split(' ')[0]) : 'nothing');
+          }
+          bottomOver = t.bottom - innerHeight;           // > 0: still below the fold at the scroll end
+          sideOver = Math.max(-t.left, t.right - innerWidth);
+        }
+      }
+      // New pie must not be pushed below the fold BY the crew control. Absolute
+      // reachability of the bottom row is a separate, older matter (the Leave
+      // button already sits below the fold at 1366x768), so this compares the
+      // same page with the crew control taken out: displaced = off screen with
+      // it, on screen without it.
+      const nr = document.getElementById('newround-btn');
+      let newPieBelowFold = null, newPieBelowFoldWithout = null, displaced = false;
+      if (visible(nr)) {
+        const atEnd = () => { for (const n of scrollers) n.scrollTop = n.scrollHeight; return nr.getBoundingClientRect().bottom - innerHeight; };
+        newPieBelowFold = atEnd();
+        const hiddenBefore = [...document.querySelectorAll('#crew-save-btn, #crew-picker')].map((e) => [e, e.hidden]);
+        // is-picking also hides the pips and Copy result; the baseline is the page
+        // as it stands with no crew control at all, so those come back too.
+        const sb = document.getElementById('scoreboard');
+        const picking = sb.classList.contains('is-picking');
+        sb.classList.remove('is-picking');
+        hiddenBefore.forEach(([e]) => { e.hidden = true; });
+        newPieBelowFoldWithout = atEnd();
+        hiddenBefore.forEach(([e, h]) => { e.hidden = h; });
+        sb.classList.toggle('is-picking', picking);
+        displaced = newPieBelowFold > 1 && newPieBelowFoldWithout <= 1;
+      }
+      const rd = (x) => Math.round(x * 10) / 10;
+      return JSON.stringify({
+        newPieBelowFold: newPieBelowFold === null ? null : rd(newPieBelowFold),
+        newPieBelowFoldWithout: newPieBelowFoldWithout === null ? null : rd(newPieBelowFoldWithout), displaced,
+        valid: true, scrollers: scrollers.map((n) => n.className || n.tagName).join('+') || '(none needed)',
+        others: others.map((o) => o.id).join(','), minClear: rd(minClear), minWith,
+        bottomOver: rd(bottomOver), sideOver: rd(sideOver),
+        occluded, pass: minClear >= 0 && bottomOver <= 1 && sideOver <= 0.5 && !displaced && occluded === null,
+      });
+    })()`;
+    const CREW_FIT_SIZES = [];
+    for (let w = 320; w <= 1440; w += 40) CREW_FIT_SIZES.push([w, 700]);
+    CREW_FIT_SIZES.push([320, 568], [390, 844], [1366, 768]);
+    // Heights too: 390x844 and 1366x768 each failed (New pie pushed below the
+    // fold) at a height the 700px width sweep never visits, in the layout bands
+    // above the 720px-tall compact one.
+    for (const w of [360, 390, 768, 1024, 1366]) {
+      for (let h = 560; h <= 900; h += 20) CREW_FIT_SIZES.push([w, h]);
+    }
+    for (const state of ['button', 'picker']) {
+      const rows = [];
+      let failures = 0;
+      for (const [w, h] of CREW_FIT_SIZES) {
+        await gotoScene('pieComplete', w, h);
+        if (state === 'picker') {
+          await cdp.eval(`(() => { localStorage.setItem('tondo.crews', JSON.stringify([
+            { id: 'abcdefgh01', name: 'Friday Night Pie Crew XXL', at: 1 }, { id: 'abcdefgh02', name: 'Uni Lads And Their Mates', at: 2 },
+            { id: 'abcdefgh03', name: 'Neighbours From Number 12', at: 3 }]));
+            document.getElementById('crew-save-btn').click();
+            return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+          await cdp.eval(`(() => { document.getAnimations().forEach(x => { try { x.finish(); } catch {} });
+            return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+        }
+        const parsed = JSON.parse(await cdp.eval(CREW_FIT_PROBE(state === 'picker' ? 'crew-picker' : 'crew-save-btn')));
+        const ok = parsed.valid === true && parsed.pass === true;
+        if (!ok) failures++;
+        rows.push({ w, h, ok, parsed });
+      }
+      const valid = rows.filter((r) => r.parsed.valid);
+      const worst = valid.reduce((m, r) => (m === null || r.parsed.minClear < m.parsed.minClear ? r : m), null);
+      // The thinnest margin that matters: how far New pie still is above the fold.
+      const withPie = valid.filter((r) => r.parsed.newPieBelowFold !== null);
+      const tightPie = withPie.reduce((m, r) => (m === null || -r.parsed.newPieBelowFold < -m.parsed.newPieBelowFold ? r : m), null);
+      const worstBottom = valid.reduce((m, r) => Math.max(m, r.parsed.bottomOver), -Infinity);
+      const flip = rows.find((r, i) => i > 0 && i < 29 && r.ok !== rows[i - 1].ok);   // along the 700px width sweep
+      record('crew-save-fits', `mock:pieComplete ${state} x${rows.length} sizes  `, failures === 0 && valid.length === rows.length,
+        `valid=${valid.length}/${rows.length} newPieSpareMin=${tightPie ? -tightPie.parsed.newPieBelowFold : 'n/a'}px@${tightPie ? tightPie.w + 'x' + tightPie.h : 'n/a'} (baseline without the crew control there: ${tightPie ? -tightPie.parsed.newPieBelowFoldWithout : 'n/a'}px) `
+        + `minClearance=${worst ? worst.parsed.minClear : 'n/a'}px (vs ${worst ? worst.parsed.minWith : 'n/a'} @${worst ? worst.w + 'x' + worst.h : 'n/a'}) `
+        + `maxBelowFoldAtScrollEnd=${valid.length ? worstBottom + 'px' : 'n/a'} signFlip=${flip ? '@' + flip.w + 'x' + flip.h : 'none'} `
+        + `failing=${failures}${failures ? ' (first 5): ' + rows.filter((r) => !r.ok).slice(0, 5).map((r) => `${r.w}x${r.h}${r.parsed.valid ? `(clear ${r.parsed.minClear} with ${r.parsed.minWith}, below fold ${r.parsed.bottomOver}, side ${r.parsed.sideOver}, New pie ${r.parsed.newPieBelowFold} below fold vs ${r.parsed.newPieBelowFoldWithout} without, ${r.parsed.occluded || 'not occluded'})` : '(INVALID: ' + r.parsed.reason + ')'}`).join('; ') : ''}`);
+      console.log(`crew-save-fits ${state} sweep (width x height -> min clearance px | scrollers):\n  `
+        + rows.map((r) => `${r.w}x${r.h}=${r.parsed.valid ? r.parsed.minClear : 'INVALID'}`).join('  '));
+    }
+
     // ---- seat-plaque-gap ---------------------------------------------------
     const seatPlaqueSrc = fs.readFileSync(path.join(__dirname, 'probes', 'seat-plaque-gap.js'), 'utf8');
     for (const [w, h] of [[1024, 768], [1280, 800], [1440, 900]]) {
@@ -746,6 +945,172 @@ async function runCheck(a) {
         // floors and an isolated run has the machine to itself.
         + (parsed.valid ? '' : ` FAILED PREMISES: ${(parsed.failedPremises || ['(probe predates failedPremises)']).join(', ')}`
             + ` [frames next=${parsed.next && parsed.next.frames}/60 lobby=${parsed.lobby && parsed.lobby.frames}/45]`));
+    }
+
+    // ---- crew-card-fits -------------------------------------------------
+    // The crew page is a new screen at every size: nothing in the card may
+    // stick out sideways (a long crew or member name must wrap, not overflow),
+    // and "Start a table" must be reachable by scrolling the SCREEN's own
+    // container (#screen-crew is overflow:auto; the document never scrolls —
+    // html, body { overflow: hidden }) with nothing drawn over it.
+    // Measured with two fixtures: the lived-in crew, and the widest names the
+    // server allows in the widest glyph (a short-name fixture cannot fail a
+    // `white-space: nowrap` regression, which is what the sabotage run uses).
+    const CREW_CARD_PROBE = `(() => {
+      const card = document.querySelector('.crew-card');
+      const screen = document.getElementById('screen-crew');
+      const start = document.getElementById('crew-start');
+      if (!card || !screen || !start) return JSON.stringify({ valid: false, reason: 'crew screen/card/#crew-start missing' });
+      if (document.body.dataset.screen !== 'crew') return JSON.stringify({ valid: false, reason: 'not on the crew screen' });
+      const rows = document.getElementById('crew-rows').children.length;
+      if (rows === 0) return JSON.stringify({ valid: false, reason: 'no rows rendered (fixture not loaded?)' });
+      const cs = getComputedStyle(start), sr0 = start.getBoundingClientRect();
+      if (start.hidden || cs.display === 'none' || cs.visibility === 'hidden' || sr0.width <= 0 || sr0.height <= 0) {
+        return JSON.stringify({ valid: false, reason: '#crew-start has no visible box' });
+      }
+      const label = (n) => n.id || String(n.className).split(' ')[0] || n.tagName.toLowerCase();
+      screen.scrollTop = 0;
+      const topAt0 = Math.round(card.getBoundingClientRect().top * 10) / 10;
+      // The CONTENT box: the card's 22px side padding is not spare room, and
+      // measuring against the border box let anything up to 22px of overflow pass.
+      const cr = card.getBoundingClientRect(), ccs = getComputedStyle(card);
+      const c = { left: cr.left + parseFloat(ccs.paddingLeft), right: cr.right - parseFloat(ccs.paddingRight) };
+      let slack = Infinity, slackAt = '(none)';
+      const outside = [];
+      for (const n of card.querySelectorAll('*')) {
+        if (n.classList.contains('sr-only')) continue;
+        const r = n.getBoundingClientRect();
+        if (r.width <= 0) continue;
+        const s = Math.min(r.left - c.left, c.right - r.right, r.left, innerWidth - r.right);
+        if (s < slack) { slack = s; slackAt = label(n); }
+        if (s < -0.5) outside.push(label(n));
+      }
+      const hScroll = Math.max(screen.scrollWidth - screen.clientWidth, card.scrollWidth - card.clientWidth);
+      screen.scrollTop = screen.scrollHeight;
+      const s = start.getBoundingClientRect();
+      const cx = s.left + s.width / 2, cy = s.top + s.height / 2;
+      let occluded = null;
+      if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) occluded = 'centre off screen (' + Math.round(cx) + ',' + Math.round(cy) + ')';
+      else {
+        const hit = document.elementFromPoint(cx, cy);
+        if (!hit || !start.contains(hit)) occluded = 'covered by ' + (hit ? label(hit) : 'nothing');
+      }
+      const rd = (x) => Math.round(x * 10) / 10;
+      const startBelow = rd(s.bottom - innerHeight);
+      return JSON.stringify({ valid: true, rows, slack: rd(slack), slackAt, outside: [...new Set(outside)].slice(0, 5), hScroll, topAt0, startBottom: rd(s.bottom), innerHeight, startBelow, occluded,
+        pass: outside.length === 0 && hScroll <= 1 && topAt0 >= -0.5 && startBelow <= 1 && occluded === null });
+    })()`;
+    const CREW_CARD_SIZES = [];
+    for (let w = 320; w <= 1440; w += 40) CREW_CARD_SIZES.push([w, 700]);
+    CREW_CARD_SIZES.push([320, 568], [390, 844], [1366, 768]);
+    const qaCrew = path.join(root, '.superpowers', 'qa-crew');
+    for (const [fixture, id] of [['lived-in', 'k7m2q9xh3p'], ['widest-names', 'wwwwwwwwww']]) {
+      const rows = [];
+      for (const [w, h] of CREW_CARD_SIZES) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 768 });
+        await cdp.send('Page.navigate', { url: `${origin}/?mock=1&crew=${id}` });
+        await cdp.until(`document.readyState === 'complete'`, { what: `load crew ${id}@${w}x${h}` });
+        // Rows OR the failure line: a fixture that never loads must reach the probe
+        // and come back INVALID, not time out here as a harness error.
+        await cdp.until(`document.body.dataset.screen === 'crew' && (document.getElementById('crew-rows').children.length > 0 || document.getElementById('crew-start').disabled === false || /reach|exist/.test(document.getElementById('crew-sub').textContent))`, { what: `crew view ${id}@${w}x${h}` });
+        await cdp.eval(`(() => { document.getAnimations().forEach(x => { try { x.finish(); } catch {} });
+          return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+        const parsed = JSON.parse(await cdp.eval(CREW_CARD_PROBE));
+        rows.push({ w, h, parsed, ok: parsed.valid === true && parsed.pass === true });
+        // Its own folder: the capture block below clears qa-latest before it writes.
+        if ([[320, 568], [390, 844], [1366, 768]].some(([cw, ch]) => cw === w && ch === h)) {
+          await shoot(cdp, path.join(qaCrew, `fits-${fixture}-${w}x${h}.png`), { settle: true });
+        }
+      }
+      const valid = rows.filter((r) => r.parsed.valid);
+      const failing = rows.filter((r) => !r.ok);
+      const worstSlack = valid.reduce((m, r) => (m === null || r.parsed.slack < m.parsed.slack ? r : m), null);
+      const worstBelow = valid.reduce((m, r) => (m === null || r.parsed.startBelow > m.parsed.startBelow ? r : m), null);
+      record('crew-card-fits', `crew ${fixture} x${rows.length} sizes  `, failing.length === 0 && valid.length === rows.length,
+        `valid=${valid.length}/${rows.length} minHorizontalSlack=${worstSlack ? worstSlack.parsed.slack : 'n/a'}px (${worstSlack ? worstSlack.parsed.slackAt + ' @' + worstSlack.w + 'x' + worstSlack.h : 'n/a'}) `
+        + `startBottom-innerHeight max=${worstBelow ? worstBelow.parsed.startBelow : 'n/a'}px @${worstBelow ? worstBelow.w + 'x' + worstBelow.h : 'n/a'} failing=${failing.length}`
+        + (failing.length ? ' (first 5): ' + failing.slice(0, 5).map((r) => `${r.w}x${r.h}` + (r.parsed.valid
+          ? `(outside=[${r.parsed.outside.join(',')}] slack ${r.parsed.slack} at ${r.parsed.slackAt}, hScroll ${r.parsed.hScroll}, top ${r.parsed.topAt0}, start bottom ${r.parsed.startBottom}/${r.parsed.innerHeight}, ${r.parsed.occluded || 'not occluded'})`
+          : `(INVALID: ${r.parsed.reason})`)).join('; ') : ''));
+      console.log(`crew-card-fits ${fixture} sweep (width x height -> min horizontal slack px | start bottom - innerHeight px):\n  `
+        + rows.map((r) => `${r.w}x${r.h}=${r.parsed.valid ? r.parsed.slack + '|' + r.parsed.startBelow : 'INVALID'}`).join('  '));
+    }
+
+    // ---- live-regions-rendered ------------------------------------------
+    // The shared live regions must be exposed on EVERY screen: a box (a region
+    // inside a display:none subtree has no client rects and announces nothing,
+    // which is exactly where they used to be, in #screen-game), computed
+    // visibility, no aria-hidden / inert / hidden on itself or an ancestor, and
+    // the role / aria-live they are meant to have. Each screen is reached for real
+    // (the lobby by pressing Create table on the mock) and the probe is INVALID
+    // unless the expected screen is showing and all three elements exist, so a
+    // missing element or a screen that never arrives is a FAIL with its reason,
+    // not a pass against nothing. What this cannot see is whether a screen reader
+    // actually speaks a mutation; that stays a device check.
+    {
+      const LIVE_IDS = ['live-now', 'live-polite', 'live-alert'];
+      const LIVE_EXPECT = { 'live-now': ['alert', 'assertive'], 'live-alert': ['alert', 'assertive'], 'live-polite': ['status', 'polite'] };
+      const liveProbe = (screen) => `(async () => {
+        const want = ${JSON.stringify(screen)};
+        const ids = ${JSON.stringify(LIVE_IDS)};
+        const expect = ${JSON.stringify(LIVE_EXPECT)};
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const t0 = Date.now();
+        while (document.body.dataset.screen !== want && Date.now() - t0 < 10000) {
+          if (want === 'lobby') {
+            const n = document.getElementById('name-input');
+            const b = document.getElementById('create-btn');
+            if (n && b) { n.value = 'Gent'; n.dispatchEvent(new Event('input', { bubbles: true })); b.click(); }
+          }
+          await wait(150);
+        }
+        const got = document.body.dataset.screen || '(none)';
+        if (got !== want) return JSON.stringify({ valid: false, reason: 'screen is "' + got + '", wanted "' + want + '"' });
+        await wait(300);
+        const rects = {}; const missing = [];
+        for (const id of ids) {
+          const el = document.getElementById(id);
+          if (!el) { missing.push(id); continue; }
+          rects[id] = el.getClientRects().length;
+        }
+        if (missing.length) return JSON.stringify({ valid: false, reason: 'missing element(s): ' + missing.join(', ') });
+        // Each region's reasons for not being exposed (empty list = exposed).
+        const why = {};
+        for (const id of ids) {
+          const el = document.getElementById(id);
+          const r = [];
+          if (!(rects[id] > 0)) r.push('no rendered box');
+          const vis = getComputedStyle(el).visibility;
+          if (vis !== 'visible') r.push('visibility:' + vis);
+          const blocker = el.closest('[aria-hidden="true"], [inert], [hidden]');
+          if (blocker) r.push('inside ' + (blocker === el ? 'itself' : '#' + (blocker.id || blocker.tagName.toLowerCase())) + ' [aria-hidden/inert/hidden]');
+          const [role, live] = expect[id];
+          if (el.getAttribute('role') !== role) r.push('role=' + el.getAttribute('role') + ' (want ' + role + ')');
+          if (el.getAttribute('aria-live') !== live) r.push('aria-live=' + el.getAttribute('aria-live') + ' (want ' + live + ')');
+          if (r.length) why[id] = r;
+        }
+        const hidden = Object.keys(why);
+        return JSON.stringify({ valid: true, screen: got, rects, hidden, why, pass: hidden.length === 0 });
+      })()`;
+      const LIVE_SCREENS = [
+        ['home', '/?mock=1'],
+        ['lobby', '/?mock=1'],
+        ['game', '/?mock=1&scene=yourTurn'],
+        ['crew', '/?mock=1&crew=k7m2q9xh3p'],
+      ];
+      const liveRows = [];
+      for (const [screen, url] of LIVE_SCREENS) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+        await cdp.send('Page.navigate', { url: `${origin}${url}` });
+        await cdp.until(`document.readyState === 'complete'`, { what: `load ${screen} for live-regions-rendered` });
+        liveRows.push({ screen, parsed: JSON.parse(await cdp.eval(liveProbe(screen))) });
+      }
+      const liveFailing = liveRows.filter((r) => !(r.parsed.valid === true && r.parsed.pass === true));
+      record('live-regions-rendered', `${LIVE_SCREENS.length} screens @390x844  `, liveFailing.length === 0,
+        liveRows.map((r) => r.parsed.valid
+          ? `${r.screen}[now=${r.parsed.rects['live-now']} polite=${r.parsed.rects['live-polite']} alert=${r.parsed.rects['live-alert']}]`
+          : `${r.screen}[INVALID: ${r.parsed.reason}]`).join(' ')
+        + (liveFailing.length ? ` FAILING: ${liveFailing.map((r) => r.screen + (r.parsed.valid ? ' (' + r.parsed.hidden.map((id) => id + ': ' + r.parsed.why[id].join(', ')).join('; ') + ')' : '')).join('; ')}` : ''));
     }
 
     // ---- capture every mock scene at every reference viewport ----------
@@ -839,7 +1204,7 @@ async function runCheck(a) {
   for (const [group, rs] of byGroup) {
     const fails = rs.filter((r) => !r.pass).length;
     if (fails) anyFail = true;
-    console.log(`${fails ? 'FAIL' : 'PASS'}  ${group.padEnd(16)}${rs.length - fails}/${rs.length} passed`);
+    console.log(`${fails ? 'FAIL' : 'PASS'}  ${group.padEnd(16)}${group.length >= 16 ? ' ' : ''}${rs.length - fails}/${rs.length} passed`);
   }
   if (hardError) {
     console.error(`\nHARD FAILURE (infra, not an assertion): ${hardError.message}`);

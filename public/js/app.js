@@ -17,6 +17,7 @@ import * as sound from './sound.js';
 import * as haptics from './haptics.js';
 import * as fx from './fx.js';
 import { pieResultText, sliceWord } from './share.js';
+import { getDevice, withDevice, readCrews, rememberCrew, forgetCrew, crewLink, CREW_ID } from './crews.js';
 
 /* ------------------------------------------------------------- constants */
 
@@ -198,6 +199,9 @@ const nodes = {};
  'wild-bar', 'wild-corner', 'wild-centre', 'wild-ghost', 'wild-grid',
  'hand-wrap', 'hand-row', 'fade-left', 'fade-right',
  'slice-chip', 'scoreboard', 'score-title', 'score-sub', 'score-rows', 'slice-pips', 'share-btn', 'score-share-msg',
+ 'crews-row', 'crews-list', 'crew-title', 'crew-sub', 'crew-rows', 'crew-recent', 'crew-name-field', 'crew-name-input',
+ 'crew-start', 'crew-view-msg', 'crew-home', 'crew-leave',
+ 'crew-save-btn', 'crew-picker', 'crew-picker-list', 'crew-new-name', 'crew-new-btn', 'crew-cancel-btn', 'crew-msg',
  'action-row', 'draw-btn', 'newround-btn', 'hold-btn', 'message', 'hint', 'game-leave', 'net-banner',
  'celebration',
 ].forEach((id) => { nodes[id] = el(id); });
@@ -284,13 +288,13 @@ const app = {
   seatNoteTimer: 0,
 };
 
-const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus });
+const conn = new Connection({ onMessage: handleMessage, onStatus: onNetStatus, getDevice });
 
 /* --------------------------------------------------------------- helpers */
 
 /* The heading of each screen, made focusable (`tabindex="-1"` in the markup)
    so there is somewhere real to put focus when a screen is swapped. */
-const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', game: 'game-title' };
+const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', crew: 'crew-title', game: 'game-title' };
 
 /**
  * Swap the visible screen — and take the keyboard with it.
@@ -306,7 +310,23 @@ const SCREEN_TITLE = { home: 'home-title', lobby: 'lobby-title', game: 'game-tit
  * behaviour off it.
  */
 function setScreen(name, opts) {
-  if (document.body.dataset.screen === name) return false;
+  const from = document.body.dataset.screen;
+  if (from === name) return false;
+  // The ONE place the crew view's state is cleared: whatever takes the player
+  // off this screen (the table's first snapshot after Start, Home, a refused
+  // rejoin, "Leave table" after a restored seat) takes `app.crewId` and `?crew=`
+  // with it. Nothing clears them at send time, so a refused create leaves both.
+  if (from === 'crew') leaveCrewView();
+  /* The assertive regions keep their last text, and now that they are rendered on
+     every screen that text is reachable in browse mode on home and lobby ("Your
+     turn. 4 playable." long after the table is gone). Cleared here, the one place
+     every move off the table passes through (leave, left, a refused rejoin).
+     #live-polite is NOT cleared: it carries the new screen's orientation line,
+     written below. */
+  if (from === 'game') {
+    nodes['live-alert'].textContent = '';
+    nodes['live-now'].textContent = '';
+  }
   document.body.dataset.screen = name;
   const title = document.getElementById(SCREEN_TITLE[name]);
   if (title) title.focus({ preventScroll: true });
@@ -320,7 +340,8 @@ function setScreen(name, opts) {
   const code = String(app.roomCode || '').toUpperCase();
   const line = name === 'home' ? 'Home.'
     : name === 'lobby' ? (code ? `Lobby for table ${code}.` : 'Lobby.')
-      : 'Game started.';
+      : name === 'crew' ? 'Crew.'
+        : 'Game started.';
   /* One arrival, one announcement. Arriving at the table and "Your turn" land
      in the SAME synchronous snapshot, and #live-now is role="alert"
      aria-live="assertive": it preempts the polite region, so the orientation
@@ -501,13 +522,13 @@ function sendAutoJoin() {
   app.autoJoin = '';
   const seat = conn.seatFor(code);
   app.rejoinAttempt = true;
-  const ok = conn.send({ type: 'joinRoom', code, name: app.name, token: seat ? seat.token : undefined });
+  const ok = conn.send(withDevice({ type: 'joinRoom', code, name: app.name, token: seat ? seat.token : undefined }));
   if (!ok) {
     // The socket went away between the status hook and here. Hand the player
     // the ordinary front door with the code already in the box.
     app.rejoinAttempt = false;
     revealHome();
-    nodes['home-msg'].textContent = 'Not connected — try again in a moment.';
+    homeSay('Not connected — try again in a moment.');
     return;
   }
   app.autoJoinWait = true;
@@ -518,7 +539,7 @@ function sendAutoJoin() {
     app.autoJoinTimer = 0;
     app.rejoinAttempt = false;
     revealHome();
-    nodes['home-msg'].textContent = 'That table did not answer — try again, or start a new one.';
+    homeSay('That table did not answer — try again, or start a new one.');
   }, AUTOJOIN_MS);
 }
 
@@ -535,7 +556,29 @@ function endAutoJoinWait() {
 function revealHome() {
   endAutoJoinWait();
   nodes['home-card'].hidden = false;
+  // The crews this device has been in can have changed since boot (a view that
+  // remembered one, a leave that forgot one): the row is rebuilt every time home returns.
+  renderCrewsRow();
   setScreen('home');
+}
+
+/* Says a line on a home card that this very tick put back on screen.
+   `revealHome()` takes `hidden` off the card and the caller writes #home-msg in
+   the same tick; a live region that becomes displayed together with its text is
+   often not announced, so the invite-refusal, timeout and not-connected paths
+   (card hidden while the join was in flight) say the line through #live-now as
+   well. Cleared now, written on the next tick, so a repeat of the same line is a
+   real mutation and the write is not clobbered by the focus move in the same
+   repaint (memory 2026-09-26-live-region-same-tick.md); it stands down if the
+   player has already left the home screen. Possible double speech where a screen
+   reader did catch #home-msg is accepted: a missed refusal is the worse failure. */
+function homeSay(text) {
+  nodes['home-msg'].textContent = text;
+  const live = nodes['live-now'];
+  live.textContent = '';
+  setTimeout(() => {
+    if (document.body.dataset.screen === 'home') live.textContent = text;
+  }, 0);
 }
 
 function names(snap) {
@@ -595,10 +638,12 @@ function handleMessage(msg, context) {
     app.quickPie = null;
     app.rejoinAttempt = false;
     revealHome();
-    nodes['home-msg'].textContent = msg.message || 'That seat is gone.';
+    homeSay(msg.message || 'That seat is gone.');
     return;
   }
   if (msg.type === 'joined') {
+    clearTimeout(app.crewStartTimer);   // answered: the screen change takes it from here
+    app.crewStartTimer = 0;
     app.roomCode = msg.roomCode;
     app.youId = msg.youId;
     app.rejoinAttempt = false;
@@ -625,18 +670,31 @@ function handleMessage(msg, context) {
   }
   if (msg.type === 'error') {
     const text = msg.message || 'That did not work.';
+    // A refused "Start a table" from the crew page: the crew screen is where the
+    // player is looking, so say it there (the other regions are on hidden screens).
+    if (document.body.dataset.screen === 'crew' && app.crewStarting) {
+      crewStartFailed(text);
+      return;
+    }
     // A shortcut into a table nobody is sitting at any more is not an error
     // the player did anything about; it is a dead end with a way out.
     const fromMemory = app.rejoinAttempt;
     app.rejoinAttempt = false;
     app.quickPie = null;
     if (fromMemory) revealHome();
-    nodes['home-msg'].textContent = (fromMemory && text === 'No table has that code.')
+    const homeText = (fromMemory && text === 'No table has that code.')
       ? 'That table has closed — start a new one.'
       : text;
+    // Just-revealed card (fromMemory): see homeSay. Otherwise #home-msg is already on screen and tracked.
+    if (fromMemory) homeSay(homeText); else nodes['home-msg'].textContent = homeText;
     nodes['lobby-msg'].textContent = text;
     setMessage(text, 'bad');
-    nodes['live-now'].textContent = text; // refusals are announced, not just shown
+    /* Refusals are announced, not just shown. #home-msg and #lobby-msg are live
+       regions of their own, so on those screens the line is already spoken once;
+       the assertive region would say it a second time. Everywhere else (the crew
+       page, the table) it is the only voice. */
+    const sc = document.body.dataset.screen;
+    if (!fromMemory && sc !== 'home' && sc !== 'lobby') nodes['live-now'].textContent = text;
   }
 }
 
@@ -1396,6 +1454,12 @@ function bootHome() {
   const code = (params.get('code') || '').trim().toUpperCase();
   if (code) nodes['code-input'].value = code;
   renderLastTable();
+  renderCrewsRow();
+  const crewParam = (params.get('crew') || '').trim().toLowerCase();
+  if (crewParam) {
+    if (CREW_ID.test(crewParam)) app.bootCrew = crewParam;
+    else nodes['home-msg'].textContent = 'That crew link is not right.';
+  }
   // A friend tapping an invite link has already told us the two things the
   // front door asks for. Only a ?code= on THIS load may do this — a
   // remembered table never seats you without a tap.
@@ -1418,7 +1482,7 @@ nodes['create-btn'].addEventListener('click', () => {
   const name = readName();
   if (!name) return;
   nodes['home-msg'].textContent = '';
-  send({ type: 'createRoom', name });
+  send(withDevice({ type: 'createRoom', name }));
 });
 
 /* One tap instead of create, add three bots, deal. No stats, no record, no
@@ -1426,7 +1490,7 @@ nodes['create-btn'].addEventListener('click', () => {
 function startQuickPie(name) {
   nodes['home-msg'].textContent = '';
   app.quickPie = 'creating';
-  if (!send({ type: 'createRoom', name })) app.quickPie = null;
+  if (!send(withDevice({ type: 'createRoom', name }))) app.quickPie = null;
 }
 
 nodes['quickpie-btn'].addEventListener('click', () => {
@@ -1458,7 +1522,7 @@ nodes['join-btn'].addEventListener('click', () => {
   nodes['home-msg'].textContent = '';
   const seat = conn.seatFor(code);
   app.rejoinAttempt = fromMemory;
-  if (!send({ type: 'joinRoom', code, name, token: seat ? seat.token : undefined })) app.rejoinAttempt = false;
+  if (!send(withDevice({ type: 'joinRoom', code, name, token: seat ? seat.token : undefined }))) app.rejoinAttempt = false;
 });
 
 /* Always an explicit tap: the row offers the table, it never takes it. */
@@ -1478,7 +1542,7 @@ nodes['rejoin-btn'].addEventListener('click', () => {
    polite live region — no second one is added. */
 const FORGET_IDLE = 'Forget this device';
 const FORGET_ARMED = 'Tap again to forget';
-const FORGET_WARN = 'This clears your name and your last table. It cannot be undone.';
+const FORGET_WARN = 'This clears your name and your last table, and your crews here. To take your name off a crew, leave it first. It cannot be undone.';
 const FORGET_DONE = 'Forgotten. Nothing about you is stored here now.';
 const FORGET_MS = 4000;
 let forgetTimer = 0;
@@ -1523,6 +1587,7 @@ nodes['forget-btn'].addEventListener('click', () => {
   nodes['name-input'].value = '';
   app.name = '';
   renderLastTable();
+  renderCrewsRow();
   nodes['home-msg'].textContent = FORGET_DONE;
 });
 
@@ -1531,6 +1596,294 @@ nodes['forget-btn'].addEventListener('click', () => {
 nodes['forget-btn'].addEventListener('blur', disarmForget);
 nodes['home-card'].addEventListener('click', (e) => {
   if (!nodes['forget-btn'].contains(e.target)) disarmForget();
+});
+
+/* ----------------------------------------------------------------- crews */
+
+const CREW_DOWN = "Can't reach the crew book right now — try again in a minute.";
+const CREW_GONE = 'That crew does not exist — the link may have been cut short.';
+const CREW_NAME_FIRST = 'Put a name on the ticket first.';
+const CREW_START_IDLE = 'Start a table';
+
+/* The shared live regions sit at the end of <body>, outside every .screen (they
+   used to live inside #screen-game, which is display:none on every other screen,
+   and a hidden subtree is not in the accessibility tree, so nothing written
+   there was read). The crew page therefore speaks through #live-polite like the
+   rest of the app. Cleared now, written on the next tick: a repeat of the same
+   line (a second empty Start) is a real mutation again, and a write that lands in
+   the same repaint as the focus move is not clobbered by it (memory
+   2026-09-26-live-region-same-tick.md).
+
+   The region is SHARED, so the deferred write is guarded both ways. It stands
+   down if the player has left the crew screen by the time it fires (the table's
+   first snapshot lands on 'game' and setScreen/renderGame have already put
+   "Game started." / the game log in this very region; a late crew line must not
+   overwrite them), and a newer crew line cancels an older pending one. */
+let crewAnnounceTimer = 0;
+function crewAnnounce(text) {
+  const live = nodes['live-polite'];
+  clearTimeout(crewAnnounceTimer);
+  live.textContent = '';
+  crewAnnounceTimer = setTimeout(() => {
+    crewAnnounceTimer = 0;
+    if (document.body.dataset.screen !== 'crew') return;
+    live.textContent = text;
+  }, 0);
+}
+
+/** A line the player can see AND hear. */
+function crewSay(text) {
+  nodes['crew-view-msg'].textContent = text;
+  crewAnnounce(text);
+}
+
+/** "Your crews" on the home card: up to three, newest first. */
+function renderCrewsRow() {
+  const list = readCrews().slice(0, 3);
+  nodes['crews-row'].hidden = list.length === 0;
+  const box = nodes['crews-list'];
+  box.textContent = '';
+  for (const c of list) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn btn-block';
+    b.textContent = c.name;
+    b.title = c.name;   // the button ellipsizes a long name; the full one is here
+    b.addEventListener('click', () => {
+      setCrewParam(c.id);
+      openCrewView(c.id);
+    });
+    box.appendChild(b);
+  }
+}
+
+function crewPlayerName(p) {
+  if (p.kind === 'former') return 'a former member';
+  if (p.kind === 'guest') return 'a guest';
+  return nicelyName(p.name);
+}
+
+function renderCrew(crew) {
+  app.crewData = crew;
+  // textContent, always: a crew's name is whatever its founder typed.
+  nodes['crew-title'].textContent = crew.name;
+  const n = crew.members.length;
+  nodes['crew-sub'].textContent = crew.pies
+    ? `${n} ${n === 1 ? 'member' : 'members'} · ${crew.pies} ${crew.pies === 1 ? 'pie' : 'pies'}`
+    : 'No pies yet — play one and save it.';
+  const rows = nodes['crew-rows'];
+  rows.textContent = '';
+  for (const m of crew.members) {
+    const li = document.createElement('li');
+    li.className = `crew-row${m.you ? ' is-you' : ''}`;
+    const name = document.createElement('span');
+    name.className = 'crew-row-name';
+    name.textContent = nicelyName(m.name);
+    const stat = document.createElement('span');
+    stat.className = 'crew-row-stat';
+    stat.textContent = `${m.wins} ${m.wins === 1 ? 'win' : 'wins'} · ${m.pies} ${m.pies === 1 ? 'pie' : 'pies'}`;
+    li.append(name, stat);
+    rows.appendChild(li);
+  }
+  const recent = nodes['crew-recent'];
+  recent.textContent = '';
+  for (const pie of crew.recent) {
+    const p = document.createElement('p');
+    p.className = 'crew-pie';
+    const when = new Date(pie.playedAt).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    p.append(`${when} — `);
+    pie.players.forEach((pl, i) => {
+      if (i) p.append(' · ');
+      const label = `${crewPlayerName(pl)} ${pl.points}`;
+      if (pl.won) { const b = document.createElement('b'); b.textContent = label; p.append(b); } else p.append(label);
+    });
+    recent.appendChild(p);
+  }
+  const you = crew.members.some((m) => m.you);
+  if (you) rememberCrew({ id: crew.id, name: crew.name });
+  nodes['crew-leave'].hidden = !you;
+  let stored = '';
+  try { stored = localStorage.getItem('tondo.name') || ''; } catch { /* ignore */ }
+  nodes['crew-name-field'].hidden = Boolean(stored);
+  nodes['crew-start'].disabled = false;
+}
+
+let crewReq = 0;
+
+/**
+ * Opens the crew page and fetches the book. `refresh` re-reads it in place
+ * (after leaving) without blanking the page or disabling Start, so the
+ * control focus is standing on is never taken away mid-flight. Resolves true
+ * when the book was rendered.
+ */
+async function openCrewView(id, opts) {
+  const refresh = !!(opts && opts.refresh);
+  const req = ++crewReq;
+  app.crewId = id;
+  setScreen('crew');
+  if (!refresh) {
+    disarmCrewLeave();
+    nodes['crew-title'].textContent = 'Your crew';
+    nodes['crew-sub'].textContent = 'Opening the crew book…';
+    nodes['crew-rows'].textContent = '';
+    nodes['crew-recent'].textContent = '';
+    nodes['crew-leave'].hidden = true;
+    nodes['crew-start'].disabled = true;
+    nodes['crew-view-msg'].textContent = '';
+    nodes['crew-name-input'].removeAttribute('aria-invalid');
+  }
+  let res = null;
+  try { res = await fetch(`/api/crew/${id}`, { headers: { 'X-Tondo-Device': getDevice() } }); } catch { res = null; }
+  if (req !== crewReq || app.crewId !== id) return false; // the player moved on while this was in flight
+  if (res && res.status === 404) {
+    forgetCrew(id);
+    nodes['crew-sub'].textContent = CREW_GONE;
+    nodes['crew-leave'].hidden = true;
+    nodes['crew-start'].disabled = true;
+    crewAnnounce(CREW_GONE);
+    return false;
+  }
+  const crew = res && res.ok ? await res.json().catch(() => null) : null;
+  if (req !== crewReq || app.crewId !== id) return false;
+  if (!crew) {
+    if (refresh) { nodes['crew-leave'].hidden = true; return false; } // the page stays as it was
+    nodes['crew-sub'].textContent = CREW_DOWN;
+    crewAnnounce(CREW_DOWN);
+    return false;
+  }
+  renderCrew(crew);
+  if (!refresh) {
+    const n = crew.members.length;
+    crewAnnounce(crew.pies
+      ? `${crew.name}: ${n} ${n === 1 ? 'member' : 'members'}, ${crew.pies} ${crew.pies === 1 ? 'pie' : 'pies'}.`
+      : `${crew.name}: no pies yet.`);
+  }
+  return true;
+}
+
+/** Sets or clears only `crew` in the address bar; every other param stays (mock mode lives in `?mock=1`). */
+function setCrewParam(id) {
+  const q = new URLSearchParams(location.search);
+  if (id) q.set('crew', id); else q.delete('crew');
+  const qs = q.toString();
+  history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : ''));
+}
+
+/** Called from setScreen when the player leaves the crew screen, and from Home. */
+function leaveCrewView() {
+  app.crewId = null;
+  app.crewStarting = false;
+  clearTimeout(app.crewStartTimer);
+  app.crewStartTimer = 0;
+  nodes['crew-start'].textContent = CREW_START_IDLE;
+  disarmCrewLeave();
+  setCrewParam(null);
+}
+
+/** A create that was refused, or never answered: the page is as it was, and says why. */
+function crewStartFailed(text) {
+  app.crewStarting = false;
+  clearTimeout(app.crewStartTimer);
+  app.crewStartTimer = 0;
+  nodes['crew-start'].disabled = false;
+  nodes['crew-start'].textContent = CREW_START_IDLE;
+  crewSay(text);
+}
+
+nodes['crew-home'].addEventListener('click', () => {
+  revealHome();
+});
+
+nodes['crew-start'].addEventListener('click', () => {
+  const id = app.crewId;
+  if (!id || app.crewStarting) return;
+  let name = '';
+  try { name = localStorage.getItem('tondo.name') || ''; } catch { /* ignore */ }
+  if (!name) {
+    name = (nodes['crew-name-input'].value || '').trim().slice(0, 14);
+    if (!name) {
+      crewSay(CREW_NAME_FIRST);
+      nodes['crew-name-input'].setAttribute('aria-invalid', 'true');
+      nodes['crew-name-input'].focus();
+      return;
+    }
+    try { localStorage.setItem('tondo.name', name); } catch { /* ignore */ }
+  }
+  app.name = name;
+  if (!send(withDevice({ type: 'createRoom', name, crewId: id }))) {
+    crewSay('Not connected — try again in a moment.');
+    return;
+  }
+  // Neither the crew id nor `?crew=` is touched here: a refused or dropped create
+  // must leave the page able to try again (and to be reloaded). The `joined` reply
+  // and the snapshot that follows it move the screen on, and setScreen clears them.
+  app.crewStarting = true;
+  nodes['crew-start'].disabled = true;
+  nodes['crew-start'].textContent = 'Starting…';
+  nodes['crew-view-msg'].textContent = '';
+  clearTimeout(app.crewStartTimer);
+  app.crewStartTimer = setTimeout(() => {
+    app.crewStartTimer = 0;
+    if (app.crewStarting && document.body.dataset.screen === 'crew') crewStartFailed('That did not go through — try again.');
+  }, AUTOJOIN_MS);
+});
+
+nodes['crew-name-input'].addEventListener('input', () => {
+  nodes['crew-name-input'].removeAttribute('aria-invalid');
+  if (nodes['crew-view-msg'].textContent === CREW_NAME_FIRST) nodes['crew-view-msg'].textContent = '';
+});
+nodes['crew-name-input'].addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) nodes['crew-start'].click();
+});
+
+/* Two taps on one button, like Forget this device: leaving cannot be undone
+   from this screen (the crew link brings you back as a new member). The armed
+   state is announced, not only relabelled, and puts itself away after
+   FORGET_MS or as soon as focus moves on. */
+const CREW_LEAVE_IDLE = 'Leave this crew';
+let crewLeaveTimer = 0;
+let crewLeaving = false;
+
+function disarmCrewLeave() {
+  if (!crewLeaveTimer) return;
+  clearTimeout(crewLeaveTimer);
+  crewLeaveTimer = 0;
+  nodes['crew-leave'].textContent = CREW_LEAVE_IDLE;
+}
+
+nodes['crew-leave'].addEventListener('blur', disarmCrewLeave);
+nodes['crew-leave'].addEventListener('click', async () => {
+  const btn = nodes['crew-leave'];
+  if (crewLeaving) return;
+  if (!crewLeaveTimer) {
+    btn.textContent = 'Tap again to leave';
+    crewLeaveTimer = setTimeout(disarmCrewLeave, FORGET_MS);
+    crewAnnounce('Tap again to leave the crew.');
+    return;
+  }
+  disarmCrewLeave();
+  const id = app.crewId;
+  if (!id) return;
+  crewLeaving = true;
+  let ok = false;
+  try {
+    const r = await fetch(`/api/crew/${id}/leave`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device: getDevice() }),
+    });
+    ok = r.status === 204;
+  } catch { ok = false; }
+  crewLeaving = false;
+  // The server has the leave whether or not the player is still looking: this
+  // device forgets the crew either way (Home mid-request must not keep it listed).
+  if (ok) { forgetCrew(id); renderCrewsRow(); }   // home may already be showing the old row
+  if (app.crewId !== id) return;
+  if (!ok) { crewSay(CREW_DOWN); return; }
+  await openCrewView(id, { refresh: true });
+  if (app.crewId !== id) return;
+  btn.hidden = true; // whatever the refresh said, this device has left
+  crewSay('You left the crew.');
+  // The Leave button just went away and took focus to <body> with it.
+  (nodes['crew-start'].disabled ? nodes['crew-home'] : nodes['crew-start']).focus();
 });
 
 nodes['code-input'].addEventListener('keydown', (e) => { if (e.key === 'Enter') nodes['join-btn'].click(); });
@@ -1714,6 +2067,144 @@ function hideShareBtn() {
   setText(nodes['score-share-msg'], '');
 }
 
+/* Save to crew. `crewPickerOpen` keeps the picker standing across snapshots
+   (one arrives every time anyone at the table does anything); `crewSavedSaid`
+   makes "Saved to …" announce once per pie, not once per snapshot. */
+function renderCrewSave(snap, over) {
+  // Whatever held focus inside the Save button or the picker may be about to
+  // be hidden (one-tap save, a chip, another seat's save arriving while this
+  // seat's picker is open): a hidden element drops focus to <body>, and a
+  // keyboard or screen-reader user is then back at the top of the page.
+  const had = document.activeElement;
+  const inCrew = !!had && (had === nodes['crew-save-btn'] || nodes['crew-picker'].contains(had));
+  paintCrewSave(snap, over);
+  if (inCrew && had.getClientRects().length === 0) crewFocusFallback();
+}
+
+/* Where focus lands when the control it was on goes away: Copy result if it is
+   on screen (the next thing worth doing with a finished pie), else New pie,
+   else wherever it already is. */
+function crewFocusFallback() {
+  for (const id of ['share-btn', 'newround-btn']) {
+    const e = nodes[id];
+    if (e && !e.hidden && !e.disabled && e.getClientRects().length) { e.focus(); return; }
+  }
+}
+
+function paintCrewSave(snap, over) {
+  const m = snap && snap.match;
+  const btn = nodes['crew-save-btn'];
+  const show = !!m && over && m.complete && snap.crews === 'on';
+  // While the picker is open it takes the room of the pips and Copy result
+  // too (CSS, `.is-picking`): the picker is ~100px taller than the button it
+  // replaces, and at 390x844 nothing scrolls, so New pie would go below the
+  // fold. Copy result is better after the save anyway: it then carries the
+  // crew link.
+  const picking = show && !m.savedTo && !!app.crewPickerOpen;
+  nodes.scoreboard.classList.toggle('is-picking', picking);
+  if (!show) {
+    btn.hidden = true;
+    nodes['crew-picker'].hidden = true;
+    app.crewPickerOpen = false;
+    app.crewSavedSaid = false;
+    app.crewSavingSaid = false;
+    setText(nodes['crew-msg'], '');
+    return;
+  }
+  if (m.savedTo) {
+    btn.hidden = true;
+    nodes['crew-picker'].hidden = true;
+    app.crewPickerOpen = false;
+    setText(nodes['crew-msg'], `Saved to ${m.savedTo.name}`);
+    if (!app.crewSavedSaid) {
+      app.crewSavedSaid = true;
+      app.crewSavingSaid = false;
+      rememberCrew(m.savedTo);   // first sight only: a snapshot arrives on every move at the table
+      // After this repaint, not during it: renderGame writes the same live
+      // region later in the same pass (memory 2026-09-26-live-region-same-tick.md).
+      setTimeout(() => announce(`Saved to ${m.savedTo.name}.`), 0);
+    }
+    return;
+  }
+  nodes['crew-picker'].hidden = !picking;
+  btn.hidden = picking;
+  btn.disabled = !!m.saving;
+  if (m.saving && !app.crewSavingSaid) {
+    app.crewSavingSaid = true;
+    setTimeout(() => announce('Saving…'), 0);   // after this repaint, as for "Saved to"
+  } else if (!m.saving) app.crewSavingSaid = false;
+  btn.textContent = m.saving ? 'Saving…' : (snap.crew ? `Save to ${snap.crew.name}` : 'Save to crew');
+}
+
+function openCrewPicker() {
+  const list = nodes['crew-picker-list'];
+  list.textContent = '';
+  for (const c of readCrews().slice(0, 3)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn';
+    b.textContent = c.name;
+    b.title = c.name;   // the chip ellipsizes a long name; the full one is here
+    b.addEventListener('click', () => {
+      if (send({ type: 'saveToCrew', crewId: c.id })) { app.crewPickerOpen = false; renderCrewSave(app.snap, true); }
+    });
+    list.appendChild(b);
+  }
+  // Always "Our crew": a crew's name is never erased by Leave, so the founder's
+  // name must not be baked into it (spec section 3).
+  nodes['crew-new-name'].value = 'Our crew';
+  nodes['crew-new-name'].removeAttribute('aria-invalid');
+  app.crewPickerOpen = true;
+  setText(nodes['crew-msg'], '');
+  // paint, not renderCrewSave: the button this focus came from is meant to go,
+  // and focus is handed straight to the picker, not to the fallback.
+  paintCrewSave(app.snap, true);
+  // With remembered crews the first chip takes focus: the name field would
+  // raise the phone keyboard over the chips. No crews, no chips: the field.
+  const first = list.firstElementChild;
+  (first || nodes['crew-new-name']).focus();
+}
+
+nodes['crew-save-btn'].addEventListener('click', () => {
+  const s = app.snap;
+  if (!s || !s.match || !s.match.complete) return;
+  if (s.crew) { send({ type: 'saveToCrew', crewId: s.crew.id }); return; }
+  openCrewPicker();
+});
+
+nodes['crew-new-btn'].addEventListener('click', () => {
+  const field = nodes['crew-new-name'];
+  const name = field.value.replace(/\s+/g, ' ').trim();
+  if (!name) {
+    setText(nodes['crew-msg'], 'Give the crew a name.');
+    announce('Give the crew a name.');
+    field.setAttribute('aria-invalid', 'true');
+    field.focus();
+    return;
+  }
+  field.removeAttribute('aria-invalid');
+  if (send({ type: 'saveToCrew', newCrewName: name })) { app.crewPickerOpen = false; renderCrewSave(app.snap, true); }
+});
+nodes['crew-new-name'].addEventListener('input', () => nodes['crew-new-name'].removeAttribute('aria-invalid'));
+nodes['crew-new-name'].addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) nodes['crew-new-btn'].click();
+});
+// Escape closes the picker from anywhere inside it (a chip, "Not now", the
+// field). preventDefault is the claim the document-level Escape handler honours
+// (`defaultPrevented`), so it stands down instead of cancelling a half-chosen Wild.
+nodes['crew-picker'].addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  e.preventDefault();
+  nodes['crew-cancel-btn'].click();
+});
+nodes['crew-cancel-btn'].addEventListener('click', () => {
+  app.crewPickerOpen = false;
+  nodes['crew-new-name'].removeAttribute('aria-invalid');
+  setText(nodes['crew-msg'], '');
+  renderCrewSave(app.snap, true);
+  if (!nodes['crew-save-btn'].hidden && !nodes['crew-save-btn'].disabled) nodes['crew-save-btn'].focus();
+});
+
 /**
  * `navigator.clipboard` is undefined outside a secure context — and Tondo is
  * a LAN game people open at `http://192.168.x.x` from another phone, which is
@@ -1738,7 +2229,8 @@ nodes['share-btn'].addEventListener('click', async () => {
   const m = app.snap && app.snap.match;
   if (!m) return;
   const origin = location.origin + location.pathname.replace(/index\.html$/, '');
-  const text = pieResultText(m, { origin, resolveName: playerName });
+  const crewUrl = m.savedTo ? crewLink(origin, m.savedTo.id) : '';
+  const text = pieResultText(m, { origin, resolveName: playerName, crewUrl });
   if (!text) return;
   const copied = await copyToClipboard(text);
   if (shareFallbackEl) { shareFallbackEl.remove(); shareFallbackEl = null; }
@@ -1761,7 +2253,8 @@ nodes['share-btn'].addEventListener('click', async () => {
   ta.rows = 3;
   ta.value = text;
   ta.setAttribute('aria-label', 'Pie result — select and copy');
-  nodes['share-btn'].insertAdjacentElement('afterend', ta);
+  // After the row that holds Copy result and Save to crew, not inside it.
+  nodes['share-btn'].parentElement.insertAdjacentElement('afterend', ta);
   ta.focus();
   // setSelectionRange, not select(): the durable idiom on the one platform
   // this fallback exists for (a non-secure-context LAN game opened on a
@@ -2217,6 +2710,7 @@ function standingClause(m, youId) {
 
 function renderMatch(snap, over) {
   const m = snap.match;
+  renderCrewSave(snap, over);
   const chip = nodes['slice-chip'];
   const board = nodes.scoreboard;
   if (!m) { chip.hidden = true; board.hidden = true; hideShareBtn(); return; }
@@ -3717,6 +4211,7 @@ nodes['hold-btn'].addEventListener('click', () => {
 
 bootHome();
 setScreen('home');
+if (app.bootCrew) openCrewView(app.bootCrew);
 
 /* A reload is a drop that lost its variables: arm the seat first, then dial. */
 let room = '';

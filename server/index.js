@@ -13,7 +13,12 @@ const game = require('./game');
 const bot = require('./bot');
 const { RoomManager } = require('./rooms');
 const { Assets } = require('./assets');
-const { SocketLimits, maxSocketsPerIp } = require('./limits');
+const { SocketLimits, maxSocketsPerIp, createIpBudgets, budgetKey } = require('./limits');
+const { clientIpFrom } = require('./clientip');
+const db = require('./db');
+const crews = require('./crews');
+const crewHttp = require('./crew-http');
+const crewActions = require('./crew-actions');
 
 const PORT = Number(process.env.PORT) || 4600;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -28,8 +33,9 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-const manager = new RoomManager();
+const manager = new RoomManager({ crewsStatus: () => db.publicStatus() });
 const assets = new Assets(PUBLIC_DIR);
+const budgets = createIpBudgets();
 
 /* The design reference (`_ref.html`, 1.7MB) and the concept pages are working
    material, not the product. They stay reachable while developing and are 404
@@ -100,8 +106,17 @@ function serveStatic(req, res) {
 const server = http.createServer((req, res) => {
   try {
     if (req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, rooms: manager.rooms.size }));
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      // Never queries the database: the host polls this, and a poll that woke
+      // Neon every few minutes would spend its free compute hours (spec §4.2).
+      res.end(JSON.stringify({ ok: true, rooms: manager.rooms.size, crews: db.state() }));
+      return;
+    }
+    if (crewHttp.matches(req.url)) {
+      crewHttp.handle(req, res, { ip: clientIp(req), budgets }).catch((err) => {
+        console.error('[crews] http failed:', err && err.message);
+        if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"error":"server"}'); }
+      });
       return;
     }
     serveStatic(req, res);
@@ -113,10 +128,10 @@ const server = http.createServer((req, res) => {
 });
 
 /** The peer address, with IPv4-mapped IPv6 folded onto the plain form so
- *  127.0.0.1 and ::ffff:127.0.0.1 count as the same household. */
+ *  127.0.0.1 and ::ffff:127.0.0.1 count as the same household. Behind a
+ *  proxy, see server/clientip.js. */
 function clientIp(req) {
-  const raw = (req && req.socket && req.socket.remoteAddress) || '';
-  return String(raw).replace(/^::ffff:/, '');
+  return clientIpFrom(req);
 }
 
 /**
@@ -158,8 +173,11 @@ function originAllowed(req) {
  * yielded exactly 32 open sockets and 1,168 refusals.
  */
 function socketsFromIp(ip) {
+  // Counted per budgetKey, not per full address: an IPv6 /64 is one household
+  // (or one attacker), and 32 sockets each from 2^64 addresses is no cap at all.
+  const key = budgetKey(ip);
   let n = 0;
-  for (const client of wss.clients) if (client.tondoIp === ip) n += 1;
+  for (const client of wss.clients) if (budgetKey(client.tondoIp) === key) n += 1;
   return n;
 }
 
@@ -167,17 +185,23 @@ function socketsFromIp(ip) {
 const wss = new WebSocketServer({
   server,
   maxPayload: 16 * 1024,
-  verifyClient: (info) => {
+  verifyClient: (info, done) => {
     if (!originAllowed(info.req)) {
       console.warn(`[tondo] upgrade refused: Origin ${info.req.headers.origin} != Host ${info.req.headers.host}`);
-      return false;
+      return done(false, 401);
     }
     const ip = clientIp(info.req);
+    // Attempts are budgeted before the socket cap is judged, so a refused
+    // attempt costs the same as an admitted one.
+    if (!budgets.connect.take(ip)) {
+      console.warn(`[tondo] upgrade refused: ${ip} is reconnecting too fast`);
+      return done(false, 429);
+    }
     if (socketsFromIp(ip) >= maxSocketsPerIp()) {
       console.warn(`[tondo] upgrade refused: ${ip} already holds ${maxSocketsPerIp()} sockets`);
-      return false;
+      return done(false, 401);
     }
-    return true;
+    return done(true);
   },
 });
 
@@ -197,10 +221,11 @@ function refuse(socket, room, seatId, message) {
 }
 
 wss.on('connection', (socket, req) => {
-  // Every budget this connection has. Per socket, never per IP: four friends on
-  // one phone network must not share a message allowance.
-  const session = { room: null, seatId: null, limits: new SocketLimits() };
-  socket.tondoIp = clientIp(req);
+  // Every budget this connection has. Message rate and table creation are per
+  // socket: four friends on one phone network must not share a message
+  // allowance. Wrong codes and connection attempts are per address (`budgets`).
+  const session = { room: null, seatId: null, limits: new SocketLimits(), ip: clientIp(req) };
+  socket.tondoIp = session.ip;
 
   socket.isAlive = true;
   socket.on('pong', () => { socket.isAlive = true; });
@@ -265,23 +290,25 @@ function handleMessage(socket, session, message) {
     if (message.type === 'createRoom' && !limits.canCreateRoom()) {
       return sendError(socket, 'You have opened enough tables. Join one instead.');
     }
-    /* Wrong codes are rationed, which is what ends a sweep of the code space —
-       and the refusal is deliberately the same whatever the code was, so it
-       tells an attacker nothing a silent drop would not. */
-    if (message.type === 'joinRoom' && !limits.canTryJoin()) {
+    /* Wrong codes are rationed per address, so a reconnect does not refill the
+       ration, which is what ends a sweep of the code space — and the refusal
+       is deliberately the same whatever the code was, so it tells an attacker
+       nothing a silent drop would not. */
+    if (message.type === 'joinRoom' && !budgets.joinFail.allow(session.ip)) {
       return sendError(socket, 'Too many wrong table codes. Wait a moment and try again.');
     }
 
     // The new table is granted BEFORE the old seat is torn down: a bad code
     // or a full house must not leave the sender seatless.
+    const deviceHash = crews.hashDevice(message.device);
     const result = message.type === 'createRoom'
-      ? manager.createRoom(message.name, socket)
-      : manager.joinRoom(message.code, message.name, socket, message.token);
+      ? manager.createRoom(message.name, socket, { deviceHash })
+      : manager.joinRoom(message.code, message.name, socket, message.token, { deviceHash });
 
     if (!result.ok) {
       // Any failed join costs a token, not only "no such code": "that round is
       // being played" is just as good an oracle for "this table exists".
-      if (message.type === 'joinRoom') limits.countJoinFailure();
+      if (message.type === 'joinRoom') budgets.joinFail.spend(session.ip);
       return sendError(socket, result.error);
     }
     if (message.type === 'createRoom') limits.countRoomCreated();
@@ -301,6 +328,20 @@ function handleMessage(socket, session, message) {
       reconnected: Boolean(result.reconnected),
     });
     result.room.broadcast();
+
+    if (message.type === 'createRoom' && crews.validCrewId(message.crewId) && db.publicStatus() === 'on') {
+      const room = result.room;
+      const crewId = message.crewId;
+      // Looked up off the hot path: the table opens at once, and gains its
+      // crew a moment later (or never, if the crew is gone or the book is down).
+      // It spends the crew-read budget like any other read; over it, the table
+      // simply opens without its crew.
+      if (budgets.crewRead.take(session.ip)) {
+        crews.crewName(crewId).then((name) => {
+          if (name && !room.crew) { room.crew = { id: crewId, name }; room.broadcast(); }
+        }).catch((err) => console.error('[crews] crew lookup follow-up failed:', err && err.message));
+      }
+    }
     return;
   }
 
@@ -376,6 +417,18 @@ function handleMessage(socket, session, message) {
       break;
     }
 
+    case 'saveToCrew': {
+      const out = crewActions.saveToCrew({ room, seat, message, ip: session.ip, budgets });
+      if (out.refuse) return refuse(socket, room, seatId, out.refuse);
+      if (out.started) {
+        out.started.then((r) => {
+          room.broadcast();
+          if (!r.ok) sendError(socket, r.message);
+        }).catch((err) => console.error('[crews] save follow-up failed:', err && err.message));
+      }
+      break; // the broadcast below shows `saving: true` at once
+    }
+
     case 'sync':
       send(socket, room.snapshotFor(seatId));
       return;
@@ -433,12 +486,14 @@ try {
 server.listen(PORT, () => {
   console.log(`\n  Tondo is open. http://localhost:${PORT}\n`);
 });
+db.start(); // never rejects; crews come up (or report why not) in the background
 
 function shutdown() {
   clearInterval(heartbeat);
   manager.stop();
+  const dbClosed = db.stop(); // never rejects; ends the pool so Postgres sees a clean goodbye
   for (const socket of wss.clients) socket.close();
-  server.close(() => process.exit(0));
+  server.close(() => dbClosed.finally(() => process.exit(0)));
   setTimeout(() => process.exit(0), 2000).unref();
 }
 
