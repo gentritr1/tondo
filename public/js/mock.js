@@ -450,6 +450,8 @@ function route(msg) {
       return;
 
     case 'joinRoom':
+      // `?mockrefusejoin=1` refuses a join the way the server does for an unknown code.
+      if (new URLSearchParams(location.search).has('mockrefusejoin')) { emit({ type: 'error', message: 'No table has that code.' }); return; }
       table.name = msg.name || 'You';
       table.seats = [{ id: 'p1', name: table.name, isBot: false, connected: true }];
       fullTable();

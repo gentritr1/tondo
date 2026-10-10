@@ -317,6 +317,16 @@ function setScreen(name, opts) {
   // rejoin, "Leave table" after a restored seat) takes `app.crewId` and `?crew=`
   // with it. Nothing clears them at send time, so a refused create leaves both.
   if (from === 'crew') leaveCrewView();
+  /* The assertive regions keep their last text, and now that they are rendered on
+     every screen that text is reachable in browse mode on home and lobby ("Your
+     turn. 4 playable." long after the table is gone). Cleared here, the one place
+     every move off the table passes through (leave, left, a refused rejoin).
+     #live-polite is NOT cleared: it carries the new screen's orientation line,
+     written below. */
+  if (from === 'game') {
+    nodes['live-alert'].textContent = '';
+    nodes['live-now'].textContent = '';
+  }
   document.body.dataset.screen = name;
   const title = document.getElementById(SCREEN_TITLE[name]);
   if (title) title.focus({ preventScroll: true });
@@ -518,7 +528,7 @@ function sendAutoJoin() {
     // the ordinary front door with the code already in the box.
     app.rejoinAttempt = false;
     revealHome();
-    nodes['home-msg'].textContent = 'Not connected — try again in a moment.';
+    homeSay('Not connected — try again in a moment.');
     return;
   }
   app.autoJoinWait = true;
@@ -529,7 +539,7 @@ function sendAutoJoin() {
     app.autoJoinTimer = 0;
     app.rejoinAttempt = false;
     revealHome();
-    nodes['home-msg'].textContent = 'That table did not answer — try again, or start a new one.';
+    homeSay('That table did not answer — try again, or start a new one.');
   }, AUTOJOIN_MS);
 }
 
@@ -550,6 +560,25 @@ function revealHome() {
   // remembered one, a leave that forgot one): the row is rebuilt every time home returns.
   renderCrewsRow();
   setScreen('home');
+}
+
+/* Says a line on a home card that this very tick put back on screen.
+   `revealHome()` takes `hidden` off the card and the caller writes #home-msg in
+   the same tick; a live region that becomes displayed together with its text is
+   often not announced, so the invite-refusal, timeout and not-connected paths
+   (card hidden while the join was in flight) say the line through #live-now as
+   well. Cleared now, written on the next tick, so a repeat of the same line is a
+   real mutation and the write is not clobbered by the focus move in the same
+   repaint (memory 2026-09-26-live-region-same-tick.md); it stands down if the
+   player has already left the home screen. Possible double speech where a screen
+   reader did catch #home-msg is accepted: a missed refusal is the worse failure. */
+function homeSay(text) {
+  nodes['home-msg'].textContent = text;
+  const live = nodes['live-now'];
+  live.textContent = '';
+  setTimeout(() => {
+    if (document.body.dataset.screen === 'home') live.textContent = text;
+  }, 0);
 }
 
 function names(snap) {
@@ -609,7 +638,7 @@ function handleMessage(msg, context) {
     app.quickPie = null;
     app.rejoinAttempt = false;
     revealHome();
-    nodes['home-msg'].textContent = msg.message || 'That seat is gone.';
+    homeSay(msg.message || 'That seat is gone.');
     return;
   }
   if (msg.type === 'joined') {
@@ -653,9 +682,11 @@ function handleMessage(msg, context) {
     app.rejoinAttempt = false;
     app.quickPie = null;
     if (fromMemory) revealHome();
-    nodes['home-msg'].textContent = (fromMemory && text === 'No table has that code.')
+    const homeText = (fromMemory && text === 'No table has that code.')
       ? 'That table has closed — start a new one.'
       : text;
+    // Just-revealed card (fromMemory): see homeSay. Otherwise #home-msg is already on screen and tracked.
+    if (fromMemory) homeSay(homeText); else nodes['home-msg'].textContent = homeText;
     nodes['lobby-msg'].textContent = text;
     setMessage(text, 'bad');
     /* Refusals are announced, not just shown. #home-msg and #lobby-msg are live
@@ -663,7 +694,7 @@ function handleMessage(msg, context) {
        the assertive region would say it a second time. Everywhere else (the crew
        page, the table) it is the only voice. */
     const sc = document.body.dataset.screen;
-    if (sc !== 'home' && sc !== 'lobby') nodes['live-now'].textContent = text;
+    if (!fromMemory && sc !== 'home' && sc !== 'lobby') nodes['live-now'].textContent = text;
   }
 }
 

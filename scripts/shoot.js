@@ -108,20 +108,28 @@
  *                                   overlaps here before). Captures go to
  *                                   `.superpowers/qa-crew/`, not qa-latest.
  *                   live-regions-rendered
- *                                   #live-now, #live-polite and #live-alert each
- *                                   have `getClientRects().length > 0` on the
- *                                   home, lobby, game (`mock yourTurn`) and crew
- *                                   (`/?mock=1&crew=k7m2q9xh3p`) screens. A
- *                                   live region inside a display:none subtree is
- *                                   not in the accessibility tree and announces
- *                                   nothing; they used to sit in #screen-game,
- *                                   so every line said on any other screen was
- *                                   silent, and `.sr-only` (a 1px clip) is what
- *                                   keeps them rendered. INVALID, so a FAIL with
- *                                   the reason, unless the page reaches the
- *                                   expected `body[data-screen]` and every one
- *                                   of the three elements exists: a missing
- *                                   element or the wrong screen never passes.
+ *                                   #live-now, #live-polite and #live-alert are
+ *                                   rendered and not hidden from assistive tech
+ *                                   by anything the page controls, on the home,
+ *                                   lobby, game (`mock yourTurn`) and crew
+ *                                   (`/?mock=1&crew=k7m2q9xh3p`) screens. Each
+ *                                   needs `getClientRects().length > 0`,
+ *                                   computed `visibility: visible`, no ancestor
+ *                                   (or itself) matching `[aria-hidden="true"],
+ *                                   [inert], [hidden]`, and its expected
+ *                                   `role`/`aria-live` (status/polite for
+ *                                   polite, alert/assertive for the other two).
+ *                                   A live region inside a display:none subtree
+ *                                   has no box and announces nothing; they used
+ *                                   to sit in #screen-game, so every line said
+ *                                   on any other screen was silent, and
+ *                                   `.sr-only` (a 1px clip) keeps them rendered.
+ *                                   INVALID, so a FAIL with the reason, unless
+ *                                   the page reaches the expected
+ *                                   `body[data-screen]` and every one of the
+ *                                   three elements exists. This proves the
+ *                                   regions are exposed, NOT that a screen
+ *                                   reader speaks them: that is a device check.
  *                   seat-plaque-gap scripts/probes/seat-plaque-gap.js
  *                                   `pass: true` across the desktop/tablet
  *                                   widths it was written for.
@@ -1029,18 +1037,23 @@ async function runCheck(a) {
     }
 
     // ---- live-regions-rendered ------------------------------------------
-    // The shared live regions must have a rendered box on EVERY screen. A region
+    // The shared live regions must be exposed on EVERY screen: a box (a region
     // inside a display:none subtree has no client rects and announces nothing,
-    // which is exactly where they used to be (#screen-game). Each screen is
-    // reached for real (the lobby by pressing Create table on the mock) and the
-    // probe is INVALID unless the expected screen is showing and all three
-    // elements exist, so a missing element or a screen that never arrives is a
-    // FAIL with its reason, not a pass against nothing.
+    // which is exactly where they used to be, in #screen-game), computed
+    // visibility, no aria-hidden / inert / hidden on itself or an ancestor, and
+    // the role / aria-live they are meant to have. Each screen is reached for real
+    // (the lobby by pressing Create table on the mock) and the probe is INVALID
+    // unless the expected screen is showing and all three elements exist, so a
+    // missing element or a screen that never arrives is a FAIL with its reason,
+    // not a pass against nothing. What this cannot see is whether a screen reader
+    // actually speaks a mutation; that stays a device check.
     {
       const LIVE_IDS = ['live-now', 'live-polite', 'live-alert'];
+      const LIVE_EXPECT = { 'live-now': ['alert', 'assertive'], 'live-alert': ['alert', 'assertive'], 'live-polite': ['status', 'polite'] };
       const liveProbe = (screen) => `(async () => {
         const want = ${JSON.stringify(screen)};
         const ids = ${JSON.stringify(LIVE_IDS)};
+        const expect = ${JSON.stringify(LIVE_EXPECT)};
         const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         const t0 = Date.now();
         while (document.body.dataset.screen !== want && Date.now() - t0 < 10000) {
@@ -1061,8 +1074,23 @@ async function runCheck(a) {
           rects[id] = el.getClientRects().length;
         }
         if (missing.length) return JSON.stringify({ valid: false, reason: 'missing element(s): ' + missing.join(', ') });
-        const hidden = ids.filter((id) => !(rects[id] > 0));
-        return JSON.stringify({ valid: true, screen: got, rects, hidden, pass: hidden.length === 0 });
+        // Each region's reasons for not being exposed (empty list = exposed).
+        const why = {};
+        for (const id of ids) {
+          const el = document.getElementById(id);
+          const r = [];
+          if (!(rects[id] > 0)) r.push('no rendered box');
+          const vis = getComputedStyle(el).visibility;
+          if (vis !== 'visible') r.push('visibility:' + vis);
+          const blocker = el.closest('[aria-hidden="true"], [inert], [hidden]');
+          if (blocker) r.push('inside ' + (blocker === el ? 'itself' : '#' + (blocker.id || blocker.tagName.toLowerCase())) + ' [aria-hidden/inert/hidden]');
+          const [role, live] = expect[id];
+          if (el.getAttribute('role') !== role) r.push('role=' + el.getAttribute('role') + ' (want ' + role + ')');
+          if (el.getAttribute('aria-live') !== live) r.push('aria-live=' + el.getAttribute('aria-live') + ' (want ' + live + ')');
+          if (r.length) why[id] = r;
+        }
+        const hidden = Object.keys(why);
+        return JSON.stringify({ valid: true, screen: got, rects, hidden, why, pass: hidden.length === 0 });
       })()`;
       const LIVE_SCREENS = [
         ['home', '/?mock=1'],
@@ -1082,7 +1110,7 @@ async function runCheck(a) {
         liveRows.map((r) => r.parsed.valid
           ? `${r.screen}[now=${r.parsed.rects['live-now']} polite=${r.parsed.rects['live-polite']} alert=${r.parsed.rects['live-alert']}]`
           : `${r.screen}[INVALID: ${r.parsed.reason}]`).join(' ')
-        + (liveFailing.length ? ` FAILING: ${liveFailing.map((r) => r.screen + (r.parsed.valid ? ' (no rendered box: ' + r.parsed.hidden.join(',') + ')' : '')).join('; ')}` : ''));
+        + (liveFailing.length ? ` FAILING: ${liveFailing.map((r) => r.screen + (r.parsed.valid ? ' (' + r.parsed.hidden.map((id) => id + ': ' + r.parsed.why[id].join(', ')).join('; ') + ')' : '')).join('; ')}` : ''));
     }
 
     // ---- capture every mock scene at every reference viewport ----------
