@@ -5,7 +5,7 @@ the same address (the WebSocket refuses other origins — server/index.js
 `originAllowed`). Crews live in Postgres (Neon), outside the host, so moving
 hosts never moves data.
 
-## Settings the server reads (all of them)
+## Required settings
 | Variable | Value |
 |---|---|
 | `PORT` | set by the host |
@@ -15,13 +15,17 @@ hosts never moves data.
 | `TONDO_TRUST_PROXY` | `1` on Render |
 | `TONDO_CLIENT_IP_HEADER` | `Fly-Client-IP` on Fly (instead of TONDO_TRUST_PROXY) |
 
+Optional tuning variables also exist, all with working defaults:
+`TONDO_MAX_SOCKETS_PER_IP`, `TONDO_DB_POOL_MAX`, `TONDO_DB_RETRY_MS`,
+`TONDO_DB_START_DEADLINE_MS`.
+
 ## 1. Neon (you do this; ~5 minutes)
 1. Sign up at neon.tech. Create a project named `tondo`, Postgres 16+, region
    **AWS Europe Central 1 (Frankfurt)**.
 2. Dashboard → Connect → copy the connection string with **Connection pooling
    ON** (→ DATABASE_URL) and again with it **OFF** (→ DATABASE_URL_DIRECT).
    The two must differ only by `-pooler` in the host name.
-3. Keep them private. Paste them only into Render's settings (step 2.4) —
+3. Keep them private. Paste them only into Render's settings (step 2.3) —
    never into chat, a file in this repo, or a URL.
 
 ## 2. Render (you do this; ~10 minutes)
@@ -62,7 +66,12 @@ hosts never moves data.
 6. Point players at the new URL; shut the Render service down.
 
 ## Proving the move is safe (already done, repeatable)
-`npm run check:portable` boots the server with ONLY the variables in the table
-above (plus PATH), against a throwaway Postgres, plays one real four-slice pie
-against bots and saves it to a new crew. It takes a few minutes. It passes only
-if the server needs nothing host-specific.
+`npm run check:portable` boots the server with the variables in the table above
+(plus PATH), against a throwaway Postgres, plays one real four-slice pie against
+bots and saves it to a new crew. It takes a few minutes. It also sets
+`TONDO_DB_POOL_MAX=1`, only because PGlite's socket serves one connection at a
+time; the server defaults to 5.
+
+What it proves: no Render- or Fly-specific variable is needed. What it does not
+prove: TLS to Neon and Neon's pooler are not exercised (the throwaway database
+is local and plain); those are covered only by the live checks in section 3.
