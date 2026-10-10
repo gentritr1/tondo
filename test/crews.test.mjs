@@ -26,6 +26,10 @@ test('ids, names and device secrets are validated', () => {
   assert(!crews.validCrewId('k7m2q9xh3P') && !crews.validCrewId('k7m2q9xh3') && !crews.validCrewId('oooooooooo'), 'rejects bad ids');
   assert(crews.cleanCrewName('  Friday   Pie  ') === 'Friday Pie', 'collapses whitespace');
   assert(crews.cleanCrewName('x'.repeat(30)).length === 24, 'caps at 24');
+  const edge = `${'a'.repeat(23)}\u{1F355}tail`; // the pizza emoji is 2 UTF-16 units and sits at character 24
+  assert(crews.cleanCrewName(edge) === `${'a'.repeat(23)}\u{1F355}`, `an emoji at position 24 is kept whole, not split: ${JSON.stringify(crews.cleanCrewName(edge))}`);
+  assert(!/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(crews.cleanCrewName('\u{1F355}'.repeat(30))), 'never a lone surrogate');
+  assert(Array.from(crews.cleanCrewName('\u{1F355}'.repeat(30))).length === 24, 'caps at 24 characters');
   assert(crews.cleanCrewName('   ') === null && crews.cleanCrewName(null) === null, 'empty is null');
   assert(crews.hashDevice('a'.repeat(32)).length === 64 && crews.hashDevice('xyz') === null, 'hash or null');
   assert(crews.hashDevice('A'.repeat(32)) === null && crews.hashDevice('a'.repeat(31)) === null && crews.hashDevice('a'.repeat(33)) === null, 'device secret is exactly 32 lowercase hex');

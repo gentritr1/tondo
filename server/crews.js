@@ -29,8 +29,10 @@ function hashDevice(device) {
 }
 
 function cleanCrewName(raw) {
-  const s = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim().slice(0, 24).trim();
-  return s || null;
+  const s = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim();
+  // By code points: a UTF-16 slice at 24 would cut an emoji in half and store a lone surrogate.
+  const clipped = Array.from(s).slice(0, 24).join('').trim();
+  return clipped || null;
 }
 
 function savePie(target, record) {

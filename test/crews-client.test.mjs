@@ -62,6 +62,18 @@ test('rememberCrew puts the crew first, dedupes, caps at 10; forgetCrew removes 
   assert(!readCrews().some((c) => c.id === 'BAD'), 'invalid ids are never stored');
 });
 
+test('names are clipped to 24 CHARACTERS: an emoji at position 24 is not cut in half, when written or read', () => {
+  const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+  const edge = `${'a'.repeat(23)}\u{1F355}tail`;
+  globalThis.localStorage = fakeStorage();
+  rememberCrew({ id: 'abcdefgh01', name: edge });
+  const written = JSON.parse(globalThis.localStorage.data.get('tondo.crews'))[0].name;
+  assert(written === `${'a'.repeat(23)}\u{1F355}`, `written: ${JSON.stringify(written)}`);
+  globalThis.localStorage = fakeStorage({ 'tondo.crews': JSON.stringify([{ id: 'abcdefgh02', name: edge, at: 1 }]) });
+  const read = readCrews()[0].name;
+  assert(read === `${'a'.repeat(23)}\u{1F355}` && !lone.test(read), `read: ${JSON.stringify(read)}`);
+});
+
 test('what is WRITTEN is already clean: capped at 10 and never holding an invalid id', () => {
   globalThis.localStorage = fakeStorage();
   for (let i = 0; i < 12; i++) rememberCrew({ id: `abcdefgh${String(i).padStart(2, '0')}`, name: `C${i}` });

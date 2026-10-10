@@ -51,7 +51,7 @@ export function readCrews() {
   for (const c of v) {
     if (!c || typeof c !== 'object') continue;
     const id = typeof c.id === 'string' ? c.id : '';
-    const name = typeof c.name === 'string' ? c.name.trim().slice(0, 24) : '';
+    const name = typeof c.name === 'string' ? clip24(c.name.trim()) : '';
     if (!CREW_ID.test(id) || !name || seen.has(id)) continue;
     seen.add(id);
     out.push({ id, name, at: Number(c.at) || 0 });
@@ -59,6 +59,9 @@ export function readCrews() {
   }
   return out;
 }
+
+/** 24 CHARACTERS, not 24 UTF-16 units: a slice there can cut an emoji in half. */
+function clip24(s) { return Array.from(s).slice(0, 24).join(''); }
 
 function writeCrews(list) {
   const s = store();
@@ -68,7 +71,7 @@ function writeCrews(list) {
 
 export function rememberCrew({ id, name }) {
   if (!CREW_ID.test(String(id || '')) || !String(name || '').trim()) return;
-  writeCrews([{ id, name: String(name).trim().slice(0, 24), at: Date.now() }].concat(readCrews().filter((c) => c.id !== id)));
+  writeCrews([{ id, name: clip24(String(name).trim()), at: Date.now() }].concat(readCrews().filter((c) => c.id !== id)));
 }
 
 export function forgetCrew(id) {
