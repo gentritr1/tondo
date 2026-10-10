@@ -2,7 +2,7 @@
 
 /** IpBudget: a token bucket per address that survives the socket it was spent on. */
 
-const { IpBudget, createIpBudgets, BUDGETS } = require('../server/limits');
+const { IpBudget, createIpBudgets, BUDGETS, budgetKey } = require('../server/limits');
 
 let passed = 0;
 const failures = [];
@@ -40,6 +40,32 @@ test('the LRU forgets the least recently used address past maxKeys', () => {
   b.take('a', 0); b.take('b', 0); b.take('c', 0); // a evicted
   assert(b.take('a', 0), 'a starts fresh after eviction');
   assert(b.size() <= 2, `size ${b.size()}`);
+});
+
+test('budgetKey: IPv4 is unchanged; IPv6 collapses to its /64', () => {
+  assert(budgetKey('203.0.113.7') === '203.0.113.7', 'IPv4 as-is');
+  assert(budgetKey('::ffff:203.0.113.7') === '203.0.113.7', 'IPv4-mapped is the IPv4 address');
+  assert(budgetKey('') === '' && budgetKey(undefined) === '', 'empty stays empty');
+  assert(budgetKey('not-an-address') === 'not-an-address', 'unparseable is kept as it came');
+  assert(budgetKey('2001:db8::1') === budgetKey('2001:db8:0:0::2'), 'compressed forms in one /64 share a key');
+  assert(budgetKey('2001:db8::1') === budgetKey('2001:0db8:0000:0000:ffff:ffff:ffff:ffff'), 'fully expanded, upper half of the /64');
+  assert(budgetKey('2001:DB8:0:0:1:2:3:4') === budgetKey('2001:db8::9'), 'case-insensitive');
+  assert(budgetKey('2001:db8:0:1::1') !== budgetKey('2001:db8::1'), 'a different /64 is a different key');
+  assert(budgetKey('2001:db8:0:0:0:0:0:0') === budgetKey('2001:db8::'), 'trailing :: expands');
+  assert(budgetKey('::1') === budgetKey('0:0:0:0:0:0:0:5'), 'leading :: expands');
+  assert(budgetKey('fe80::1%eth0') === budgetKey('fe80::2'), 'a zone id is not part of the key');
+  assert(budgetKey('64:ff9b::1.2.3.4') === budgetKey('64:ff9b::102:304'), 'an embedded dotted quad is expanded');
+  assert(budgetKey('1:2:3:4:5:6:7:8:9') === '1:2:3:4:5:6:7:8:9', 'too many groups: kept as it came');
+  assert(budgetKey('1::2::3') === '1::2::3', 'two :: : kept as it came');
+});
+
+test('addresses in one /64 share a bucket; another /64 and IPv4 do not', () => {
+  const b = new IpBudget({ burst: 2, perMs: 1e9 });
+  assert(b.take('2001:db8::1', 0) && b.take('2001:db8:0:0::2', 0), 'two spent in the /64 by two addresses');
+  assert(!b.take('2001:db8:0:0:1:2:3:4', 0), 'a third address in the same /64 is refused');
+  assert(b.take('2001:db8:0:1::1', 0), 'a different /64 has its own budget');
+  assert(b.take('203.0.113.7', 0) && b.take('203.0.113.8', 0), 'IPv4 addresses stay separate');
+  assert(b.size() === 4, `buckets: ${b.size()}`);
 });
 
 test('the shipped budgets match the spec table', () => {

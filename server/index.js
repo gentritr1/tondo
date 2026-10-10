@@ -13,7 +13,7 @@ const game = require('./game');
 const bot = require('./bot');
 const { RoomManager } = require('./rooms');
 const { Assets } = require('./assets');
-const { SocketLimits, maxSocketsPerIp, createIpBudgets } = require('./limits');
+const { SocketLimits, maxSocketsPerIp, createIpBudgets, budgetKey } = require('./limits');
 const { clientIpFrom } = require('./clientip');
 const db = require('./db');
 const crews = require('./crews');
@@ -173,8 +173,11 @@ function originAllowed(req) {
  * yielded exactly 32 open sockets and 1,168 refusals.
  */
 function socketsFromIp(ip) {
+  // Counted per budgetKey, not per full address: an IPv6 /64 is one household
+  // (or one attacker), and 32 sockets each from 2^64 addresses is no cap at all.
+  const key = budgetKey(ip);
   let n = 0;
-  for (const client of wss.clients) if (client.tondoIp === ip) n += 1;
+  for (const client of wss.clients) if (budgetKey(client.tondoIp) === key) n += 1;
   return n;
 }
 

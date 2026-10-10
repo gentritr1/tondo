@@ -132,6 +132,38 @@ const BUDGETS = {
   crewCreate: { burst: 10, perMs: 360000 },
 };
 
+/**
+ * What a per-address budget is charged to. IPv4 is the address itself. IPv6 is
+ * the /64 prefix: an ISP hands one household (or one attacker's VPS) a whole
+ * /64, so keying on the full address would give them 2^64 free buckets and
+ * every budget here would be decoration. The address is expanded first, so
+ * `2001:db8::1` and `2001:db8:0:0::2` land on the same key. An IPv4-mapped
+ * IPv6 address (::ffff:1.2.3.4) is that IPv4 address. Anything unparseable is
+ * kept as it came: a fail-safe that charges it to itself and nobody else.
+ */
+function budgetKey(ip) {
+  let a = String(ip || '').trim().toLowerCase().replace(/%.*$/, '');
+  if (!a.includes(':')) return a; // IPv4, empty, or not an address at all
+  const mapped = a.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) return mapped[1];
+  // An embedded dotted quad in the last group becomes two hextets.
+  const quad = a.match(/^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (quad) {
+    const o = quad.slice(2).map(Number);
+    if (o.some((n) => n > 255)) return a;
+    a = `${quad[1]}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const halves = a.split('::');
+  if (halves.length > 2) return a;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return a;
+  const groups = [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...tail];
+  if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return a;
+  return `${groups.slice(0, 4).map((g) => g.padStart(4, '0')).join(':')}::/64`;
+}
+
 class IpBudget {
   constructor({ burst, perMs, maxKeys = 10000 }) {
     this.burst = burst;
@@ -141,7 +173,7 @@ class IpBudget {
   }
 
   bucket(ip, now) {
-    const key = String(ip || '');
+    const key = budgetKey(ip);
     let b = this.buckets.get(key);
     if (b) {
       this.buckets.delete(key); // re-insert to mark as most recent
@@ -184,6 +216,7 @@ module.exports = {
   REFUSALS_BEFORE_CLOSE,
   MAX_ROOMS_PER_SOCKET,
   IpBudget,
+  budgetKey,
   createIpBudgets,
   BUDGETS,
   DEFAULT_MAX_SOCKETS_PER_IP,
