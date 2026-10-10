@@ -51,6 +51,8 @@ test('/health never queries the database; /health/crews does (the log line is th
   const r = await get('/health/crews');
   assert(r.status === 200 && (await r.json()).ok === true, `status ${r.status}`);
   assert(/\[crews\] ping ok/.test(server.logs()), 'the positive control: /health/crews does ping');
+  const q = await get('/health/crews?probe=1');
+  assert(q.status === 200 && (await q.json()).ok === true, `a query string does not hide the route: ${q.status}`);
 });
 
 test('the per-address read budget answers 429 once spent', async () => {
@@ -60,6 +62,22 @@ test('the per-address read budget answers 429 once spent', async () => {
   assert(first429 >= 58 && first429 <= 64, `first 429 at ${first429}: ${codes.join(',')}`);
   assert(codes.slice(0, first429).every((c) => c === 404), 'before the budget ran out: 404');
   assert((await get('/api/crew/zzzzzzzzzz', { 'X-Forwarded-For': '203.0.113.61' })).status === 404, 'another address is unaffected');
+});
+
+test('the table-open crew lookup spends the read budget too: over it, the table opens without its crew', async () => {
+  const xff = '203.0.113.70';
+  const codes = [];
+  for (let i = 0; i < 62; i++) codes.push((await get('/api/crew/zzzzzzzzzz', { 'X-Forwarded-For': xff })).status);
+  assert(codes[61] === 429, `budget drained: ${codes.slice(55).join(',')}`);
+  const c = client(server.ws, { 'X-Forwarded-For': xff });
+  await c.open();
+  c.send({ type: 'createRoom', name: 'Gent', device, crewId: seeded.id });
+  const first = await c.next((m) => m.type === 'state');
+  assert(first.crews === 'on' && first.crew === null, 'the table opened');
+  let gained = null;
+  try { gained = await c.next((m) => m.type === 'state' && m.crew, 600); } catch { /* expected: no crew arrives */ }
+  assert(gained === null, `the lookup should have been skipped: ${JSON.stringify(gained && gained.crew)}`);
+  await c.close();
 });
 
 test('GET /api/crew/:id returns the tally with your row marked', async () => {
@@ -113,29 +131,33 @@ test('leave: 204, then the member is gone and the name with it', async () => {
 
 test('crews off: /api/crew is 503 "not configured", snapshots say off, the game still seats you', async () => {
   const off = await spawnServer({ TONDO_TRUST_PROXY: '1' });
-  await settled(off);
-  const r = await fetch(`${off.http}/api/crew/${seeded.id}`);
-  assert(r.status === 503 && (await r.json()).reason === 'not configured', `status ${r.status}`);
-  const hc = await fetch(`${off.http}/health/crews`);
-  assert(hc.status === 503 && (await hc.json()).ok === false, `health/crews status ${hc.status}`);
-  const c = client(off.ws); await c.open();
-  c.send({ type: 'createRoom', name: 'Gent', device });
-  const s = await c.next((m) => m.type === 'state');
-  assert(s.crews === 'off', s.crews);
-  await c.close();
-  await off.stop();
+  try {
+    await settled(off);
+    const r = await fetch(`${off.http}/api/crew/${seeded.id}`);
+    assert(r.status === 503 && (await r.json()).reason === 'not configured', `status ${r.status}`);
+    const hc = await fetch(`${off.http}/health/crews`);
+    assert(hc.status === 503 && (await hc.json()).ok === false, `health/crews status ${hc.status}`);
+    const c = client(off.ws); await c.open();
+    try {
+      c.send({ type: 'createRoom', name: 'Gent', device });
+      const s = await c.next((m) => m.type === 'state');
+      assert(s.crews === 'off', s.crews);
+    } finally { await c.close(); }
+  } finally { await off.stop(); }
 });
 
 test('database unreachable: crews failing with the reason, game unaffected (drill: unknown host)', async () => {
   const bad = await spawnServer({ DATABASE_URL: 'postgres://u:p@nope.invalid:5432/db', TONDO_DB_RETRY_MS: '60000' });
-  const h = await settled(bad);
-  assert(h.crews.status === 'failing' && h.crews.reason === 'unknown host', JSON.stringify(h.crews));
-  const c = client(bad.ws); await c.open();
-  c.send({ type: 'createRoom', name: 'Gent', device });
-  const s = await c.next((m) => m.type === 'state');
-  assert(s.crews === 'failing' && s.phase === 'lobby', JSON.stringify({ crews: s.crews, phase: s.phase }));
-  await c.close();
-  await bad.stop();
+  try {
+    const h = await settled(bad);
+    assert(h.crews.status === 'failing' && h.crews.reason === 'unknown host', JSON.stringify(h.crews));
+    const c = client(bad.ws); await c.open();
+    try {
+      c.send({ type: 'createRoom', name: 'Gent', device });
+      const s = await c.next((m) => m.type === 'state');
+      assert(s.crews === 'failing' && s.phase === 'lobby', JSON.stringify({ crews: s.crews, phase: s.phase }));
+    } finally { await c.close(); }
+  } finally { await bad.stop(); }
 });
 
 let passed = 0;

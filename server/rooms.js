@@ -107,6 +107,10 @@ function freshPie() {
     pieKey: crypto.randomBytes(8).toString('hex'),
     savedTo: null,       // {id, name}: the crew this pie was saved to
     saving: false,       // a save is in flight
+    // Who played this pie: the seat ids at the moment it completed. Frozen then, so a
+    // player who sits down afterwards (roundOver allows joins) is not recorded as
+    // having played it and cannot save it. Never goes on the wire.
+    playerIds: [],
   };
 }
 
@@ -212,6 +216,7 @@ class Room {
     if (this.pie.round >= this.pie.roundsPerPie) {
       this.pie.complete = true;
       this.pie.championIds = this.leaders();
+      this.pie.playerIds = this.standings().map((r) => r.id);
     }
   }
 
@@ -225,7 +230,7 @@ class Room {
     return {
       pieKey: this.pie.pieKey,
       rounds: this.pie.roundsPerPie,
-      players: this.standings().map((r) => {
+      players: this.standings().filter((r) => this.pie.playerIds.includes(r.id)).map((r) => {
         if (r.isBot) return { kind: 'bot', name: r.name, points: r.points, won: champions.has(r.id) };
         const seat = this.findSeat(r.id);
         return { kind: 'human', deviceHash: (seat && seat.deviceHash) || null, name: r.name, points: r.points, won: champions.has(r.id) };

@@ -29,14 +29,16 @@ function readBody(req, limit = 1024) {
   });
 }
 
+const pathOf = (url) => url.split('?')[0];
+
 function matches(url) {
-  return url === '/health/crews' || ROUTE.test(url);
+  return pathOf(url) === '/health/crews' || ROUTE.test(url);
 }
 
 async function handle(req, res, { ip, budgets, store = crews }) {
   if (!budgets.crewRead.take(ip)) return json(res, 429, { error: 'slow down' });
 
-  if (req.url === '/health/crews') {
+  if (pathOf(req.url) === '/health/crews') {
     if (req.method !== 'GET') return json(res, 405, { error: 'method' });
     if (db.publicStatus() === 'off') return json(res, 503, { ok: false, reason: 'not configured' });
     try { await db.ping(); return json(res, 200, { ok: true }); } catch (err) { return json(res, 503, { ok: false, reason: err.reason || 'database error' }); }

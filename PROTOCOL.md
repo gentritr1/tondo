@@ -65,7 +65,7 @@ Bots: fill seats via host's `addBot`. Each named bot has a personality (`server/
 | `pass` | `{}` | only valid while deciding a playable drawn card |
 | `tondo` | `{}` | declare TONDO |
 | `callout` | `{targetId}` | punish a missed TONDO |
-| `saveToCrew` | `{crewId}` or `{newCrewName}` | v1.4. A seated human, after the pie is complete. It carries no scores; the server records its own. One crew per pie: re-saving to the same crew is a no-op; another crew is refused |
+| `saveToCrew` | `{crewId}` or `{newCrewName}` | v1.4. A seated human, after the pie is complete. It carries no scores; the server records its own. One crew per pie: re-saving to the same crew is a no-op; another crew is refused. Accepted only from a seat that PLAYED the finished pie: someone who sits down after it ended (joins are allowed in `roundOver`) sees the scoreboard but is refused ("Only the players of this pie can save it.") and is not recorded. A `{crewId}` save spends the crew-read budget of the sender's address (see *Limits*); over it: "Too many crew lookups. Try again in a moment." |
 | `sync` | `{}` | request a fresh snapshot |
 
 Unknown/invalid → `error` + fresh `state` snapshot (once seated; before a seat exists only the `error` is possible).
@@ -213,6 +213,7 @@ prevents.
 | connection attempts per address | 64, then 1/s | the upgrade is refused with HTTP 429 |
 | concurrent sockets per IP | 32, `TONDO_MAX_SOCKETS_PER_IP` | the upgrade is refused with HTTP 401 |
 | crew HTTP requests per address (v1.4) | 60, then 1/s | `429 {error: 'slow down'}` on `/api/crew/*` and `/health/crews` |
+| crew lookups by socket message (v1.4) | share the crew-read budget above | a `saveToCrew {crewId}` is refused ("Too many crew lookups. Try again in a moment."); the crew-name lookup after `createRoom {crewId}` is skipped silently, so the table opens without its crew |
 | new crews per address (v1.4) | 10, then 1 per 6 min | `saveToCrew` is refused: "You have started enough crews for now. Try again later." |
 
 **Origin.** The WebSocket upgrade is refused (HTTP 401) when an `Origin` header
@@ -240,6 +241,6 @@ slots were exhausted.
   or failing, or `429` over the per-address read budget.
 - `POST /api/crew/:id/leave` (v1.4, JSON body `{device}`) → `204` (the member row and the
   name are erased), `400` for a bad body or device secret, `503 {reason}`, or `429`.
-- `GET /health/crews` (v1.4) → `200 {ok: true}` after a real database round trip, or `503
+- `GET /health/crews` (v1.4, a query string is ignored) → `200 {ok: true}` after a real database round trip, or `503
   {ok: false, reason}`. For drills, not for the host's poller.
 - Port: `process.env.PORT || 4600`.

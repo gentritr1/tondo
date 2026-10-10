@@ -35,9 +35,8 @@ const open = async () => { const c = client(url); await c.open(); return c; };
 function finish(room) {
   room.pie.scores = {};
   room.seats.forEach((s, i) => { room.pie.scores[s.id] = { points: 100 - i * 10, roundsWon: i === 0 ? 2 : 0 }; });
-  room.pie.round = 4;
-  room.pie.complete = true;
-  room.pie.championIds = room.leaders();
+  room.pie.round = 3;
+  room.recordRound(); // the real closing path: completes the pie and freezes who played it
 }
 
 test('device on createRoom, joinRoom and a token reclaim reaches the saved crew', async () => {

@@ -16,6 +16,8 @@ function saveToCrew({ room, seat, message, ip, budgets, store = crews, status = 
   if (seat.isBot) return { refuse: 'Bots do not save pies.' };
   const pie = room.pie;
   if (!pie.complete) return { refuse: 'Finish the pie first.' };
+  // A late joiner can read the finished scoreboard but did not play the pie.
+  if (!pie.playerIds.includes(seat.id)) return { refuse: 'Only the players of this pie can save it.' };
   if (status() !== 'on') return { refuse: db.PLAYER_MESSAGE };
 
   const wantNew = typeof message.newCrewName === 'string';
@@ -36,6 +38,11 @@ function saveToCrew({ room, seat, message, ip, budgets, store = crews, status = 
 
   // Built NOW, from this pie: a newRound during the save replaces room.pie and
   // must not change what is recorded or where savedTo lands.
+  // Every other path into the store spends the crew-read budget too: a failed
+  // `{ crewId }` save leaves savedTo null, so without this one socket could keep
+  // Neon awake with random valid ids (a SELECT ... FOR UPDATE each).
+  if (!wantNew && !budgets.crewRead.take(ip)) return { refuse: 'Too many crew lookups. Try again in a moment.' };
+
   const record = room.pieRecord();
   pie.saving = true;
   const started = store.savePie(wantNew ? { newName } : { crewId }, record).then(

@@ -34,9 +34,11 @@ function finishedTable() {
     [made.seat.id]: { points: 212, roundsWon: 2 }, [arta.id]: { points: 180, roundsWon: 1 },
     [chef.id]: { points: 40, roundsWon: 1 }, [dren.id]: { points: 0, roundsWon: 0 },
   };
-  room.pie.round = 4;
-  room.pie.complete = true;
-  room.pie.championIds = room.leaders();
+  // The real closing path: the fourth slice completes the pie, names the champions
+  // and freezes who played it (recordRound with no game banks no points of its own).
+  room.pie.round = 3;
+  room.recordRound();
+  assert(room.pie.complete && room.pie.playerIds.length === 4, 'recordRound closed the pie');
   return { manager, room, host: made.seat, arta, dren, chef, devices };
 }
 const budgets = () => createIpBudgets();
@@ -108,6 +110,41 @@ test('a newRound during the save: the record and savedTo belong to the pie that 
   const crew = await crews.readCrew(r.crew.id, null);
   const gent = crew.recent[0].players.find((p) => p.name === 'Gent');
   assert(gent && gent.points === 212, `recorded the finished pie's scores: ${JSON.stringify(crew.recent[0].players)}`);
+});
+
+test('someone who sits down after the pie ended did not play it: not recorded, cannot save', async () => {
+  const t = finishedTable();
+  // Two players leave after the pie (the table was full), then two newcomers sit down.
+  t.room.removeSeat(t.dren.id);
+  t.room.removeSeat(t.chef.id);
+  const late = t.manager.joinRoom(t.room.code, 'Latecomer', sock(), undefined, { deviceHash: crews.hashDevice(dev()) }).seat;
+  const lateBot = t.room.addSeat({ name: 'Late Bot', isBot: true });
+  assert(t.room.standings().length === 4, 'the scoreboard shows the current table');
+  const refused = saveToCrew({ room: t.room, seat: late, message: { newCrewName: 'Nope' }, ip: 'a', budgets: budgets() });
+  assert(refused.refuse === 'Only the players of this pie can save it.', JSON.stringify(refused));
+  assert(t.room.pie.saving === false && t.room.pie.savedTo === null, 'a refusal changes nothing');
+  const r = await saveToCrew({ room: t.room, seat: t.arta, message: { newCrewName: 'Only Players' }, ip: 'a', budgets: budgets() }).started;
+  assert(r.ok, JSON.stringify(r));
+  const crew = await crews.readCrew(r.crew.id, null);
+  const names = crew.members.map((m) => m.name).sort();
+  assert(JSON.stringify(names) === JSON.stringify(['Arta', 'Gent']), JSON.stringify(crew.members));
+  const players = crew.recent[0].players;
+  assert(players.length === 2 && !players.some((p) => p.name === 'Late Bot' || p.name === 'Latecomer') && lateBot, JSON.stringify(players));
+});
+
+test('a { crewId } save spends the crew-read budget; over it, it is refused', async () => {
+  const b = budgets();
+  for (let i = 0; i < 60; i++) b.crewRead.take('q');
+  const t = finishedTable();
+  const out = saveToCrew({ room: t.room, seat: t.host, message: { crewId: 'zzzzzzzzzz' }, ip: 'q', budgets: b });
+  assert(out.refuse === 'Too many crew lookups. Try again in a moment.', JSON.stringify(out));
+  assert(t.room.pie.saving === false, 'nothing started');
+  // The same call from an address with budget reaches the store (it answers "gone").
+  const ok = saveToCrew({ room: t.room, seat: t.host, message: { crewId: 'zzzzzzzzzz' }, ip: 'fresh', budgets: b });
+  assert(ok.started, JSON.stringify(ok));
+  await ok.started;
+  // A new crew is judged by the creation budget, not the read budget.
+  assert(saveToCrew({ room: t.room, seat: t.host, message: { newCrewName: 'Fine' }, ip: 'q', budgets: b }).started, 'newCrewName unaffected by crewRead');
 });
 
 test('the crew-creation budget is spent per address', async () => {

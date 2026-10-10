@@ -331,9 +331,13 @@ function handleMessage(socket, session, message) {
       const crewId = message.crewId;
       // Looked up off the hot path: the table opens at once, and gains its
       // crew a moment later (or never, if the crew is gone or the book is down).
-      crews.crewName(crewId).then((name) => {
-        if (name && !room.crew) { room.crew = { id: crewId, name }; room.broadcast(); }
-      }, () => {});
+      // It spends the crew-read budget like any other read; over it, the table
+      // simply opens without its crew.
+      if (budgets.crewRead.take(session.ip)) {
+        crews.crewName(crewId).then((name) => {
+          if (name && !room.crew) { room.crew = { id: crewId, name }; room.broadcast(); }
+        }).catch((err) => console.error('[crews] crew lookup follow-up failed:', err && err.message));
+      }
     }
     return;
   }
@@ -417,7 +421,7 @@ function handleMessage(socket, session, message) {
         out.started.then((r) => {
           room.broadcast();
           if (!r.ok) sendError(socket, r.message);
-        });
+        }).catch((err) => console.error('[crews] save follow-up failed:', err && err.message));
       }
       break; // the broadcast below shows `saving: true` at once
     }
