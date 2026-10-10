@@ -44,12 +44,14 @@ const table = {
   scene: 'lobby',
   crew: null,
   savedTo: null,
+  saving: false,
 };
 // `?mockcrew=1` puts a crew on the table at load, so the one-tap state can be seen.
 if (new URLSearchParams(location.search).has('mockcrew')) table.crew = { id: 'k7m2q9xh3p', name: 'Friday Pie' };
 
 let sock = null;
 let timer = 0;
+let saveTimer = 0; // its own timer: `later()` is one shared slot and a save must not cancel a scripted beat
 const later = (ms, fn) => { clearTimeout(timer); timer = setTimeout(fn, ms); };
 
 /** `?scene=` pins the table to one beat, so a reconnect or a rejoin (the tab
@@ -115,7 +117,7 @@ function matchBlock() {
     // is shown at rest rather than counting toward a deal that cannot happen.
     nextDueAt: null,
     held: false,
-    savedTo: table.savedTo || null, saving: false,
+    savedTo: table.savedTo || null, saving: table.saving,
   };
 }
 
@@ -438,6 +440,7 @@ function route(msg) {
       if (new URLSearchParams(location.search).has('mockdrop')) return;
       if (new URLSearchParams(location.search).has('mockrefuse')) { emit({ type: 'error', message: 'The table book is full right now.' }); return; }
       table.name = msg.name || 'You';
+      table.savedTo = null; table.saving = false; clearTimeout(saveTimer);
       table.seats = [{ id: 'p1', name: table.name, isBot: false, connected: true }];
       table.phase = 'lobby';
       table.game = null;
@@ -549,6 +552,8 @@ function route(msg) {
     }
 
     case 'newRound':
+      // A new pie is not the saved one: the server's room.pie is replaced, so savedTo is null again.
+      table.savedTo = null; table.saving = false; clearTimeout(saveTimer);
       go('yourTurn');
       return;
 
@@ -558,15 +563,41 @@ function route(msg) {
       emit({ type: 'left' });
       return;
 
-    case 'saveToCrew':
+    case 'saveToCrew': {
       // The real server records its own scores and answers with the crew; the
       // mock just names it, so the saved state can be shown.
-      table.savedTo = msg.crewId
-        ? { id: msg.crewId, name: (table.crew && table.crew.id === msg.crewId) ? table.crew.name : 'Friday Pie' }
-        : { id: 'k7m2q9xh3p', name: String(msg.newCrewName || 'Crew').slice(0, 24) };
-      if (!table.crew) table.crew = table.savedTo;
-      emit(snapshot());
+      //   ?mocksaving=1    the save takes 1.5s: a snapshot with `saving: true` first
+      //   ?mockfailsave=1  the save fails: `saving` clears, then the player-facing error
+      const qs = new URLSearchParams(location.search);
+      const land = () => {
+        table.savedTo = msg.crewId
+          ? { id: msg.crewId, name: (table.crew && table.crew.id === msg.crewId) ? table.crew.name : 'Friday Pie' }
+          : { id: 'k7m2q9xh3p', name: String(msg.newCrewName || 'Crew').slice(0, 24) };
+        if (!table.crew) table.crew = table.savedTo;
+        table.saving = false;
+        emit(snapshot());
+      };
+      if (qs.has('mockfailsave')) {
+        table.saving = true;
+        emit(snapshot());
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          table.saving = false;
+          emit(snapshot());
+          emit({ type: 'error', message: "Can't reach the crew book right now — your game is fine." });
+        }, 600);
+        return;
+      }
+      if (qs.has('mocksaving')) {
+        table.saving = true;
+        emit(snapshot());
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(land, 1500);
+        return;
+      }
+      land();
       return;
+    }
 
     case 'sync':
       emit(snapshot());

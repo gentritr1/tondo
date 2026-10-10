@@ -36,13 +36,13 @@ function saveToCrew({ room, seat, message, ip, budgets, store = crews, status = 
   if (wantNew && !newName) return { refuse: 'Give the crew a name.' };
   if (wantNew && !budgets.crewCreate.take(ip)) return { refuse: 'You have started enough crews for now. Try again later.' };
 
-  // Built NOW, from this pie: a newRound during the save replaces room.pie and
-  // must not change what is recorded or where savedTo lands.
   // Every other path into the store spends the crew-read budget too: a failed
   // `{ crewId }` save leaves savedTo null, so without this one socket could keep
   // Neon awake with random valid ids (a SELECT ... FOR UPDATE each).
   if (!wantNew && !budgets.crewRead.take(ip)) return { refuse: 'Too many crew lookups. Try again in a moment.' };
 
+  // Built NOW, from this pie: a newRound during the save replaces room.pie and
+  // must not change what is recorded or where savedTo lands.
   const record = room.pieRecord();
   pie.saving = true;
   const started = store.savePie(wantNew ? { newName } : { crewId }, record).then(

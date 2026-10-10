@@ -262,7 +262,8 @@ Each entry holds token buckets that outlive any socket.
   - A **Save to crew** button sits beside Share.
   - If `snap.crew` is set, one tap saves to that crew.
   - Otherwise a picker lists the crews in `tondo.crews` plus **New crew**, with
-    a name field prefilled "<Name>'s crew" (24 characters max).
+    a name field prefilled "Our crew" (24 characters max; never the
+    founder's name, because a crew's name outlives anyone leaving it).
   - After `match.savedTo` arrives, every client adds the crew to `tondo.crews`
     and shows "Saved to <name>". That line is announced through the existing
     live region; mind the same-tick clobber recorded in memory.

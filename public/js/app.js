@@ -1506,7 +1506,7 @@ nodes['rejoin-btn'].addEventListener('click', () => {
    polite live region — no second one is added. */
 const FORGET_IDLE = 'Forget this device';
 const FORGET_ARMED = 'Tap again to forget';
-const FORGET_WARN = 'This clears your name and your last table. It cannot be undone.';
+const FORGET_WARN = 'This clears your name and your last table, and your crews here. To take your name off a crew, leave it first. It cannot be undone.';
 const FORGET_DONE = 'Forgotten. Nothing about you is stored here now.';
 const FORGET_MS = 4000;
 let forgetTimer = 0;
@@ -2101,8 +2101,9 @@ function openCrewPicker() {
     });
     list.appendChild(b);
   }
-  // No stored name (a guest who never typed one): "Our crew", not "Our's crew".
-  nodes['crew-new-name'].value = (app.name ? `${nicelyName(app.name)}'s crew` : 'Our crew').slice(0, 24);
+  // Always "Our crew": a crew's name is never erased by Leave, so the founder's
+  // name must not be baked into it (spec section 3).
+  nodes['crew-new-name'].value = 'Our crew';
   nodes['crew-new-name'].removeAttribute('aria-invalid');
   app.crewPickerOpen = true;
   setText(nodes['crew-msg'], '');
