@@ -72,6 +72,11 @@ function getPool() {
       connectionString: process.env.DATABASE_URL,
       max: Number(process.env.TONDO_DB_POOL_MAX) || 5,
       connectionTimeoutMillis: 5000,
+      // A statement has 3s on the server (SET LOCAL); this is the client-side
+      // backstop for a socket that went silent (a NAT or Neon dropping it
+      // without a FIN), which the server-side timeout can never see.
+      query_timeout: 5000,
+      keepAlive: true,
       idleTimeoutMillis: 10000,
     });
     // An idle client dying (Neon suspending the compute) must not crash the process.
@@ -87,6 +92,11 @@ async function tx(fn) {
   // failing query still rejects, and the pool discards the dead client.
   const onErr = (err) => console.warn(`[crews] connection dropped: ${classify(err)}`);
   client.on('error', onErr);
+  // A connection that stopped answering (query_timeout) is in an unknown state:
+  // a ROLLBACK queued behind the stuck query would wait out another full
+  // timeout, and handing the client back would let the next request queue
+  // behind it. Destroy it instead; the pool opens a fresh one.
+  let broken = false;
   try {
     await client.query('BEGIN');
     await client.query("SET LOCAL statement_timeout = '3s'");
@@ -94,11 +104,12 @@ async function tx(fn) {
     await client.query('COMMIT');
     return out;
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (/read timeout/i.test(String(err && err.message))) broken = true;
+    else await client.query('ROLLBACK').catch(() => { broken = true; });
     throw err;
   } finally {
     client.removeListener('error', onErr);
-    client.release();
+    client.release(broken ? true : undefined);
   }
 }
 

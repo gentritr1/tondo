@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import net from 'node:net';
 import pg from 'pg';
 import { startPg } from './helpers/pg.mjs';
 
@@ -165,7 +166,7 @@ test('migrate() sets lock and statement timeouts before taking the lock, and lis
   const seen = [];
   const orig = pg.Client.prototype.query;
   pg.Client.prototype.query = function (text, ...rest) {
-    if (typeof text === 'string') seen.push({ text, listeners: this.listenerCount('error') });
+    if (typeof text === 'string') seen.push({ text, listeners: this.listenerCount('error'), qt: this.connectionParameters.query_timeout, ka: this.connectionParameters.keepalives });
     return orig.call(this, text, ...rest);
   };
   try {
@@ -178,6 +179,7 @@ test('migrate() sets lock and statement timeouts before taking the lock, and lis
   assert(idx(/SET lock_timeout = '10s'/) >= 0 && idx(/SET lock_timeout = '10s'/) < lock, 'lock_timeout not set before the lock');
   assert(idx(/SET statement_timeout = '30s'/) >= 0 && idx(/SET statement_timeout = '30s'/) < lock, 'statement_timeout not set before the lock');
   assert(seen[0].listeners >= 1, 'the migrator client has no error listener');
+  assert(seen[0].qt === 35000 && seen[0].ka === 1, `migrator client query_timeout ${seen[0].qt}, keepalives ${seen[0].ka}: above its 30s statement_timeout, with keepalive`);
 });
 
 test('every tx() runs under a 3s statement_timeout', async () => {
@@ -224,6 +226,44 @@ test('a connection dropped mid-transaction rejects with a CrewStoreError, does n
     await within(5000, db.run('probe', () => db.tx((c) => c.query('SELECT 1'))), 'the follow-up op');
   } finally {
     process.removeListener('uncaughtException', onUncaught);
+  }
+});
+
+test('a silent connection (no FIN, no reply) fails in ~5s with reason "timeout" instead of hanging the request', async () => {
+  // A proxy to PGlite that can be frozen: the sockets stay open and carry nothing,
+  // which is what a NAT or a suspended Neon compute looks like to the driver.
+  const [host, port] = ['127.0.0.1', Number(new URL(pgsrv.url).port)];
+  let frozen = false;
+  const socks = new Set();
+  const proxy = net.createServer((down) => {
+    const up = net.connect(port, host);
+    socks.add(down); socks.add(up);
+    down.on('data', (d) => { if (!frozen) up.write(d); });
+    up.on('data', (d) => { if (!frozen) down.write(d); });
+    // A real close is passed along (PGlite serves one connection at a time); only silence is frozen.
+    down.on('close', () => up.destroy());
+    up.on('close', () => down.destroy());
+    for (const s of [down, up]) s.on('error', () => {});
+  });
+  await new Promise((r) => proxy.listen(0, host, r));
+  await db.stop();
+  process.env.DATABASE_URL = pgsrv.url.replace(`:${port}/`, `:${proxy.address().port}/`);
+  process.env.TONDO_DB_POOL_MAX = '1';
+  try {
+    await db.start();
+    assert(db.publicStatus() === 'on', JSON.stringify(db.state()));
+    await db.ping();
+    frozen = true;
+    const t0 = Date.now();
+    let caught = null;
+    try { await within(9000, db.run('probe', () => db.tx((c) => c.query('SELECT 1'))), 'the request on a silent connection'); } catch (err) { caught = err; }
+    const took = Date.now() - t0;
+    assert(caught instanceof db.CrewStoreError && caught.reason === 'timeout', `rejected with ${caught && (caught.reason || caught.message)}`);
+    assert(took >= 4500 && took <= 7000, `took ${took}ms, expected about query_timeout (5000)`);
+  } finally {
+    for (const s of socks) s.destroy();
+    await new Promise((r) => proxy.close(r));
+    await db.stop();
   }
 });
 

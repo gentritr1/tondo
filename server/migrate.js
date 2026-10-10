@@ -16,7 +16,14 @@ const DIR = path.join(__dirname, 'migrations');
 const LOCK = 7310;
 
 async function migrate(url) {
-  const client = new Client({ connectionString: url, connectionTimeoutMillis: 5000 });
+  const client = new Client({
+    connectionString: url,
+    connectionTimeoutMillis: 5000,
+    // Above the 30s statement_timeout set below, so the server's own error wins
+    // when it can; this only catches a connection that went silent.
+    query_timeout: 35000,
+    keepAlive: true,
+  });
   // A dropped connection is re-emitted as 'error'; with no listener it is an
   // uncaught exception. The pending query still rejects, and start() retries.
   client.on('error', () => console.warn('[crews] migration connection dropped'));
