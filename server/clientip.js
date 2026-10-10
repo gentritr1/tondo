@@ -19,7 +19,21 @@
 
 const fold = (ip) => String(ip || '').trim().replace(/^::ffff:/, '');
 
-function clientIpFrom(req, env = process.env) {
+/** The X-Forwarded-For entries, left to right. Their VALUES are the client's to
+ *  write, so callers that log should log only how many there are. */
+function xffList(req) {
+  const raw = ((req && req.headers) || {})['x-forwarded-for'];
+  return String(Array.isArray(raw) ? raw.join(',') : raw || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/* A hop count deeper than the chain falls back to the socket address, which
+   behind a balancer is the balancer's: every player then shares one budget.
+   Say so once per process, or the operator has nothing to read. */
+let warnedShortChain = false;
+function resetShortChainWarning() { warnedShortChain = false; }
+
+function clientIpFrom(req, env = process.env, warn = (m) => console.warn(m)) {
   const headers = (req && req.headers) || {};
   const named = String(env.TONDO_CLIENT_IP_HEADER || '').trim().toLowerCase();
   if (named) {
@@ -29,12 +43,14 @@ function clientIpFrom(req, env = process.env) {
   }
   const hops = Number(env.TONDO_TRUST_PROXY);
   if (Number.isInteger(hops) && hops >= 1) {
-    const raw = headers['x-forwarded-for'];
-    const list = String(Array.isArray(raw) ? raw.join(',') : raw || '')
-      .split(',').map((s) => s.trim()).filter(Boolean);
+    const list = xffList(req);
     if (list.length >= hops) return fold(list[list.length - hops]);
+    if (!warnedShortChain) {
+      warnedShortChain = true;
+      warn(`[tondo] TONDO_TRUST_PROXY=${hops} but X-Forwarded-For has ${list.length} entries; using the socket address`);
+    }
   }
   return fold(req && req.socket && req.socket.remoteAddress);
 }
 
-module.exports = { clientIpFrom };
+module.exports = { clientIpFrom, xffList, resetShortChainWarning };

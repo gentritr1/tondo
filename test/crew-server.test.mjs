@@ -64,6 +64,17 @@ test('the per-address read budget answers 429 once spent', async () => {
   assert((await get('/api/crew/zzzzzzzzzz', { 'X-Forwarded-For': '203.0.113.61' })).status === 404, 'another address is unaffected');
 });
 
+test('a refused read logs the DERIVED address and the entry count, never the forged value', async () => {
+  // Spend a fresh address's budget with a forged left entry, the way the runbook's live check does.
+  for (let i = 0; i < 64; i++) await get('/api/crew/zzzzzzzzzz', { 'X-Forwarded-For': '6.6.6.6, 203.0.113.80' });
+  const lines = server.logs().split('\n').filter((l) => l.includes('[crews] http refused'));
+  assert(lines.length >= 1, `no refusal line:\n${server.logs()}`);
+  const ours = lines.filter((l) => l.includes('ip=203.0.113.80'));
+  assert(ours.length >= 1 && /xff_entries=2\b/.test(ours[0]), `derived address and count: ${lines.join(' | ')}`);
+  assert(ours[0] === '[crews] http refused: budget ip=203.0.113.80 xff_entries=2', `exact shape: ${ours[0]}`);
+  assert(!server.logs().includes('6.6.6.6'), 'the forged value never reaches the logs');
+});
+
 test('the table-open crew lookup spends the read budget too: over it, the table opens without its crew', async () => {
   const xff = '203.0.113.70';
   const codes = [];

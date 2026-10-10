@@ -2,7 +2,7 @@
 
 /** Which address a request is charged to, with and without a trusted proxy. */
 
-const { clientIpFrom } = require('../server/clientip');
+const { clientIpFrom, resetShortChainWarning } = require('../server/clientip');
 
 let passed = 0;
 const failures = [];
@@ -27,7 +27,28 @@ test('TONDO_TRUST_PROXY=2 skips one more hop from the right', () => {
 });
 
 test('trusting a proxy but receiving no header falls back to the socket address', () => {
-  eq(clientIpFrom(req('10.9.9.9'), { TONDO_TRUST_PROXY: '1' }), '10.9.9.9');
+  eq(clientIpFrom(req('10.9.9.9'), { TONDO_TRUST_PROXY: '1' }, () => {}), '10.9.9.9');
+});
+
+test('a hop count deeper than the chain warns ONCE per process, with counts and no header values', () => {
+  resetShortChainWarning();
+  const lines = [];
+  const warn = (m) => lines.push(m);
+  const r = req('10.9.9.9', { 'x-forwarded-for': '6.6.6.6' });
+  eq(clientIpFrom(r, { TONDO_TRUST_PROXY: '2' }, warn), '10.9.9.9', 'falls back to the socket address');
+  clientIpFrom(r, { TONDO_TRUST_PROXY: '2' }, warn);
+  clientIpFrom(req('10.9.9.9'), { TONDO_TRUST_PROXY: '2' }, warn);
+  eq(lines.length, 1, 'logged once');
+  eq(lines[0], '[tondo] TONDO_TRUST_PROXY=2 but X-Forwarded-For has 1 entries; using the socket address');
+  eq(/6\.6\.6\.6/.test(lines[0]), false, 'the forwarded value is not logged');
+});
+
+test('a chain as deep as the hop count does not warn', () => {
+  resetShortChainWarning();
+  const lines = [];
+  clientIpFrom(req('10.9.9.9', { 'x-forwarded-for': '6.6.6.6, 203.0.113.7' }), { TONDO_TRUST_PROXY: '2' }, (m) => lines.push(m));
+  clientIpFrom(req('10.9.9.9', { 'x-forwarded-for': '203.0.113.7' }), { TONDO_TRUST_PROXY: '1' }, (m) => lines.push(m));
+  eq(lines.length, 0);
 });
 
 test('a non-integer or zero TONDO_TRUST_PROXY is ignored', () => {

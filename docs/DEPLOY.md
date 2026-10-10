@@ -39,10 +39,18 @@ Optional tuning variables also exist, all with working defaults:
 1. `curl -s https://<service>/health` → `crews.status` is `on`.
 2. Open the URL on a phone, play a quick pie, Save to crew, open the crew link
    from a different browser → the tally shows.
-3. Proxy address: `curl -s -H 'X-Forwarded-For: 6.6.6.6' https://<service>/health`
-   while watching Render → Logs; a request that hits a budget logs the REAL
-   address, never 6.6.6.6. (Claude triggers one deliberate 429 on
-   `/api/crew/zzzzzzzzzz` with 61 quick requests to make the address appear.)
+3. Proxy address: send 61 or more quick requests with a forged header (150 below,
+   so a slow connection that refills the budget meanwhile still runs it dry), then
+   read the log.
+   `for i in $(seq 1 150); do curl -s -o /dev/null -H 'X-Forwarded-For: 6.6.6.6' https://<service>/api/crew/zzzzzzzzzz; done`
+   then Render → Logs and look for the line
+   `[crews] http refused: budget ip=<address> xff_entries=<n>`.
+   It must show the REAL client address (the one `curl -s https://api.ipify.org`
+   prints from the same machine), never 6.6.6.6. If it shows a balancer address
+   (10.x or similar), or a `[tondo] TONDO_TRUST_PROXY=<n> but X-Forwarded-For has
+   <m> entries; using the socket address` line appears, the hop count is wrong:
+   set `TONDO_TRUST_PROXY` to match the chain and redeploy. The log shows only how
+   many entries the header had, never what they said.
 4. Restart persistence: Render → Manual Deploy → Restart; reload the crew link
    → same tally.
 

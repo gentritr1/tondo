@@ -3349,7 +3349,10 @@ touches a third party asks first.
   1. After the saved pie, everyone leaves the table.
   2. Poll `/health` until `rooms` drops (it should after 60 s).
   3. Open the crew URL copied from the actual Share text in the browser pane. `read_page`
-     must show the crew page with the tally. If the proxy check logs `6.6.6.6`, **stop**: `TONDO_TRUST_PROXY=1` is
+     must show the crew page with the tally. For the proxy check, send 61+ quick requests (DEPLOY.md
+     uses 150) with `X-Forwarded-For: 6.6.6.6` to `/api/crew/zzzzzzzzzz` and read the Render log line
+     `[crews] http refused: budget ip=<address> xff_entries=<n>`. If it logs `6.6.6.6`, a balancer
+     address, or a `TONDO_TRUST_PROXY=<n> but X-Forwarded-For has <m> entries` warning, **stop**: `TONDO_TRUST_PROXY=1` is
   wrong for Render. Read the actual `X-Forwarded-For` shape from a logged request, set the
   right hop count, and redeploy (a settings change is a deploy).
 

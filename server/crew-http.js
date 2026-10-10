@@ -11,6 +11,7 @@
 
 const crews = require('./crews');
 const db = require('./db');
+const { xffList } = require('./clientip');
 
 const ROUTE = /^\/api\/crew\/([^/?]+)(\/leave)?(?:\?.*)?$/;
 
@@ -36,7 +37,14 @@ function matches(url) {
 }
 
 async function handle(req, res, { ip, budgets, store = crews }) {
-  if (!budgets.crewRead.take(ip)) return json(res, 429, { error: 'slow down' });
+  if (!budgets.crewRead.take(ip)) {
+    // The derived address is what the budget charged, and the one thing an
+    // operator needs to see to know the proxy setting is right. The entry COUNT
+    // says whether the chain was as deep as TONDO_TRUST_PROXY expects; the
+    // entries themselves are the client's to write and are never logged.
+    console.warn(`[crews] http refused: budget ip=${ip} xff_entries=${xffList(req).length}`);
+    return json(res, 429, { error: 'slow down' });
+  }
 
   if (pathOf(req.url) === '/health/crews') {
     if (req.method !== 'GET') return json(res, 405, { error: 'method' });
