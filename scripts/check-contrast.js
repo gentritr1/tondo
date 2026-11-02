@@ -1,24 +1,18 @@
 'use strict';
 
 /**
- * WCAG contrast check for the ink ladder against every surface it lands on.
+ * WCAG contrast check for the two text colours against every ground they sit on.
  *
- * PRODUCT.md commits Tondo to WCAG 2.2 AA, and `--ink-1..4` in styles.css are
- * translucent cream: their real contrast depends entirely on what is behind
- * them. Change a surface token and every rung moves silently. This reads the
- * live values out of public/styles.css so the check can never drift from what
- * actually ships.
+ * PRODUCT.md commits Tondo to WCAG 2.2 AA. Text is two solid tokens, --ink and
+ * --ink-2 (the old translucent --ink-1..4 ladder is gone), plus --paper-ink
+ * for words on the paper plaque and place card. This reads the live values out
+ * of public/styles.css so the check can never drift from what actually ships.
  *
  *   node scripts/check-contrast.js
  *   node scripts/check-contrast.js --against '#0B0908,#14100D,#100C0A'
  *
- * The ladder's own rules, from the comment block it is declared in:
- *   --ink-1 .92  loud secondary text
- *   --ink-2 .72  10-11px caps labels — small type, needs headroom
- *   --ink-3 .58  body-size muted text — THE FLOOR FOR WORDS
- *   --ink-4 .40  glyphs, rules, decoration — never words
- *
- * AA is 4.5:1 for body text and 3:1 for large text (>=18.66px bold or 24px).
+ * AA is 4.5:1 for body text; every pair below carries words, so every pair is
+ * gated at 4.5.
  */
 
 const fs = require('node:fs');
@@ -27,7 +21,6 @@ const path = require('node:path');
 const CSS = path.join(__dirname, '..', 'public', 'styles.css');
 
 const AA_BODY = 4.5;
-const AA_LARGE = 3.0;
 
 function hexToRgb(hex) {
   const h = hex.replace('#', '').trim();
@@ -49,23 +42,10 @@ function ratio(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** Flattens a translucent foreground onto an opaque background. */
-function composite(fg, alpha, bg) {
-  return fg.map((c, i) => Math.round(c * alpha + bg[i] * (1 - alpha)));
-}
-
 /** Pulls `--name: #hex;` out of the stylesheet's :root block. */
 function readToken(css, name) {
   const m = css.match(new RegExp(`--${name}\\s*:\\s*(#[0-9a-fA-F]{3,8})\\s*;`));
   return m ? m[1] : null;
-}
-
-/** Pulls `--ink-N: rgba(r,g,b,a);` and returns [rgb, alpha]. */
-function readInk(css, name) {
-  const m = css.match(new RegExp(`--${name}\\s*:\\s*rgba\\(([^)]+)\\)\\s*;`));
-  if (!m) return null;
-  const parts = m[1].split(',').map((s) => Number(s.trim()));
-  return { rgb: parts.slice(0, 3), alpha: parts[3] };
 }
 
 function main() {
@@ -73,45 +53,37 @@ function main() {
 
   const argv = process.argv.slice(2);
   const at = argv.indexOf('--against');
-  const surfaces = at >= 0
+  const darks = at >= 0
     ? argv[at + 1].split(',').map((s) => ({ name: s.trim(), hex: s.trim() }))
-    : ['page', 'shell', 'tray-bg', 'page-glow'].map((n) => ({ name: n, hex: readToken(css, n) }));
+    : ['page', 'shell', 'tray-bg', 'raise', 'raise-gold', 'raise-alarm'].map((n) => ({ name: n, hex: readToken(css, n) }));
+  const pairs = [
+    ...['ink', 'ink-2'].map((n) => ({ name: n, hex: readToken(css, n), on: darks })),
+    { name: 'paper-ink', hex: readToken(css, 'paper-ink'), on: [{ name: 'paper', hex: readToken(css, 'paper') }] },
+    { name: 'gold', hex: readToken(css, 'gold'), on: [{ name: 'raise-gold', hex: readToken(css, 'raise-gold') }] },
+    { name: 'alarm', hex: readToken(css, 'alarm'), on: [{ name: 'raise-alarm', hex: readToken(css, 'raise-alarm') }, { name: 'page', hex: readToken(css, 'page') }] },
+    { name: 'navy', hex: readToken(css, 'navy'), on: [{ name: 'paper', hex: readToken(css, 'paper') }, { name: 'gold', hex: readToken(css, 'gold') }] },
+  ];
+  const missing = pairs.filter((p) => !p.hex).map((p) => p.name)
+    .concat(pairs.flatMap((p) => p.on).filter((g) => !g.hex).map((g) => g.name));
+  if (missing.length) { console.error(`could not read token(s) from styles.css: ${[...new Set(missing)].join(', ')}`); process.exit(1); }
 
-  const rungs = ['ink-1', 'ink-2', 'ink-3', 'ink-4']
-    .map((n) => ({ name: n, ...readInk(css, n) }))
-    .filter((r) => r.rgb);
-
-  if (!rungs.length) { console.error('could not read the ink ladder from styles.css'); process.exit(1); }
-
-  console.log('\nInk ladder vs surfaces, read live from public/styles.css\n');
-  const header = ['rung'.padEnd(12), ...surfaces.map((s) => `${s.name} ${s.hex}`.padEnd(20))].join('');
-  console.log(header);
-  console.log('-'.repeat(header.length));
-
+  console.log('\nText colours vs grounds, read live from public/styles.css\n');
   let failures = 0;
-  for (const rung of rungs) {
-    // --ink-4 is declared decoration-only, so it is reported but not gated.
-    const isWords = rung.name !== 'ink-4';
-    const floor = rung.name === 'ink-2' ? AA_BODY : (isWords ? AA_BODY : AA_LARGE);
-    const cells = surfaces.map((s) => {
-      if (!s.hex) return 'n/a'.padEnd(20);
-      const bg = hexToRgb(s.hex);
-      const r = ratio(composite(rung.rgb, rung.alpha, bg), bg);
-      const ok = r >= floor;
-      if (isWords && !ok) failures++;
-      return `${r.toFixed(2)}:1 ${isWords ? (ok ? 'PASS' : 'FAIL') : '(deco)'}`.padEnd(20);
+  for (const p of pairs) {
+    const cells = p.on.map((g) => {
+      const r = ratio(hexToRgb(p.hex), hexToRgb(g.hex));
+      const ok = r >= AA_BODY;
+      if (!ok) failures++;
+      return `${g.name} ${r.toFixed(2)}:1 ${ok ? 'PASS' : 'FAIL'}`.padEnd(26);
     });
-    console.log(`${(rung.name + ' ' + rung.alpha).padEnd(12)}${cells.join('')}`);
+    console.log(`${(p.name + ' ' + p.hex).padEnd(20)}${cells.join('')}`);
   }
-
-  console.log(`\nGate: ${AA_BODY}:1 for every rung that carries words (ink-1..3).`);
-  console.log('ink-4 is declared decoration-only in styles.css and is reported, not gated.\n');
-
+  console.log(`\nGate: ${AA_BODY}:1 for every text colour on every ground it sits on.\n`);
   if (failures) {
-    console.error(`FAIL: ${failures} rung/surface combination(s) below AA.\n`);
+    console.error(`FAIL: ${failures} colour/ground combination(s) below AA.\n`);
     process.exit(1);
   }
-  console.log('All word-carrying rungs clear AA on every surface.\n');
+  console.log('Every text colour clears AA on every ground.\n');
 }
 
 main();

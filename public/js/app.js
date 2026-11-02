@@ -98,6 +98,11 @@ function creamed(hex, cream) {
 /* The JS and the stylesheet must agree on what "compact" means, so both read
    the same query. Coarse pointers get tap-to-arm instead of hover previews;
    reduced motion skips every travelling ghost. */
+/* Your turn, said once, by your hand. updateFades swaps the first for the
+   second when the hand turns out wider than the tray. */
+const HINT_PLAY = 'Your turn. Play a raised card, or draw.';
+const HINT_SWIPE = 'Your turn. Swipe to see the rest of your hand.';
+
 const COMPACT = window.matchMedia('(max-width: 719px), (max-height: 700px)');
 const COARSE = window.matchMedia('(hover: none)');
 const RM = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -181,18 +186,18 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (ch) => (
 
 const el = (id) => document.getElementById(id);
 const nodes = {};
-['name-input', 'code-input', 'create-btn', 'join-btn', 'home-msg',
+['name-input', 'code-input', 'create-btn', 'join-btn', 'home-msg', 'join-toggle', 'join-row', 'home-tile',
  'quickpie-btn', 'last-table', 'last-table-sub', 'rejoin-btn', 'forget-btn',
  'room-code', 'copy-btn', 'seat-list', 'host-controls', 'addbot-btn', 'start-btn',
  'lobby-wait', 'lobby-hint', 'lobby-msg', 'leave-btn',
- 'queue', 'strip-code', 'stage', 'ring', 'plaque', 'match-label', 'dir-badge',
+ 'strip-code', 'stage', 'ring', 'plaque', 'match-label', 'dir-badge',
  'match-glyph', 'match-suit', 'match-or-wrap', 'match-value', 'deck-count',
  'ledger', 'wedge-glow', 'wedge-sector', 'wedge-tones',
  'top-card', 'top-index', 'top-glyph', 'top-suit', 'top-ghost',
  'under-1', 'under-2', 'dir-glyph', 'dir-label',
  'seats', 'event-ribbon', 'banner', 'live-polite', 'live-alert', 'live-now',
- 'you-strip', 'you-portrait', 'you-name', 'you-pips', 'you-count', 'you-count-text',
- 'you-status', 'hand-label', 'playable-label', 'tondo-bar', 'tondo-btn',
+ 'you-strip', 'you-portrait', 'you-pips', 'you-count', 'you-count-text',
+ 'you-status', 'tondo-bar', 'tondo-btn',
  'callout-bar', 'callout-head', 'callout-sub', 'callout-buttons',
  'drawn-bar', 'drawn-card', 'drawn-index', 'drawn-glyph', 'drawn-suit', 'drawn-ghost',
  'drawn-msg', 'drawn-play', 'drawn-keep',
@@ -265,7 +270,6 @@ const app = {
   handMoved: false,      // the player has scrolled the hand at least once
   handOverflows: false,  // the hand row is wider than the tray
   pile: [],              // the last few discards, so the stack has visible depth
-  lastQueueHtml: '',
   ledger: [],            // the Slice Ledger: one topping per card played
   tally: new Map(),      // playerId → cards played this round (uncapped truth)
   ledgerSeq: 0,          // seeds the deterministic scatter
@@ -732,7 +736,7 @@ function applySnapshot(snap) {
 
   if (snap.phase === 'lobby') {
     hideBanner();
-    document.title = 'TONDO';
+    document.title = 'Tondo';
     app.lastTurn = undefined;
     ledgerClear();
     app.glowRot = null;
@@ -775,7 +779,7 @@ function applySnapshot(snap) {
   if (snap.phase !== 'roundOver') app.celebratedWinner = '';
   if (!prev || prev.phase === 'lobby') { setMessage('', 'info'); app.handMoved = false; }
 
-  document.title = yourTurnNow ? '● Your turn — TONDO' : 'TONDO';
+  document.title = yourTurnNow ? '● Your turn · Tondo' : 'Tondo';
 
   if (snap.phase === 'roundOver' && g) {
     /* On the last slice two things are true at once — somebody won the round
@@ -786,15 +790,15 @@ function applySnapshot(snap) {
     const champions = (m && m.complete) ? (m.championIds || []) : [];
     let text;
     if (champions.length > 1) {
-      text = 'PIE SHARED';
+      text = 'Pie shared';
     } else if (champions.length === 1) {
       text = champions[0] === snap.youId
-        ? 'YOU TAKE THE PIE'
-        : `${nicelyName(playerName(champions[0]))} TAKES THE PIE`.toUpperCase();
+        ? 'You take the pie'
+        : `${nicelyName(playerName(champions[0]))} takes the pie`;
     } else {
       text = g.winnerId === snap.youId
-        ? 'YOU WIN'
-        : `${nicelyName(playerName(g.winnerId))} WINS`.toUpperCase();
+        ? 'You win'
+        : `${nicelyName(playerName(g.winnerId))} wins`;
     }
     showBanner(text, 'win', 0);
     /* Confetti is for the PIE, not for a slice. It used to fire on every round
@@ -811,7 +815,7 @@ function applySnapshot(snap) {
     }
     app.lastTurn = undefined;
   } else if (yourTurnNow && app.lastTurn !== g.turnPlayerId) {
-    showBanner('YOUR TURN', 'you', 700);
+    showBanner('Your turn', 'you', 700);
     setMessage('', 'info');
     // The one event worth interrupting a screen reader for.
     nodes['live-now'].textContent =
@@ -1446,13 +1450,47 @@ function renderLastTable() {
     ? 'with ' + last.roster.join(', ') : '';
 }
 
+/* ?home=a|b picks one of the two table-as-home layouts for the owner to
+   compare; both are the same markup, switched in CSS with no transition. The
+   loser is deleted once one is chosen. */
+document.body.dataset.home = new URLSearchParams(location.search).get('home') === 'b' ? 'b' : 'a';
+
+/** Your seat at the home table wears the first letter of the place card. */
+function paintHomeTile() {
+  const name = (nodes['name-input'].value || '').trim();
+  nodes['home-tile'].textContent = (name.charAt(0) || '?').toUpperCase();
+}
+nodes['name-input'].addEventListener('input', paintHomeTile);
+
+/** "Have a code?" reveals the join field; an invite link arrives with it open. */
+function openJoin(focus) {
+  nodes['join-row'].hidden = false;
+  nodes['join-toggle'].setAttribute('aria-expanded', 'true');
+  if (focus) nodes['code-input'].focus();
+}
+nodes['join-toggle'].addEventListener('click', () => {
+  if (nodes['join-row'].hidden) openJoin(true);
+  else {
+    nodes['join-row'].hidden = true;
+    nodes['join-toggle'].setAttribute('aria-expanded', 'false');
+  }
+});
+
 function bootHome() {
   const params = new URLSearchParams(location.search);
   let stored = '';
   try { stored = localStorage.getItem('tondo.name') || ''; } catch { /* ignore */ }
   nodes['name-input'].value = stored;
+  paintHomeTile();
   const code = (params.get('code') || '').trim().toUpperCase();
-  if (code) nodes['code-input'].value = code;
+  if (code) {
+    nodes['code-input'].value = code;
+    // Invited: joining is the one primary action and the quick pie steps
+    // down to a link, so the screen still has exactly one.
+    openJoin(false);
+    nodes['join-btn'].classList.add('btn-primary');
+    nodes['quickpie-btn'].classList.replace('btn-primary', 'btn-link');
+  }
   renderLastTable();
   renderCrewsRow();
   const crewParam = (params.get('crew') || '').trim().toLowerCase();
@@ -1470,9 +1508,12 @@ function bootHome() {
   }
 }
 
-function readName() {
+/* `fallback` lets the quick pie deal in one tap with no name on the card: a
+   table of bots does not need one, and the fallback is never remembered. */
+function readName(fallback) {
   const name = (nodes['name-input'].value || '').trim().slice(0, 14);
-  if (!name) { nodes['home-msg'].textContent = 'Put a name on the ticket first.'; nodes['name-input'].focus(); return ''; }
+  if (!name && fallback) { app.name = fallback; return fallback; }
+  if (!name) { nodes['home-msg'].textContent = 'Put a name on the place card first.'; nodes['name-input'].focus(); return ''; }
   app.name = name;
   try { localStorage.setItem('tondo.name', name); } catch { /* ignore */ }
   return name;
@@ -1494,7 +1535,7 @@ function startQuickPie(name) {
 }
 
 nodes['quickpie-btn'].addEventListener('click', () => {
-  const name = readName();
+  const name = readName('You');
   if (!name) return;
   /* "One quick pie" is the fastest route from a cold load to a dealt table, and
      it used to be the ONLY route that never showed the rules: the lobby's
@@ -1585,6 +1626,7 @@ nodes['forget-btn'].addEventListener('click', () => {
   // now" has to be true a minute later too.
   conn.forget();
   nodes['name-input'].value = '';
+  paintHomeTile();
   app.name = '';
   renderLastTable();
   renderCrewsRow();
@@ -1646,9 +1688,9 @@ function renderCrewsRow() {
   for (const c of list) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn btn-block';
+    b.className = 'btn btn-link';
     b.textContent = c.name;
-    b.title = c.name;   // the button ellipsizes a long name; the full one is here
+    b.title = c.name;   // the link ellipsizes a long name; the full one is here
     b.addEventListener('click', () => {
       setCrewParam(c.id);
       openCrewView(c.id);
@@ -1893,7 +1935,7 @@ nodes['name-input'].addEventListener('keydown', (e) => { if (e.key === 'Enter') 
 
 /* One tag per kind, so a row's tags can be compared as a list rather than as
    a blob of markup. */
-const TAG_TEXT = { you: 'You', host: 'Host', bot: 'Bot', away: 'Away' };
+const TAG_TEXT = { you: 'you', host: 'host', bot: 'bot', away: 'away' };
 
 /** The empty shell of one seat row; everything inside is updated in place. */
 function buildSeatRow(key, ghost) {
@@ -2399,7 +2441,6 @@ function renderGame(snap) {
   const nameList = names(snap);
 
   nodes['strip-code'].textContent = snap.roomCode || '';
-  renderQueue(snap, g, over);
   renderCenter(snap, g, over);
   renderSeats(snap, g, over);
 
@@ -2422,23 +2463,17 @@ function renderGame(snap) {
   nodes['you-strip'].style.setProperty('--tone-bg', youTone.bg);
   nodes['you-strip'].style.setProperty('--tone-edge', youTone.edge);
   nodes['you-portrait'].textContent = (youName.charAt(0) || 'Y').toUpperCase();
-  nodes['you-name'].textContent = youName;
   nodes['you-strip'].classList.toggle('is-acting', yourTurn);
   nodes['you-count'].textContent = String(g.hand.length);
   nodes['you-count-text'].textContent =
     g.hand.length + (g.hand.length === 1 ? ' card in your hand' : ' cards in your hand');
+  // Beside the hand the turn is said once, by #hint. This note carries only
+  // what happens TO you: the forgot-TONDO alarm, or a transient "skipped",
+  // "+2" or "TONDO!" (the win is the banner's, the turn is the hint's).
   let youStatus = '';
   let youAlarm = false;
-  // The seat pill speaks: a serif italic verb beside the name, never a shout.
-  if (over && g.winnerId === snap.youId) youStatus = 'winner!';
-  else if (you.vulnerable) { youStatus = 'forgot TONDO!'; youAlarm = true; }
-  else if (yourTurn) youStatus = 'your turn';
-  else if (!over && nextPlayerId(g) === snap.youId) youStatus = 'you’re next';
-  else if (g.hand.length === 1) youStatus = 'one card!';
-  else youStatus = 'you';
-  // Same ladder as the seats: a win and the forgot-TONDO alarm outrank a note.
-  const youNote = (youStatus === 'winner!' || youAlarm) ? null : liveSeatNote(snap.youId);
-  if (youNote) youStatus = youNote;
+  if (!over && you.vulnerable) { youStatus = 'forgot TONDO!'; youAlarm = true; }
+  else if (!over) youStatus = liveSeatNote(snap.youId) || '';
   setText(nodes['you-status'], youStatus);
   nodes['you-status'].hidden = !youStatus;
   nodes['you-status'].classList.toggle('is-acting', yourTurn);
@@ -2561,22 +2596,6 @@ function renderGame(snap) {
   nodes['action-row'].hidden = !!drawnCard || wildOpen;
   if (!swapHand) renderHand(g, yourTurn, playable, drawnId);
 
-  // The label names whatever the tray is actually showing — at round over the
-  // hand has been swapped out for the scoreboard, so "Your hand" would be
-  // pointing at something that is not there.
-  setText(nodes['hand-label'], over ? 'The pie'
-    : (wildOpen ? 'Pick a topping' : (drawnCard ? 'Draw decision' : 'Your hand')));
-  let playLabel;
-  if (over) playLabel = 'Round over';
-  else if (drawnCard) playLabel = 'Drawn card only';
-  else if (wildOpen) playLabel = '';
-  else if (yourTurn) playLabel = playable.size + (playable.size === 1 ? ' playable' : ' playable');
-  else playLabel = 'Wait your turn';
-  setText(nodes['playable-label'], playLabel);
-  const liveLabel = yourTurn && !drawnCard && !wildOpen && !over;
-  nodes['playable-label'].classList.toggle('is-live', liveLabel);
-  nodes['playable-label'].classList.toggle('is-drawn', !liveLabel && !!drawnCard);
-
   // The callout bar has closed under the keyboard (see `leavingCallout`): the
   // hand is rendered now, so there is somewhere real to land.
   if (leavingCallout) focusHandOrDraw();
@@ -2603,16 +2622,16 @@ function renderGame(snap) {
 
   /* --- hint + assertive line */
   let hint;
-  if (over) hint = snap.isHost ? 'Round over — deal again when you like.' : 'Round over — waiting for the host.';
+  if (over) hint = snap.isHost ? 'Deal again when you like.' : 'Waiting for the host.';
   else if (wildOpen) hint = 'Pick a topping to continue.';
   else if (drawnCard) hint = 'Decide on the drawn card.';
   else if (yourTurn) hint = (app.handOverflows && !app.handMoved)
-    ? 'Swipe to see the rest of your hand.' : 'Play a raised card, or draw from the deck.';
+    ? HINT_SWIPE : HINT_PLAY;
   else {
     const current = g.players.find((p) => p.id === g.turnPlayerId);
     hint = current && !current.connected
       ? `Waiting for ${nicelyName(current.name)} to reconnect…`
-      : `${nicelyName(playerName(g.turnPlayerId))} is playing — hands off.`;
+      : `${nicelyName(playerName(g.turnPlayerId))} is playing.${nextPlayerId(g) === snap.youId ? ' You’re next.' : ''}`;
   }
   /* The between-slices clock lives in the hint slot, in the tray's own quiet
      type. Deliberately NOT a large counting digit and never a tick sound: the
@@ -2623,8 +2642,8 @@ function renderGame(snap) {
   if (over) {
     if (clockRunning) hint = nextSliceHint(m);
     else if (m && m.held) hint = 'Held — deal when the table is ready.';
-    else if (m && m.complete) hint = 'Pie finished. Deal again for a fresh one.';
-    else hint = 'Round over — deal again when you like.';
+    else if (m && m.complete) hint = 'Deal again for a fresh pie.';
+    else hint = 'Deal again when you like.';
   }
   // A countdown must not crossfade every second; it is rewritten in place.
   if (clockRunning) nodes.hint.textContent = hint;
@@ -2699,12 +2718,12 @@ function standingClause(m, youId) {
   const you = rows.find((r) => r.id === youId);
   if (!you) return '';
   const gap = best.points - you.points;
-  if (gap > 0) return ` — ${gap} behind`;
+  if (gap > 0) return ` · ${gap} behind`;
   // Level at the top is worth saying; level on zero was filtered out above.
   const tied = rows.filter((r) => r.points === you.points).length > 1;
   // "level", not "level in front": the longer phrasing measured 243px, past
   // the budget above even on the layouts that do show the clause.
-  return tied ? ' — level' : ` — ${you.points - (rows.filter((r) => r.id !== youId)
+  return tied ? ' · level' : ` · ${you.points - (rows.filter((r) => r.id !== youId)
     .reduce((a, b) => (b.points > a.points ? b : a), { points: 0 }).points)} ahead`;
 }
 
@@ -2719,7 +2738,7 @@ function renderMatch(snap, over) {
   // the next one up, capped so a finished pie does not read "slice 5 of 4".
   const playing = Math.min(m.round + 1, m.roundsPerPie);
   chip.hidden = over;
-  if (!over) setText(chip, `Slice ${playing}/${m.roundsPerPie}${standingClause(m, snap.youId)}`);
+  if (!over) setText(chip, `Slice ${playing} of ${m.roundsPerPie}${standingClause(m, snap.youId)}`);
 
   board.hidden = !over;
   if (!over) { hideShareBtn(); return; }
@@ -2731,20 +2750,16 @@ function renderMatch(snap, over) {
 
   const last = m.lastRound;
   const champions = m.championIds || [];
-  const youWon = champions.includes(snap.youId);
   const championNames = champions.map((id) => nicelyName(playerName(id))).join(' & ');
 
   if (m.complete) {
-    setText(nodes['score-title'], champions.length > 1
-      ? 'The pie is shared'
-      : (youWon ? 'You take the pie!' : `${championNames} takes the pie`));
+    // The banner names the winner; the ledger under it is titled by the result.
+    setText(nodes['score-title'], 'Pie complete');
     setText(nodes['score-sub'], champions.length > 1
       ? `${championNames} finish level after four slices.`
       : `Four slices played. Deal again for a fresh pie.`);
   } else {
-    const winner = last && last.winnerId ? nicelyName(playerName(last.winnerId)) : null;
-    setText(nodes['score-title'], !winner ? 'Round over'
-      : (last.winnerId === snap.youId ? `You win slice ${m.round}` : `${winner} wins slice ${m.round}`));
+    setText(nodes['score-title'], `Slice ${m.round} of ${m.roundsPerPie}`);
     /* The scoreboard used to show a bare "+107" with nothing anywhere saying
        where it came from, and the help dialog never uses the word "point" at
        all. The server has always shipped the answer — roundResult.breakdown,
@@ -2898,38 +2913,6 @@ function seatToneOf(g, youId, id) {
   if (i < 0) return SEAT_TONES[0];
   const n = g.players.length;
   return SEAT_TONES[(((i - y) % n) + n) % n];
-}
-
-function renderQueue(snap, g, over) {
-  const active = g.players.find((p) => p.id === g.turnPlayerId);
-  const nextId = nextPlayerId(g);
-  const next = g.players.find((p) => p.id === nextId);
-  const colorOf = (id) => TONES[seatToneOf(g, snap.youId, id)].solid;
-  // On the last slice the chip follows the banner and the scoreboard: the pie
-  // outranks the round, and the three must not name three different people.
-  const m = snap.match;
-  const champions = (over && m && m.complete) ? (m.championIds || []) : [];
-  let verb;
-  if (champions.length > 1) verb = 'Pie shared';
-  else if (champions.length === 1) {
-    verb = champions[0] === snap.youId ? 'You take the pie!' : `${nicelyName(playerName(champions[0]))} takes the pie!`;
-  } else if (over) verb = (g.winnerId === snap.youId ? 'You win!' : nicelyName(playerName(g.winnerId)) + ' wins!');
-  else if (g.turnPlayerId === snap.youId) verb = 'Your turn';
-  else if (active && !active.connected) verb = 'Waiting for ' + nicelyName(active.name) + '…';
-  else verb = nicelyName(active ? active.name : '') + ' is playing';
-  const leadId = champions.length === 1 ? champions[0] : (over ? g.winnerId : g.turnPlayerId);
-  // The pill is the header's turn chip: a dot in the holder's tone, then the
-  // verb. Whoever is next follows in the serif voice, not a second chip.
-  let html = `<span class="chip">
-      <span class="dot" style="background:${colorOf(leadId)}"></span>
-      <span class="txt">${esc(verb)}</span></span>`;
-  if (!over && next) {
-    html += `<span class="chip chip-next">
-      <span class="txt">then ${esc(next.id === snap.youId ? 'you' : nicelyName(next.name))}</span></span>`;
-  }
-  // Identical repaints are skipped so the chips are not torn down on every
-  // unrelated snapshot; turn-change motion itself is the token's job.
-  if (html !== app.lastQueueHtml) { nodes.queue.innerHTML = html; app.lastQueueHtml = html; }
 }
 
 /** Faces for the discard cards already buried under the top one. */
@@ -3489,11 +3472,11 @@ function renderCenter(snap, g, over) {
   // MATCH plaque: cream paper, the suit dot and its name in the suit's ink.
   nodes.plaque.style.setProperty('--suit-solid', s.c);
   nodes.plaque.style.setProperty('--suit-edge', s.edge);
-  nodes['match-label'].textContent = wildTop ? 'Topping' : 'Match';
+  nodes['match-label'].textContent = wildTop ? 'Any' : 'Match';
   nodes['match-glyph'].textContent = s.glyph;   // the CSS dot carries it visually
-  nodes['match-suit'].textContent = sentence(s.label);
+  nodes['match-suit'].textContent = String(s.label).toLowerCase();
   nodes['match-or-wrap'].hidden = wildTop;
-  nodes['match-value'].textContent = wildTop ? '' : sentence(matchValueText(g));
+  nodes['match-value'].textContent = wildTop ? '' : String(matchValueText(g)).toLowerCase();
   nodes['dir-badge'].textContent = g.direction === 1 ? '↻' : '↺';
   nodes['dir-glyph'].textContent = g.direction === 1 ? '↻' : '↺';
   nodes['dir-label'].textContent = g.direction === 1 ? 'Clockwise' : 'Counter-clockwise';
@@ -4018,8 +4001,8 @@ function updateFades() {
   app.handOverflows = over;
   // renderGame has usually just queued the hint's crossfade, so the node still
   // shows the previous words — ask for the incoming ones, and correct those.
-  if (over !== wasOver && currentTextOf(nodes.hint).startsWith('Play a raised card')) {
-    if (over && !app.handMoved) setText(nodes.hint, 'Swipe to see the rest of your hand.');
+  if (over !== wasOver && currentTextOf(nodes.hint) === HINT_PLAY) {
+    if (over && !app.handMoved) setText(nodes.hint, HINT_SWIPE);
   }
 }
 

@@ -73,11 +73,16 @@
      glow), against a 4.5:1 floor — every word-carrying rung still clears AA.
      Re-run that script after touching any of these four. */
   --page: #0B0908;
-  --page-glow: #3A2413;
   --shell: #14100D;
   --tray-bg: #100C0A;
-  --hair: rgba(255,247,232,.08);
-  --hair-2: rgba(255,247,232,.16);
+  /* One raised ground (a secondary button, a bar, your score row) and one
+     line (an input's edge), both solid: the old ladder of translucent creams
+     was ~127 colours. */
+  --raise: #221C17;
+  --raise-2: #2E2620;
+  --raise-gold: #2A2210;    /* the TONDO bar */
+  --raise-alarm: #2E1612;   /* the callout bar */
+  --line: #5A5047;
   --ink: #FFF7E8;          /* cream ink — card borders, letters */
   --gold: #F5CB5C;
   --crust: #E0A44A;
@@ -85,7 +90,7 @@
   --navy: #16233C;
   --paper: #FFFCF2;
   --paper-2: #F3E4C6;
-  --paper-ink: #9A7434;
+  --paper-ink: #7A5A26;   /* 5.6:1 on --paper: it carries words (the plaque, a placeholder) */
 
   /* suits: gradient + 3D bottom lip + flat mark colour */
   --pep-bg: linear-gradient(160deg,#D9503A,#B33421); --pep-edge: #7C2416; --pep-mark: #B33421; --pep-solid: #D9503A;
@@ -107,27 +112,25 @@
   --anc-ink: #2F4E82;
   --wild-ink: #0B1526;
 
-  /* ---- the ink alpha ladder --------------------------------------------
-     Muted cream had no ladder: `rgba(255,247,232, a)` appeared on 50 lines
-     with 22 distinct alphas, and eight of those steps failed WCAG AA. These
-     four are now the only steps allowed to carry words. Ratios below were
-     measured against the ORIGINAL navy --shell (#0E1729). The ground is warm
-     now, and the worst surface is no longer --shell but --page-glow, where
-     --ink-3 measures 5.58:1. `node scripts/check-contrast.js` recomputes every
-     rung against every live surface — run it, do not trust these numbers:
-       --ink-1  .92   loud secondary text        (~15:1)
-       --ink-2  .72   10-11px caps labels        (~10:1; small type needs the
-                                                  headroom, so labels never
-                                                  use a lower rung)
-       --ink-3  .58   body-size muted text       (~6.5:1) — the FLOOR for words
-       --ink-4  .40   glyphs, rules, decoration  (~3.6:1) — never words
-     Anything fainter than --ink-4 is decoration and must not carry meaning.
-     (The exact measured ratios are re-checked in the verification sweep; see
-     the project notes for the numbers this ladder was tuned against.) */
-  --ink-1: rgba(255,247,232,.92);
-  --ink-2: rgba(255,247,232,.72);
-  --ink-3: rgba(255,247,232,.58);
-  --ink-4: rgba(255,247,232,.40);
+  /* ---- two text colours ------------------------------------------------
+     --ink for what you read first, --ink-2 for everything quieter. Solid, not
+     an alpha ladder: an opacity step's contrast depends on whatever is behind
+     it, and the old four-rung ladder had become 127 translucent colours.
+     State colours (gold for the turn and the brand, --alarm for a fault) are
+     accents, not a third text tier. `node scripts/check-contrast.js` gates
+     both against every ground below. */
+  --ink-2: #A9A196;
+  --alarm: #F0A092;
+
+  /* ---- one type scale ---------------------------------------------------
+     Five steps, each 1.25x the last, and no screen uses more than five.
+     Card faces and seat tiles keep their own sizes, derived from the card or
+     tile they sit on (--cs, --ss): they are artwork that scales as one. */
+  --fs-s: 12.8px;
+  --fs-m: 16px;
+  --fs-l: 20px;
+  --fs-xl: 25px;
+  --fs-display: clamp(40px, 5.6vw, 64px);
 
   /* ---- geometry ------------------------------------------------------ */
   /* Card widths are LENGTHS. The scale factor is a length divided by a length,
@@ -201,11 +204,11 @@
   --t-text-out: 120ms;  /* a label crossfading to new text */
   --t-text-in: 180ms;
 
-  --font-display: 'Bricolage Grotesque', 'Archivo Black', system-ui, sans-serif;
+  /* Two families. Bricolage for the wordmark, card values and the winner
+     line; DM Sans for everything else, with tabular figures for codes and
+     scores. */
+  --font-display: 'Bricolage Grotesque', system-ui, sans-serif;
   --font-body: 'DM Sans', system-ui, -apple-system, Segoe UI, sans-serif;
-  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-ticket: var(--font-mono);
-  --font-voice: 'Instrument Serif', Georgia, 'Times New Roman', serif;
 }
 
 * { box-sizing: border-box; }
@@ -499,7 +502,7 @@ body { height: 100dvh; }
   }
   /* Colour/opacity keep their timing; transform is dropped from the list, so
      lifts, fans and hops apply instantly. */
-  .btn, .input, .card, .deck, .seat, .seat-body, .you-pill, .chip {
+  .btn, .input, .card, .deck, .seat, .seat-body {
     transition-property: opacity, color, background-color, border-color, filter !important;
     transition-duration: 160ms !important;
   }
@@ -565,66 +568,72 @@ body { height: 100dvh; }
 
 :focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
 
-/* One button system for the whole product: a quiet cream-on-glass chip with a
-   hairline, and a gold primary that sits on a 3px bottom lip like the cards. */
+/* One button system for the whole product, three species and no borders:
+   a solid raised secondary, the gold primary on a 3px lip like the cards, and
+   a text link. Every one is at least 44px tall. */
+button { font: inherit; }   /* a <button> does not inherit the family; the hand's tick leaked Arial */
 .btn {
   font-family: var(--font-body);
-  font-size: 14px; font-weight: 700; letter-spacing: .01em;
-  color: rgba(255,247,232,.7); background: rgba(255,247,232,.06);
-  border: 1px solid var(--hair-2); border-radius: 14px;
-  padding: 12px 16px; min-height: 44px; cursor: pointer;
-  transition: filter var(--t-micro) var(--e-out), transform var(--t-press) var(--e-out), border-color var(--t-micro) var(--e-out), background-color var(--t-micro) var(--e-out), color var(--t-micro) var(--e-out);
+  font-size: var(--fs-m); font-weight: 700; line-height: 1.25;
+  color: var(--ink); background: var(--raise);
+  border: 0; border-radius: 12px;
+  padding: 12px 18px; min-height: 44px; cursor: pointer;
+  transition: filter var(--t-micro) var(--e-out), transform var(--t-press) var(--e-out), background-color var(--t-micro) var(--e-out), color var(--t-micro) var(--e-out);
 }
 /* Hover motion is gated: a touch tap fires :hover and leaves the button
    stuck in its raised state. */
 @media (hover: hover) and (pointer: fine) {
-  .btn:hover:not(:disabled) { border-color: rgba(255,247,232,.34); color: var(--ink); transform: translateY(-1px); }
+  .btn:hover:not(:disabled) { background-color: var(--raise-2); transform: translateY(-1px); }
 }
 /* Press feedback: the button sinks onto its 3D lip AND scales, so it feels
    heard on every pointer type, not just the ones that can hover. */
 .btn:active:not(:disabled) { transform: translateY(1px) scale(.97); }
 .btn:disabled { cursor: default; opacity: .58; }
-.btn-primary { color: var(--navy); background: var(--gold); border-color: transparent; box-shadow: 0 3px 0 rgba(96,58,14,.55); }
-.btn-primary:hover:not(:disabled) { color: var(--navy); border-color: transparent; }
+.btn-primary, .btn-tondo { color: var(--navy); background: var(--gold); box-shadow: 0 3px 0 #60390E; }
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:hover:not(:disabled), .btn-tondo:hover:not(:disabled) { background-color: var(--gold); filter: brightness(1.06); }
+}
 /* Disabled text is formally exempt from 1.4.3, but this is the label on the
-   button that is BLOCKING the player ("Start the game" before two seats are
-   filled), and at an effective alpha of .232 it measured 2.07:1 — unreadable.
-   The dimming stays on the button's own opacity; the label steps up a rung so
-   the words survive it. */
-.btn-primary:disabled { color: var(--ink-1); background: rgba(255,247,232,.08); border-color: transparent; box-shadow: none; }
-.btn-play { color: var(--ink); background: var(--bas-bg); border-color: transparent; box-shadow: 0 3px 0 var(--bas-edge); }
-.btn-tondo { color: var(--navy); background: var(--gold); border-color: transparent; box-shadow: 0 3px 0 rgba(96,58,14,.55); flex: 0 0 auto; }
-.btn-cta { color: var(--ink); background: var(--pep-bg); border-color: transparent; box-shadow: 0 3px 0 var(--pep-edge); flex: 0 0 auto; }
-.btn-quiet { font-family: var(--font-body); font-weight: 700; }
-.btn-ghost { background: transparent; border-color: var(--hair-2); color: rgba(255,247,232,.55); }
+   button that is BLOCKING the player ("Deal the cards" before two seats are
+   filled): the dimming stays on the button's own opacity and the label keeps
+   full ink so the words survive it. */
+.btn-primary:disabled { color: var(--ink); background: var(--raise); box-shadow: none; }
+.btn-play { color: var(--ink); background: var(--bas-bg); box-shadow: 0 3px 0 var(--bas-edge); }
+.btn-tondo { flex: 0 0 auto; }
+.btn-cta { color: var(--ink); background: var(--pep-bg); box-shadow: 0 3px 0 var(--pep-edge); flex: 0 0 auto; }
 .btn-block { width: 100%; }
-.btn-tiny { font-family: var(--font-body); font-size: 11px; font-weight: 700; letter-spacing: .06em;
-  padding: 6px 14px; min-height: 44px; border-width: 1px; border-radius: 999px;
-  background: transparent; color: var(--ink-2); }
+/* The text link: no ground, no border, quiet ink, still a 44px target. */
+.btn-tiny, .btn-ghost, .btn-link {
+  font-weight: 400; color: var(--ink-2); background: transparent;
+  padding: 10px 12px; text-decoration: underline; text-decoration-color: var(--line);
+  text-underline-offset: 4px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .btn-tiny:hover:not(:disabled), .btn-ghost:hover:not(:disabled), .btn-link:hover:not(:disabled) {
+    background: transparent; color: var(--ink); text-decoration-color: currentColor;
+  }
+}
 
-/* Inputs are navy wells sunk into the panel; focus lights a gold ring. */
+/* Inputs are dark wells; the 1px edge is the one place a line earns its keep
+   (a field has to look like a field, WCAG 1.4.11). Focus lights a gold ring. */
 .input {
-  width: 100%; font-family: var(--font-body); font-size: 16px; font-weight: 500;
-  color: var(--ink); background: rgba(7,12,22,.72);
-  border: 1px solid var(--hair-2); border-radius: 14px;
-  padding: 13px 14px; min-height: 48px;
-  transition: border-color var(--t-micro) var(--e-out), background-color var(--t-micro) var(--e-out), box-shadow var(--t-micro) var(--e-out);
+  width: 100%; font-family: var(--font-body); font-size: var(--fs-m); font-weight: 400;
+  color: var(--ink); background: var(--page);
+  border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px; min-height: 48px;
+  transition: border-color var(--t-micro) var(--e-out), box-shadow var(--t-micro) var(--e-out);
 }
-.input:hover { border-color: rgba(255,247,232,.28); }
-.input:focus { border-color: rgba(245,203,92,.7); background: rgba(7,12,22,.9); box-shadow: 0 0 0 3px rgba(245,203,92,.22); outline: none; }
-.input::placeholder { color: var(--ink-3); }
-.code-input { font-family: var(--font-ticket); font-weight: 500; font-size: 17px; letter-spacing: .12em; text-transform: uppercase; }
+.input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px #4A3A12; outline: none; }
+.input::placeholder { color: var(--ink-2); }
+.code-input { font-weight: 700; font-variant-numeric: tabular-nums; }
 
-.field { display: flex; flex-direction: column; gap: 7px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
 .field-grow { flex: 1 1 auto; min-width: 0; }
-.field-label {
-  font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .2em;
-  text-transform: uppercase; color: var(--ink-2);
-}
-/* Status lines speak, so they take the table's serif voice. */
+.field-label { font-family: var(--font-body); font-weight: 400; font-size: var(--fs-s); color: var(--ink-2); }
+/* Status lines speak in the body face, quietly. */
 .msg {
-  margin: 0; font-family: var(--font-voice); font-style: italic; font-weight: 400;
-  font-size: 15px; line-height: 1.35; color: rgba(255,247,232,.5); min-height: 20px;
+  margin: 0; font-family: var(--font-body); font-weight: 400;
+  font-size: var(--fs-m); line-height: 1.35; color: var(--ink-2); min-height: 20px;
 }
 
 .screen { display: none; height: 100%; }
@@ -642,138 +651,149 @@ body.is-offline .btn-draw,
 body.is-offline #newround-btn { opacity: .55; cursor: wait; }
 
 /* ==========================================================================
-   HOME + LOBBY — Stone Oven
-   The same page ground as the game screen (radial glow over --page) with the
-   shell panel floating on it, so the three screens read as one product.
+   HOME — the table is the front door
+   The first screen is the board the game is played on: the real pie, three
+   empty chairs, and your seat with your name as its place card. One primary
+   action deals a quick pie against three bots; inviting friends, a code, the
+   last table and your crews are text links under it.
+
+   Two layouts share one markup, picked by ?home=a|b (body[data-home]) with no
+   transition, for the owner to compare; the loser is deleted.
+     a  "Seat": your seat at the near edge, the place card and the deal under
+        it. Wide screens move the wordmark and the quiet links to the corners,
+        the way the game's own strip does.
+     b  "Centrepiece": the place card and the deal sit in the middle of the
+        pie, where the MATCH plaque and the discard sit during play.
+   The pie is sized from what the screen has left after the words and the
+   actions (--home-chrome, measured), so it fills the first screen without
+   pushing the deal below the fold.
    ========================================================================== */
 
 body[data-screen="home"] #screen-home,
 body[data-screen="lobby"] #screen-lobby,
-body[data-screen="crew"] #screen-crew {
-  background: radial-gradient(ellipse 62% 48% at 50% 38%, var(--page-glow), var(--page) 78%);
+body[data-screen="crew"] #screen-crew { background: var(--page); }
+
+.home-card {
+  width: 100%; margin: auto;
+  display: grid; justify-items: center; gap: 16px;
+  --home-chrome: 440px;
+  --home-d: clamp(220px, min(100vw - 32px, 100dvh - var(--home-chrome)), 760px);
+  --chair: clamp(36px, calc(var(--home-d) * .1), 62px);
+}
+.home-head { text-align: center; max-width: 34ch; }
+.wordmark { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: var(--fs-display); line-height: 1; color: var(--gold); }
+.tagline { margin: 10px 0 0; font-size: var(--fs-m); line-height: 1.4; color: var(--ink-2); text-wrap: balance; }
+
+/* The table: the game's own .ring, centred on the square the top --home-d of
+   this box makes. Chairs and your seat sit on its rim. */
+.home-table { position: relative; width: var(--home-d); --table-d: var(--home-d); }
+.home-table .ring { top: calc(var(--home-d) / 2); z-index: 1; }
+.home-chair, .home-you {
+  position: absolute; width: var(--chair); height: var(--chair); border-radius: 34%;
+  transform: translate(-50%, -50%) rotate(-5deg); z-index: 3;
+}
+.home-chair { background: var(--raise); border: 2px dashed var(--line); }
+.home-chair-left  { left: 5%;  top: calc(var(--home-d) * .5); }
+.home-chair-top   { left: 50%; top: calc(var(--home-d) * .05); }
+.home-chair-right { left: 95%; top: calc(var(--home-d) * .5); }
+/* Your seat: the tile you will wear at the table (.you-portrait's tone). */
+.home-you {
+  left: 50%; top: calc(var(--home-d) * .95);
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bas-bg); border: 3px solid var(--ink);
+  box-shadow: 0 4px 0 var(--bas-edge);
+  font-family: var(--font-display); font-weight: 800; font-size: calc(var(--chair) * .41); line-height: 1; color: var(--ink);
 }
 
-.home-card, .lobby-card {
+.home-place { display: grid; justify-items: center; gap: 12px; width: min(300px, 100%); z-index: 5; }
+.place-card { display: block; width: 100%; }
+/* Your name as a place card: the plaque's paper, leaning the plaque's way. */
+.place-input {
+  width: 100%; min-height: 52px; padding: 10px 14px;
+  font-family: var(--font-body); font-weight: 700; font-size: var(--fs-l); line-height: 1.2; text-align: center;
+  color: var(--navy); background: var(--paper);
+  border: 0; border-radius: 10px; box-shadow: 0 3px 0 #60390E;
+  transform: rotate(-2deg);
+}
+.place-input::placeholder { color: var(--paper-ink); }
+.place-input:focus { outline: none; }
+.place-input:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+.home-place .btn-primary { width: 100%; }
+.home-note { margin: 0; font-size: var(--fs-s); line-height: 1.4; color: var(--ink-2); text-align: center; }
+
+.home-more { display: grid; justify-items: center; gap: 4px; width: min(420px, 100%); }
+.home-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 12px; }
+.home-quiet .btn-link { font-size: var(--fs-s); }
+.home-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0 8px; }
+.home-row .home-note:empty { display: none; }
+.join-row { display: flex; gap: 8px; align-items: flex-end; width: 100%; }
+.join-row > .btn { min-height: 48px; flex: 0 0 auto; }
+.home-more > .msg { text-align: center; }
+.home-more > .msg:empty { min-height: 0; }
+
+/* ---- a: the seat ---------------------------------------------------------- */
+body[data-home="a"] .home-table { padding-top: var(--home-d); }
+/* Straight under your tile: the tile's centre is .95d, its bottom half a chair
+   lower, and the box's own flow starts at d. */
+body[data-home="a"] .home-place { position: relative; margin-inline: auto; margin-top: calc(var(--chair) * .5 + 10px - var(--home-d) * .05); }
+@media (min-width: 900px) and (min-aspect-ratio: 6/5) {
+  /* The wordmark and the quiet links go to the corners, as in the game strip,
+     and give their height back to the pie. */
+  body[data-home="a"] .home-card { --home-chrome: 300px; }
+  body[data-home="a"] .home-head { position: absolute; left: 32px; top: 28px; text-align: left; max-width: 30ch; }
+  body[data-home="a"] .wordmark { font-size: 40px; }
+  body[data-home="a"] .home-quiet { position: absolute; right: 24px; top: 24px; }
+}
+
+/* ---- b: the centrepiece ---------------------------------------------------- */
+body[data-home="b"] .home-card { --home-chrome: 300px; }
+body[data-home="b"] .home-table { height: var(--home-d); }
+/* The place card, the deal and the note on one paper plaque in the middle of
+   the pie, sized to the sauce (.79 of the table) so its corners stay on it. */
+body[data-home="b"] .home-place {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-2deg);
+  width: min(280px, calc(var(--home-d) * .56)); gap: 8px;
+  padding: 14px 14px 10px; border-radius: 12px;
+  background: var(--paper); box-shadow: 0 4px 0 #60390E, 0 16px 30px #000;
+}
+body[data-home="b"] .place-input { transform: none; box-shadow: none; background: transparent; border-bottom: 2px solid var(--paper-2); border-radius: 0; min-height: 48px; }
+body[data-home="b"] .home-place .home-note { color: var(--paper-ink); }
+body[data-home="b"] .home-place :focus-visible { outline-color: var(--navy); }
+/* the plaque sits where your tile would, so the tile steps down onto the rim */
+body[data-home="b"] .home-you { top: calc(var(--home-d) * .97); }
+
+/* ------------------------------------------------------------------ lobby */
+.lobby-card {
   width: 100%; max-width: 420px;
   display: flex; flex-direction: column; gap: 14px;
   --row-gap-eat: 14px;   /* must match the gap above: see .fx-panel[hidden] */
   /* Auto margins, not align-items:center, do the vertical centring: when the
-     card is taller than a short viewport (320x568 with the welcome fan), flex
-     centring pushes the overflow above scrollTop 0 where it can never be
-     scrolled to. Auto margins collapse to 0 first, so the top stays reachable. */
+     card is taller than a short viewport, flex centring pushes the overflow
+     above scrollTop 0 where it can never be scrolled to. */
   margin: auto;
-  background: var(--shell);
-  border: 1px solid var(--hair-2); border-radius: 16px;
+  background: var(--shell); border-radius: 16px;
   padding: 28px 22px 24px;
-  box-shadow: inset 0 1px 0 rgba(255,247,232,.06);
 }
-.home-card { border-color: rgba(245,203,92,.22); }
-
-.home-deal {
-  position: relative; width: 112px; height: 58px; margin: -7px auto -2px;
-}
-.home-deal .home-mini-card {
-  --cs: .42;
-  position: absolute; left: 50%; bottom: 0;
-  width: 40px; height: 58px;
-  transform-origin: 50% 92%;
-}
-.home-deal .home-mini-card:nth-child(1) { transform: translateX(-50%) rotate(-14deg) translateX(-24px); }
-.home-deal .home-mini-card:nth-child(2) { transform: translateX(-50%) rotate(-2deg); z-index: 1; }
-.home-deal .home-mini-card:nth-child(3) { transform: translateX(-50%) rotate(11deg) translateX(24px); }
-
-/* The header treatment from the game strip, blown up: letter-spaced gold.
-   The text-indent gives back the trailing letter-space so it centres true. */
-.wordmark {
-  margin: 0; text-align: center;
-  font-family: var(--font-display); font-weight: 800;
-  font-size: 46px; line-height: 1; letter-spacing: .14em; text-indent: .14em;
-  color: var(--gold); text-shadow: none;
-}
-.tagline {
-  margin: -4px 0 6px; text-align: center;
-  font-family: var(--font-voice); font-style: italic; font-weight: 400;
-  font-size: 18px; line-height: 1.3; color: rgba(255,247,232,.5);
-}
-.home-hook {
-  max-width: 31ch; margin: -1px auto 0; text-align: center;
-  font-size: 14px; line-height: 1.45; color: var(--ink-3);
-  text-wrap: pretty;
-}
-.home-facts {
-  display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
-  gap: 6px 14px; margin: -1px 0 3px;
-  font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--ink-2);
-}
-.home-facts span { display: inline-flex; align-items: center; gap: 8px; }
-.home-facts span + span::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--gold); }
-.home-card > [data-help-open] { align-self: center; border-color: transparent; color: var(--gold); }
-.home-card > [data-help-open]:hover { color: var(--gold); border-color: rgba(245,203,92,.4); }
-.rule {
-  display: flex; align-items: center; gap: 12px;
-  font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .2em;
-  text-transform: uppercase; color: var(--ink-2);
-}
-.rule::before, .rule::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--hair); }
-.join-row { display: flex; gap: 10px; align-items: flex-end; }
-.join-row > .btn { min-height: 48px; flex: 0 0 auto; }
-
-/* ------------------------------------------------- one tap to a table
-   Layout only. Every one of these controls is an existing button species
-   (.btn, .btn-block, .btn-tiny) wearing its own colour, radius, shadow and
-   size — a fourth species on the home card would be a design-system change,
-   not a feature. The card's own 14px row gap already clears the 8px minimum
-   between adjacent tappable controls, so nothing here tightens it.
-
-   No entrance animation on either block: both are decided before first paint
-   and the home screen is a surface people see many times a day. */
-.quick-hint { margin: -7px 0 0; }
-.last-table { display: flex; flex-direction: column; gap: 8px; }
-.last-table-sub { max-width: none; margin: 0; }
-.last-table-sub:empty { display: none; }
-.home-card > .btn-forget { align-self: center; }
-
-/* ------------------------------------------------------------------ lobby */
-.lobby-head { display: flex; flex-direction: column; gap: 7px; }
-.lobby-mark {
-  font-family: var(--font-display); font-weight: 800; font-size: 17px;
-  letter-spacing: .14em; color: var(--gold); margin: 0 0 4px;
-}
+.lobby-head { display: flex; flex-direction: column; gap: 6px; }
+.lobby-mark { font-family: var(--font-display); font-weight: 800; font-size: var(--fs-l); color: var(--gold); margin: 0 0 6px; }
 .code-row { display: flex; align-items: center; gap: 12px; }
 .code {
   flex: 1 1 auto; min-width: 0;
   /* The code is the one string a player reads out loud to three other people,
-     so it must never ellipsise. At a flat 32px it did: measured in this very
-     element with every one of the 37 CODE_WORDS, the widest code needs 217px
-     while the box is 159px at 320px of viewport and 199px at 360px — 37 of 37
-     words clipped at 320, 21 of 37 at 360, 3 of 37 at 375 (the digits survive
-     and the WORD loses its tail, which is the worst half to lose).
-
-     Scaled rather than stacked: moving the Copy button below the code would
-     give the code the whole row at its designed size, but it adds ~44px to a
-     lobby card that already overflows 320x568 by 237px.
-
-     The ramp is derived from the box, not guessed: required width is 6.78px per
-     px of font-size for the widest code, so the fit ceiling is 23.4px at 320
-     and 33.7px at 390. This line runs through (320, 22) and (390, 32) and sits
-     under that ceiling at every width with ~4px of slack. */
-  font-family: var(--font-display); font-weight: 800; line-height: 1.05;
-  font-size: clamp(22px, calc(14.3vw - 23.7px), 32px);
-  letter-spacing: .03em; color: var(--ink);
+     so it must never ellipsise. Measured with every CODE_WORDS entry in
+     Bricolage, the widest needed 6.78px per px of font-size; DM Sans 700 is
+     narrower, so the old ramp (22px at 320 up to 32px at 390) only gains
+     slack. It is the one size on this card outside the scale, and it is
+     tabular so the digits do not jiggle. */
+  font-family: var(--font-body); font-weight: 700; line-height: 1.05;
+  font-size: var(--fs-xl); font-variant-numeric: tabular-nums;
+  color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* 44px floor: "Copy" measured 63x38 and "Remove" 34 tall. Both grow
-   vertically only — the rows they sit in are 64px and 48px, so nothing else
-   moves and no neighbouring target is crowded. */
-.code-row .btn-ghost { flex: 0 0 auto; padding: 9px 15px; min-height: 44px; border-radius: 999px; font-size: 12px; }
+.code-row .btn-ghost { flex: 0 0 auto; }
 
-.seat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
-.seat-row {
-  display: flex; align-items: center; gap: 10px; min-height: 64px;
-  background: rgba(255,247,232,.05); border: 1px solid var(--hair-2);
-  border-radius: 16px; padding: 9px 12px;
-}
+.seat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.seat-row { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 4px 0; }
 /* the game screen's seat tile, at lobby size: tone gradient, cream border,
    3D lip, leaning -5deg with the initial standing straight up */
 .seat-row .seat-chip {
@@ -782,7 +802,7 @@ body[data-screen="crew"] #screen-crew {
   border-radius: 34%;
   background: var(--tone-bg, var(--chz-bg));
   border: 3px solid var(--ink);
-  box-shadow: 0 4px 0 var(--tone-edge, var(--chz-edge)), 0 10px 16px rgba(0,0,0,.42);
+  box-shadow: 0 4px 0 var(--tone-edge, var(--chz-edge));
   transform: rotate(-5deg);
 }
 .seat-chip .initial {
@@ -790,108 +810,68 @@ body[data-screen="crew"] #screen-crew {
   color: var(--ink); transform: rotate(5deg);
 }
 .seat-row .who {
-  flex: 1 1 auto; min-width: 0;
-  font-family: var(--font-body); font-size: 15px; font-weight: 700; color: var(--ink);
+  flex: 0 1 auto; min-width: 0;
+  font-family: var(--font-body); font-size: var(--fs-m); font-weight: 700; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.seat-row .btn-tiny { flex: 0 0 auto; min-height: 44px; padding: 6px 12px; }
-
-.seat-ghost { background: transparent; border: 1px dashed rgba(255,247,232,.14); }
-.seat-ghost .who {
-  font-family: var(--font-voice); font-style: italic; font-weight: 400;
-  font-size: 15px; color: var(--ink-3);
-}
+.seat-row .btn-tiny { flex: 0 0 auto; margin-left: auto; }
+.seat-ghost .who { font-weight: 400; color: var(--ink-2); }
 .ghost-plus {
   width: 44px; height: 44px; flex: 0 0 auto; margin-right: 3px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 34%; border: 2px dashed rgba(255,247,232,.18);
-  font-family: var(--font-display); font-weight: 800; font-size: 20px; line-height: 1;
-  color: var(--ink-3); transform: rotate(-5deg);
+  border-radius: 34%; border: 2px dashed var(--line);
+  font-family: var(--font-body); font-weight: 700; font-size: var(--fs-l); line-height: 1;
+  color: var(--ink-2); transform: rotate(-5deg);
 }
 
-.tag {
-  flex: 0 0 auto;
-  font-family: var(--font-display); font-weight: 800; font-size: 11px; letter-spacing: .06em;
-  text-transform: uppercase; padding: 4px 9px; border-radius: 999px;
-  color: var(--navy); background: var(--ink);
-}
-.tag-host { color: var(--navy); background: var(--gold); }
-.tag-you { color: var(--navy); background: var(--ink); }
-.tag-bot { color: rgba(255,247,232,.72); background: rgba(255,247,232,.12); }
-.tag-away { color: var(--ink); background: var(--pep-bg); }
+/* Who a seat is, said in words after the name ("Carmela · host · bot"), not
+   in pills. Host is the one word in gold; away is the alarm colour. */
+.tag { flex: 0 0 auto; font-family: var(--font-body); font-weight: 400; font-size: var(--fs-m); color: var(--ink-2); }
+.tag::before { content: "· "; }
+.tag-host { color: var(--gold); }
+.tag-away { color: var(--alarm); }
 
 .lobby-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .lobby-actions .btn { flex: 1 1 auto; white-space: nowrap; }
 /* Below 360px the two labels cannot share one row without wrapping to two
    lines each ("Deal the cards" + "Add bot" at 320px), so they stack instead. */
 @media (max-width: 360px) { .lobby-actions .btn { flex-basis: 100%; } }
+.lobby-card > [data-help-open] { align-self: center; }
 
 /* ==========================================================================
    GAME SCREEN — Stone Oven
    ========================================================================== */
 
 body[data-screen="game"] { background: var(--page); }
-#screen-game { background: radial-gradient(ellipse 62% 48% at 50% 38%, var(--page-glow), var(--page) 78%); }
+#screen-game { background: var(--page); }
 
 /* ------------------------------------------------------------ header bar */
+/* One row, no rule under it: the tray below has its own ground, so space
+   does the separating. It holds the wordmark, the slice line, the table code
+   and three 44x44 utilities. It does NOT say whose turn it is: the table and
+   the line by your hand do. */
 .strip {
   flex: 0 0 auto;
-  padding: calc(11px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) 11px calc(20px + env(safe-area-inset-left));
-  background: transparent; border-bottom: 1px solid var(--hair);
+  padding: calc(4px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 4px calc(20px + env(safe-area-inset-left));
 }
-.strip-inner { display: flex; align-items: center; gap: 13px; width: 100%; max-width: var(--measure); min-width: 0; margin-inline: auto; }
-.strip-mark { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: .14em; color: var(--gold); flex: 0 0 auto; }
-.strip-code { font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .18em; color: var(--ink-2); flex: 0 0 auto; }
-/* The 30px circle is the VISUAL; the ::before below is coded to a 44x44
-   target, centred so growing it costs no layout and no pixels. It does NOT
-   land at 44x44 for every button that shares this shape — see the measured
-   note on .strip-sound below. This one (.strip-help) is the LAST of the three
-   utility buttons in DOM order (sound, then haptics, then this "?"), so
-   nothing sits to its right, and in the flex gap on its left, hit-testing
-   (elementFromPoint) resolves to whichever sibling is LATER in DOM order —
-   this one. Measured at 390x844: .strip-help's delivered hit target is the
-   full 44x44 (340.5–384.5 horizontally), taken out of its left neighbour's
-   would-be target. Its left neighbour (haptics-btn, or sound-btn when
-   haptics is hidden) IS an interactive button, not inert text — this
-   used to be true back when this button sat alone next to .strip-code, before
-   the sound/haptics toggles were inserted between them. */
-.strip-help {
-  position: relative;
-  width: 30px; height: 30px; min-height: 30px; padding: 0; flex: 0 0 auto;
-  border-radius: 50%; border: 1px solid rgba(255,247,232,.2);
-  font-family: var(--font-body); font-weight: 700; font-size: 13px; color: rgba(255,247,232,.55);
-}
-.strip-help::before {
-  content: ""; position: absolute; left: 50%; top: 50%;
-  width: 44px; height: 44px; transform: translate(-50%, -50%); border-radius: 50%;
-}
-.strip-help:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
-
-/* The mute control wears the help button's geometry — same 30px circle, same
-   ::before coded to 44x44 — so the two read as one pair of utilities rather
-   than two unrelated controls. That geometry does NOT deliver the same
-   DELIVERED hit area for #sound-btn or #haptics-btn, though: each has an
-   interactive sibling immediately after it in DOM order (the next toggle,
-   or .strip-help), and elementFromPoint hit-testing resolves the overlap in
-   their shared flex gap (13px normally, 9px at ≤719px width — both narrower
-   than the 14px the two 44px pseudo-elements try to claim) to whichever
-   sibling is LATER in the DOM, not to this one. Measured at 390x844 with an
-   elementFromPoint scan: #sound-btn and #haptics-btn each deliver 38.5x44,
-   not 44x44 — only .strip-help, last in the row, keeps the full width. Both
-   truncated targets are still comfortably tappable; this comment just must
-   not claim a guarantee the layout doesn't keep. */
-.strip-sound {
-  position: relative;
-  width: 30px; height: 30px; min-height: 30px; padding: 0; flex: 0 0 auto;
-  border-radius: 50%; border: 1px solid rgba(255,247,232,.2);
-  color: rgba(255,247,232,.55);
+.strip-inner { display: flex; align-items: center; gap: 12px; width: 100%; max-width: var(--measure); min-width: 0; margin-inline: auto; }
+/* The wordmark keeps the left; everything after it gathers on the right. */
+.strip-mark { margin: 0 auto 0 0; font-family: var(--font-display); font-weight: 800; font-size: var(--fs-l); color: var(--gold); flex: 0 0 auto; }
+.strip-code { font-family: var(--font-body); font-weight: 400; font-size: var(--fs-s); font-variant-numeric: tabular-nums; color: var(--ink-2); flex: 0 0 auto; }
+/* The three utilities are 44x44 boxes, so every one of them is its own whole
+   target (the old 30px circle grew a 44px ::before that its later sibling
+   won in hit-testing: sound and vibration delivered 38.5x44). Borderless:
+   the glyph is the control, and a hover ground says it is one. */
+.strip-sound, .strip-help {
+  width: 44px; height: 44px; min-height: 44px; padding: 0; flex: 0 0 auto;
   display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; color: var(--ink-2); text-decoration: none;
 }
-.strip-sound::before {
-  content: ""; position: absolute; left: 50%; top: 50%;
-  width: 44px; height: 44px; transform: translate(-50%, -50%); border-radius: 50%;
+.strip-help { font-family: var(--font-body); font-weight: 700; font-size: var(--fs-m); }
+@media (hover: hover) and (pointer: fine) {
+  .strip-sound:hover:not(:disabled), .strip-help:hover:not(:disabled) { background: var(--raise); color: var(--ink); }
 }
-.strip-sound:hover:not(:disabled) { border-color: rgba(255,247,232,.45); color: var(--ink); }
+
 /* A speaker cone plus two arcs, drawn rather than typed: a glyph font would
    render this differently on every platform, and it sits next to a "?" whose
    weight it has to match.
@@ -924,7 +904,7 @@ body[data-screen="game"] { background: var(--page); }
    change. That is only true while ::after stays off the clipped layer (see
    .sound-glyph::before above); scripts/probes/haptics.js measures the slash's
    span against the clip region and fails if it drifts back inside it. */
-.strip-sound.is-off { color: rgba(255,247,232,.32); }
+.strip-sound.is-off { color: var(--ink-2); }
 .strip-sound.is-off .sound-glyph::after {
   border: 0; border-radius: 0;
   /* Crosses the cone rather than sitting beside it: a slash THROUGH the icon
@@ -972,23 +952,9 @@ body[data-screen="game"] { background: var(--page); }
   width: 19px; height: 1.6px; background: currentColor;
   transform: translate(-50%, -50%) rotate(-45deg);
 }
-.queue { display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
-.chip {
-  display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
-  padding: 5px 13px; border-radius: 999px;
-  background: rgba(224,164,74,.16); border: 1px solid rgba(224,164,74,.45);
-  /* `background` is a shorthand — name the one property that actually moves. */
-  transition: background-color 200ms var(--e-out), border-color 200ms var(--e-out);
-}
-.chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--crust); }
-.chip .txt { font-family: var(--font-body); font-weight: 700; font-size: 13px; color: var(--crust-2); white-space: nowrap; }
-.chip-next { background: transparent; border-color: transparent; padding: 0; }
-.chip-next .txt { font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 16px; color: var(--ink-3); }
-
 /* ------------------------------------------------------------- the stage */
 .stage {
   position: relative; flex: 1 1 auto; min-height: 220px; overflow: hidden;
-  background: radial-gradient(ellipse 56% 46% at 50% 52%, rgba(224,164,74,.07), transparent 70%);
 
   /* ---- the table, as a continuous function of the space it is given -------
      The old expression was `min(68vw, 50vh, 576px)`, and on any large window
@@ -1399,14 +1365,6 @@ body[data-screen="game"] { background: var(--page); }
 .tp-shape--cheese { box-shadow: 0 calc(var(--tp-u) * 3) calc(var(--tp-u) * 5) rgba(40,10,4,.5); }
 
 .sauce-vignette { background: radial-gradient(circle at 50% 46%, transparent 40%, rgba(20,4,2,.42) 100%); }
-.oven-mark {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  font-family: var(--font-display); font-weight: 800;
-  font-size: calc(var(--table-d) * .08); letter-spacing: .36em;
-  color: rgba(255,240,205,.09); transform: translateX(calc(var(--table-d) * .016));
-  white-space: nowrap;
-}
-
 /* --- centre: MATCH plaque + discard ------------------------------------- */
 .center {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 4;
@@ -1415,8 +1373,8 @@ body[data-screen="game"] { background: var(--page); }
 .plaque {
   position: relative;
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 17px 9px; border-radius: 11px; white-space: nowrap;
-  background: linear-gradient(var(--paper), var(--paper-2));
+  padding: 9px 16px; border-radius: 11px; white-space: nowrap;
+  background: var(--paper);
   border: 0;
   box-shadow: 0 3px 0 rgba(96,58,14,.5), 0 10px 20px rgba(0,0,0,.35);
   transform: rotate(-2deg);
@@ -1430,22 +1388,21 @@ body[data-screen="game"] { background: var(--page); }
 /* The plaque is the answer to "what can I play?" — when that answer changes
    it acknowledges itself once, briefly, with the playful settle. */
 .plaque.is-pop { animation: plaque-pop 200ms var(--e-pop) 1; }
-.plaque-head { display: flex; align-items: center; gap: 6px; }
-.plaque-label { font-family: var(--font-mono); font-weight: 500; font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--paper-ink); }
-.dir-badge { font-size: 13px; line-height: 1; color: rgba(154,116,52,.75); }
+.plaque-label { font-family: var(--font-body); font-weight: 400; font-size: var(--fs-m); line-height: 1; color: var(--paper-ink); }
+.dir-badge { font-size: var(--fs-m); line-height: 1; color: var(--paper-ink); }
 /* --gap-eat is the gap #match-or-wrap must swallow as it collapses, or the
    plaque would still snap by one gap when a Wild removes the value half. */
-.plaque-row { display: flex; align-items: center; gap: 10px; --gap-eat: 10px; }
-.plaque-pair { display: flex; align-items: center; gap: 8px; }
+.plaque-row { display: flex; align-items: center; gap: 7px; --gap-eat: 7px; }
+.plaque-pair { display: flex; align-items: center; gap: 7px; }
 .match-glyph {
   width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;
   background: var(--suit-solid, var(--bas-solid));
   box-shadow: inset 0 -2px 0 rgba(0,0,0,.18);
   font-size: 0; /* the dot IS the glyph; the character never paints */
 }
-.match-suit { font-family: var(--font-display); font-weight: 800; font-size: 17px; line-height: 1; color: var(--suit-edge, var(--bas-edge)); }
-.match-or { font-family: var(--font-body); font-weight: 400; font-size: 13px; line-height: 1; color: var(--paper-ink); }
-.match-value { font-family: var(--font-display); font-weight: 800; font-size: 17px; line-height: 1; color: var(--navy); }
+.match-suit { font-family: var(--font-body); font-weight: 700; font-size: var(--fs-m); line-height: 1; color: var(--suit-edge, var(--bas-edge)); }
+.match-or { font-family: var(--font-body); font-weight: 400; font-size: var(--fs-m); line-height: 1; color: var(--paper-ink); }
+.match-value { font-family: var(--font-body); font-weight: 700; font-size: var(--fs-m); line-height: 1; color: var(--navy); }
 
 .pile {
   position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
@@ -1499,14 +1456,18 @@ body[data-screen="game"] { background: var(--page); }
   background: var(--ink); border: 2px solid #9A6C1C;
   font-family: var(--font-display); font-weight: 800; font-size: 12px; color: var(--navy);
 }
-.dir { display: flex; align-items: center; gap: 7px; }
-.dir-glyph { font-size: 15px; line-height: 1; color: var(--ink-4); }
-.dir-label { font-family: var(--font-mono); font-weight: 500; font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-2); }
+/* The play direction is the plaque's arrow; the words stay for assistive tech
+   (and fx.js reads them for the reversal announcement), not as a label. */
+.dir {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
 
 /* ==================================================== the card, one system
    Every face card — hand, discard, drawn, wild preview — is scaled from its
    own --cw against the reference md width of 96px. */
 .card, .top-card, .under-card, .drawn-card, .wild-card, .travel-card {
+  font-family: var(--font-body);
   --cw: var(--card-w);
   --cs: calc(var(--cw) / 96px);            /* length / length = <number> */
   --m: calc(var(--cw) * .5417);            /* cream mark circle, 52 @ 96 */
@@ -1524,7 +1485,7 @@ body[data-screen="game"] { background: var(--page); }
 .card-index {
   position: relative; z-index: 1; align-self: flex-start;
   font-family: var(--font-display); font-weight: 800;
-  font-size: calc(22px * var(--cs)); line-height: 1; letter-spacing: -.02em; color: var(--ink);
+  font-size: calc(22px * var(--cs)); line-height: 1; letter-spacing: 0; color: var(--ink);
   /* The digit carries its own ground. Cream on the bare suit gradient measured
      1.45:1 (cheese) to 3.82:1 (pepperoni) — the rank, the single most-read
      thing on the card, was the least legible. See --pep-ink for why no flat
@@ -1554,13 +1515,13 @@ body[data-screen="game"] { background: var(--page); }
 .card-suit {
   position: relative; z-index: 1; align-self: center; text-align: center;
   white-space: nowrap; overflow: hidden; max-width: 100%;
-  font-family: var(--font-mono); font-weight: 500;
+  font-family: var(--font-body); font-weight: 700;
   /* This is the ONLY non-colour suit cue on the card, so it is the one piece
      of type that must not scale below legibility: it was 8.09px on a phone
      card at ~2:1 on basil. It now floors at 11px and takes the same ink chip
      the rank does, which puts it at the same 7.7-9.4:1 as the rank on every
      suit instead of 1.4-3.4:1. */
-  font-size: max(11px, calc(10px * var(--cs))); letter-spacing: .18em;
+  font-size: max(11px, calc(10px * var(--cs))); letter-spacing: 0;
   color: var(--ink);
   background: var(--suit-ink, var(--pep-ink));
   padding: calc(2px * var(--cs)) calc(6px * var(--cs)) calc(3px * var(--cs));
@@ -1724,23 +1685,22 @@ body[data-screen="game"] { background: var(--page); }
 }
 .mini-back + .mini-back { margin-left: calc(var(--seat-back) * -.65); }
 
+/* Name and status in words under the tile, on the page's own ground (so it
+   stays legible where it crosses the crust), with no border and no pill. A
+   loud status is gold words, an alarm is alarm words; never a coloured box. */
 .seat-status {
   display: flex; align-items: center; justify-content: center; gap: max(3px, calc(6px * var(--ss)));
   max-width: var(--pill-max);
   min-width: 0; white-space: nowrap; overflow: hidden;
-  border-radius: 999px;
-  padding: max(2px, calc(4px * var(--ss))) max(8px, calc(11px * var(--ss))) max(3px, calc(5px * var(--ss)));
-  background: rgba(7,12,22,.62); border: 1px solid rgba(255,247,232,.14);
+  border-radius: 8px;
+  padding: max(2px, calc(3px * var(--ss))) max(6px, calc(8px * var(--ss)));
+  background: var(--page);
 }
-.seat-status.is-loud { background: rgba(50,36,8,.85); border-color: rgba(245,203,92,.45); }
-.seat-name, .seat-verb { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.seat-name { flex: 0 1 auto; font-family: var(--font-body); font-weight: 700; font-size: clamp(10px, calc(13px * var(--ss)), 19px); letter-spacing: .01em; line-height: 1.2; color: rgba(255,247,232,.72); }
-.seat-verb { flex: 0 1 auto; font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: clamp(11px, calc(14px * var(--ss)), 20px); line-height: 1.2; color: var(--ink-3); }
-.seat-status.is-loud .seat-name { color: var(--gold); }
-.seat-status.is-loud .seat-verb { color: rgba(245,203,92,.8); }
-.seat-status.is-alarm { background: rgba(64,16,10,.85); border-color: rgba(217,80,58,.6); }
-.seat-status.is-alarm .seat-name { color: #F0A092; }
-.seat-status.is-alarm .seat-verb { color: #F0A092; }
+.seat-name, .seat-verb { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-body); font-size: var(--fs-s); line-height: 1.25; }
+.seat-name { flex: 0 1 auto; font-weight: 700; color: var(--ink); }
+.seat-verb { flex: 0 1 auto; font-weight: 400; color: var(--ink-2); }
+.seat-status.is-loud .seat-name, .seat-status.is-loud .seat-verb { color: var(--gold); }
+.seat-status.is-alarm .seat-name, .seat-status.is-alarm .seat-verb { color: var(--alarm); }
 
 /* the turn passing, made spatial: one chip travels the ring */
 .turn-token {
@@ -1770,8 +1730,8 @@ body[data-screen="game"] { background: var(--page); }
 .ribbon {
   position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); max-width: 92%; z-index: 8;
   text-align: center;
-  font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 19px;
-  color: rgba(255,247,232,.5); background: transparent; padding: 0;
+  font-family: var(--font-body); font-weight: 400; font-size: var(--fs-m);
+  color: var(--ink-2); background: transparent; padding: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 /* Where the banner hangs has been moved twice, and both moves were forced by
@@ -1815,14 +1775,15 @@ body[data-screen="game"] { background: var(--page); }
 .banner {
   position: absolute; left: 50%; bottom: 8px; z-index: 12;
   transform: translate(-50%, 0) rotate(-2deg);
-  font-family: var(--font-display); font-weight: 800; font-size: 30px; letter-spacing: .02em;
-  /* One line, always. The longest string this ever holds is a winner's name
-     plus " WINS", and on a 320px phone that wrapped to two lines, grew the
-     banner by 24px and put 33.7% of the plaque back under it. */
+  /* The winner line: the one place outside a card that speaks in Bricolage. */
+  font-family: var(--font-display); font-weight: 800; font-size: var(--fs-xl); line-height: 1.1;
+  /* One line, always. The longest string this ever holds is a 14-character
+     name plus " takes the pie"; on a 320px phone a wrap grew the banner by a
+     line and put a third of the plaque back under it. */
   white-space: nowrap;
-  color: var(--navy); background: linear-gradient(var(--paper), var(--paper-2));
-  padding: 15px 26px; border-radius: 14px;
-  box-shadow: 0 4px 0 rgba(96,58,14,.5), 0 16px 30px rgba(0,0,0,.5);
+  color: var(--navy); background: var(--paper);
+  padding: 14px 24px; border-radius: 14px;
+  box-shadow: 0 4px 0 #60390E, 0 16px 30px #000;
   animation: tondo-slam 240ms var(--e-pop) 1;
   pointer-events: none; /* never a hit-target over the table */
 }
@@ -1874,15 +1835,17 @@ body[data-screen="game"] { background: var(--page); }
 .travel-back { --cw: 64px; --cs: calc(var(--cw) / 96px); }
 
 /* ------------------------------------------------------------------ tray */
+/* Its own ground, no rule on top: the ground change is the edge. */
 .tray {
   flex: 0 0 auto;
   padding: 14px calc(22px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left));
-  background: var(--tray-bg); border-top: 1px solid var(--hair);
+  background: var(--tray-bg);
 }
 .tray > * { max-width: var(--measure); margin-inline: auto; }
+/* Your tile and the one line by your hand. */
 .you-strip {
+  position: relative;
   display: flex; align-items: center; gap: 12px; padding: 0 0 10px;
-  border: 0; border-radius: 0; background: transparent;
 }
 .you-ticket { display: none; }
 .you-seat { position: relative; width: var(--you-tile); height: var(--you-tile); flex: 0 0 auto; }
@@ -1905,89 +1868,38 @@ body[data-screen="game"] { background: var(--page); }
 }
 /* A +2 landing: the victim's count takes the punch as the last card arrives. */
 .count-badge.is-punched, .you-count.is-punched { animation: badge-punch 260ms cubic-bezier(.34,1.56,.64,1) 1; }
-.you-pill {
-  display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0;
-  padding: 4px 11px 5px; border-radius: 999px;
-  background: transparent; border: 1px solid rgba(255,247,232,.14);
-  transition: background-color var(--t-state) var(--e-out), border-color var(--t-state) var(--e-out);
-}
-.you-strip.is-acting .you-pill { background: rgba(245,203,92,.16); border-color: rgba(245,203,92,.45); }
-.you-name {
-  min-width: 0; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: var(--font-body); font-weight: 700; font-size: 13px; color: rgba(255,247,232,.72);
-}
-.you-strip.is-acting .you-name { color: var(--gold); }
-/* The seat verb reserves its own width instead of resizing the pill.
-   This was the ONE real layout shift in the tray: the pill is content-sized
-   and sits before .label-row, so every "your turn" → "you" shortened it and
-   dragged the whole hand-label row sideways. Measured live at 1280x900 in
-   Instrument Serif italic 14px: the six status strings run 18.6px ("you") to
-   71.8px ("forgot TONDO!") and 1ch = 6.45px, so the widest is 11.13ch —
-   12ch reserves it with headroom, and `ch` re-derives the same reserve at the
-   smaller type sizes further down this file. The recorded shift was exactly
-   30.9px = 49.5px ("your turn") − 18.6px ("you"). */
+/* What happened TO you ("skipped", "+2", "forgot TONDO!") rides on the corner
+   of your tile like a sticker, so it never reflows the line beside it. */
 .you-status {
-  display: block; white-space: nowrap;
-  width: 12ch; flex: 0 1 auto; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis;
-  font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 14px;
-  color: var(--ink-3); background: transparent; padding: 0; border-radius: 0;
+  position: absolute; left: -4px; top: -8px; z-index: 2; pointer-events: none;
+  white-space: nowrap;
+  font-family: var(--font-body); font-weight: 700; font-size: var(--fs-s); line-height: 1.2;
+  color: var(--gold); background: var(--page); padding: 2px 7px; border-radius: 8px;
 }
-.you-status.is-acting { color: rgba(245,203,92,.85); }
-.you-status.is-alarm { color: #F0A092; }
+.you-status:empty { display: none; }
+.you-status.is-alarm { color: var(--alarm); }
 .you-pips { display: none; }
 
-.label-row { flex: 1 1 auto; display: flex; align-items: center; gap: 12px; justify-content: space-between; min-width: 0; }
-.hand-label, .playable-label {
-  font-family: var(--font-mono); font-weight: 500; font-size: 11px; letter-spacing: .2em;
-  text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.hand-label { color: var(--ink-2); }
-.playable-label { color: rgba(245,203,92,.7); text-align: right; }
-.playable-label.is-live { color: var(--bas-solid); }
-.playable-label.is-drawn { color: var(--crust-2); }
-
 /* --------------------------------------------------------- context bars */
-.bar { display: flex; align-items: center; gap: 10px; padding: 11px 13px; margin-top: 10px; flex-wrap: wrap; border-radius: 14px; }
+/* One ground per bar and no border; the head carries the bar's colour. */
+.bar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin-top: 10px; flex-wrap: wrap; border-radius: 12px; background: var(--raise); }
 .bar-text { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.bar-head { font-family: var(--font-body); font-weight: 700; font-size: 13px; line-height: 1.4; color: var(--ink); }
-.bar-sub { font-family: var(--font-body); font-size: 13px; line-height: 1.35; color: rgba(255,247,232,.55); }
+.bar-head { font-family: var(--font-body); font-weight: 700; font-size: var(--fs-m); line-height: 1.35; color: var(--ink); }
+.bar-sub { font-family: var(--font-body); font-size: var(--fs-s); line-height: 1.4; color: var(--ink-2); }
 .bar-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-.bar-tondo { background: rgba(245,203,92,.1); border: 1px solid rgba(245,203,92,.45); }
+.bar-tondo { background: var(--raise-gold); }
 .bar-tondo .bar-head { color: var(--gold); }
-.bar-tondo .bar-sub { color: rgba(245,203,92,.65); }
-.bar-callout { background: rgba(217,80,58,.14); border: 1px solid rgba(217,80,58,.5); }
-.bar-callout .bar-head { color: #F0A092; }
-.bar-callout .bar-sub { color: rgba(240,160,146,.72); }
-.bar-drawn { background: rgba(255,247,232,.05); border: 1px solid var(--hair-2); }
-.drawn-msg { font-family: var(--font-body); font-size: 14px; font-weight: 500; line-height: 1.35; color: var(--ink); margin-bottom: 8px; }
-.drawn-msg.bad { color: #F0A092; }
-.bar-wild { background: rgba(255,247,232,.05); border: 1px solid var(--hair-2); }
+.bar-callout { background: var(--raise-alarm); }
+.bar-callout .bar-head { color: var(--alarm); }
+.drawn-msg { font-family: var(--font-body); font-size: var(--fs-m); font-weight: 400; line-height: 1.35; color: var(--ink); margin-bottom: 8px; }
+.drawn-msg.bad { color: var(--alarm); }
 .wild-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .wild-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .drawn-card { --cw: var(--card-w); }
 .wild-card { --cw: var(--wild-card-w); }
 
-/* game-screen buttons speak the tray's language */
-#screen-game .btn, .help-dialog .btn {
-  font-family: var(--font-body); font-weight: 700; font-size: 14px;
-  color: rgba(255,247,232,.7); background: rgba(255,247,232,.06);
-  border: 1px solid var(--hair-2); border-radius: 14px;
-}
-@media (hover: hover) and (pointer: fine) {
-  #screen-game .btn:hover:not(:disabled), .help-dialog .btn:hover:not(:disabled) {
-    border-color: rgba(255,247,232,.34); color: var(--ink); filter: none; transform: translateY(-1px);
-  }
-}
-#screen-game .btn-primary, .help-dialog .btn-primary {
-  color: var(--navy); background: var(--gold); border-color: transparent; box-shadow: 0 3px 0 rgba(96,58,14,.55);
-}
-#screen-game .btn-primary:disabled { color: var(--ink-1); background: rgba(255,247,232,.08); box-shadow: none; }
-#screen-game .btn-tondo { color: var(--navy); background: var(--gold); border-color: transparent; box-shadow: 0 3px 0 rgba(96,58,14,.55); flex: 0 0 auto; }
-#screen-game .btn-cta { color: var(--ink); background: linear-gradient(160deg,#D9503A,#B33421); border-color: transparent; box-shadow: 0 3px 0 var(--pep-edge); flex: 0 0 auto; }
-#screen-game .btn-play { color: var(--ink); background: linear-gradient(160deg,#4ECB78,#2FA25B); border-color: transparent; box-shadow: 0 3px 0 var(--bas-edge); }
-#screen-game .btn-tiny { font-size: 11px; letter-spacing: .06em; border-radius: 999px; color: var(--ink-2); background: transparent; }
-#screen-game .wild-grid .btn[data-suit] { color: var(--ink); border-color: transparent; box-shadow: 0 3px 0 var(--suit-edge, var(--pep-edge)); }
+/* the suit picker wears the suits */
+#screen-game .wild-grid .btn[data-suit] { color: var(--ink); box-shadow: 0 3px 0 var(--suit-edge, var(--pep-edge)); }
 #screen-game .wild-grid .btn[data-suit="pepperoni"] { background: var(--pep-bg); --suit-edge: var(--pep-edge); }
 #screen-game .wild-grid .btn[data-suit="basil"]     { background: var(--bas-bg); --suit-edge: var(--bas-edge); }
 #screen-game .wild-grid .btn[data-suit="cheese"]    { background: var(--chz-bg); --suit-edge: var(--chz-edge); color: var(--navy); }
@@ -2079,14 +1991,8 @@ body[data-screen="game"] { background: var(--page); }
 .card.is-playable .card-tick { display: block; }
 
 .action-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
-.btn-draw {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 18px; border-radius: 14px;
-  background: rgba(255,247,232,.06); border: 1px solid var(--hair-2);
-  font-family: var(--font-body); font-weight: 700; font-size: 14px; color: rgba(255,247,232,.7);
-}
+.btn-draw { display: flex; align-items: center; gap: 10px; padding: 10px 18px; }
 .btn-draw[hidden] { display: none; }
-#screen-game .btn-draw:not(:disabled):hover { border-color: rgba(255,247,232,.36); color: var(--ink); }
 .draw-chip-back {
   --cw: 64px; --cs: calc(var(--cw) / 96px);
   width: 24px; height: 34px; flex: 0 0 auto; border-radius: 6px;
@@ -2102,7 +2008,7 @@ body[data-screen="game"] { background: var(--page); }
      back the moment the pointer left. 1lh is the message's OWN line box, so it
      tracks the font-size overrides in the bands below. */
   min-height: 1lh;
-  font-family: var(--font-body); font-size: 13px; font-weight: 500; color: rgba(255,247,232,.6);
+  font-family: var(--font-body); font-size: var(--fs-s); font-weight: 400; color: var(--ink-2);
   /* transform is the ≤4px settle on arrival/departure; the colour channel is
      what makes a tone change (info -> bad) read as the same word going red
      rather than as a new sentence. Both damped by the reduced-motion block. */
@@ -2110,10 +2016,13 @@ body[data-screen="game"] { background: var(--page); }
               transform var(--t-text-in) var(--e-out),
               color var(--t-micro) var(--e-out);
 }
-.message.bad { color: #F0A092; }
+.message.bad { color: var(--alarm); }
 .message.good { color: var(--bas-solid); }
-.foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hair); flex-wrap: wrap; }
-.hint { flex: 1 1 auto; font-family: var(--font-voice); font-style: italic; font-weight: 400; font-size: 15px; color: var(--ink-3); }
+.foot { display: flex; justify-content: flex-end; margin-top: 4px; }
+/* The one line by your hand: whose turn it is and what to do. On your turn
+   it steps up to full ink and bold; otherwise it is the quiet colour. */
+.hint { flex: 1 1 auto; min-width: 0; font-family: var(--font-body); font-weight: 400; font-size: var(--fs-m); line-height: 1.25; color: var(--ink-2); }
+.you-strip.is-acting .hint { color: var(--ink); font-weight: 700; }
 .hint { transition: opacity var(--t-text-in) var(--e-out), transform var(--t-text-in) var(--e-out); }
 /* The settle: words arrive from 3px down and leave the same way. Paired with
    the opacity above and with .txt-fade:empty, so the resting (wordless) state
@@ -2122,24 +2031,24 @@ body[data-screen="game"] { background: var(--page); }
 
 .net-banner {
   position: fixed; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 40;
-  font-family: var(--font-body); font-size: 13px; font-weight: 700; color: var(--navy); background: var(--gold);
-  padding: 8px 16px; border-radius: 999px; box-shadow: 0 6px 16px rgba(0,0,0,.5);
+  font-family: var(--font-body); font-size: var(--fs-s); font-weight: 700; color: var(--navy); background: var(--gold);
+  padding: 8px 16px; border-radius: 12px; box-shadow: 0 6px 16px #000;
 }
 
 /* ------------------------------------------------------------ how to play */
 .help-dialog {
   width: min(92vw, 440px); max-height: min(82dvh, 620px); overflow-y: auto;
-  border: 1px solid var(--hair-2); border-radius: 18px;
+  border: 0; border-radius: 16px;
   background: var(--shell); color: var(--ink); padding: 22px;
-  box-shadow: 0 30px 70px rgba(0,0,0,.55);
+  box-shadow: 0 30px 70px #000;
 }
 /* A modal is not anchored to a trigger, so it keeps transform-origin: center
    and enters from scale(.97) — never from scale(0). */
 .help-dialog[open] { animation: tondo-appear 200ms var(--e-out) 1; }
-.help-dialog::backdrop { background: rgba(7,12,22,.8); }
-.help-title { margin: 0 0 12px; font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: .04em; color: var(--gold); }
+.help-dialog::backdrop { background: rgba(11,9,8,.82); }
+.help-title { margin: 0 0 12px; font-family: var(--font-body); font-weight: 700; font-size: var(--fs-l); color: var(--ink); }
 .help-list { margin: 0 0 16px; padding-left: 18px; display: flex; flex-direction: column; gap: 9px; }
-.help-list li { font-family: var(--font-body); font-size: 13.5px; line-height: 1.5; color: rgba(255,247,232,.7); }
+.help-list li { font-family: var(--font-body); font-size: var(--fs-m); line-height: 1.45; color: var(--ink-2); }
 .help-list b { color: var(--ink); }
 
 /* --------------------------------------------------------------- compact */
@@ -2167,15 +2076,6 @@ body[data-screen="game"] { background: var(--page); }
    only what is genuinely STRUCTURAL: a piece that disappears, a stacking
    direction that changes, a region that starts scrolling.) */
 
-/* Context panels are intentionally allowed to take priority on shorter
-   laptops: while a decision bar is open the table gives up the height the bar
-   took (see --bar-h) and the direction legend steps aside. */
-@media (min-width: 720px) and (min-height: 641px) and (max-height: 900px) {
-  .stage.is-compressed .dir { display: none; }
-}
-@media (min-width: 720px) and (min-height: 641px) and (max-height: 820px) {
-  .stage.is-compressed .oven-mark { opacity: 0; }
-}
 
 @media (max-width: 719px), (max-height: 700px) {
   /* Phones show the draw button and a taller tray, so the constant in
@@ -2201,12 +2101,10 @@ body[data-screen="game"] { background: var(--page); }
   /* The callout bar wraps two buttons on a phone: measured 143.8px, not the
      78.5px a desktop bar costs. */
   .stage.is-compressed { --bar-h: 150px; }
-  .strip { padding-block: calc(8px + env(safe-area-inset-top)) 8px; padding-inline: calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-left)); }
-  .strip-inner { gap: 9px; }
-  .strip-mark { font-size: 15px; letter-spacing: .1em; }
-  .chip { padding: 4px 10px; }
-  .chip .txt { font-size: 12px; }
-  .chip-next { display: none; }
+  .strip { padding-block: calc(2px + env(safe-area-inset-top)) 2px; padding-inline: calc(14px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-left)); }
+  /* the utilities are 44px boxes with their glyphs centred, so the boxes can
+     touch: 320px holds the wordmark, "Slice 2 of 4" and all three */
+  .strip-inner { gap: 4px; }
   .tray { padding: 10px calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
   /* The tray's own Draw button is the draw affordance here, so the deck steps
      out — and the fan takes back the width the dock was reserving for it. */
@@ -2222,16 +2120,19 @@ body[data-screen="game"] { background: var(--page); }
   /* Fluid rather than flat 20px: with `white-space: nowrap` above, the type is
      what has to give on the narrowest phones so a long winner's name still
      fits the viewport. */
-  .banner { font-size: clamp(15px, 5.4vw, 20px); padding: 12px 18px; }
-  .match-suit, .match-value { font-size: 14px; }
-  .plaque { gap: 7px; padding: 6px 12px 7px; }
+  .banner { font-size: var(--fs-l); padding: 12px 18px; }
+  /* A phone plaque is the requirement alone ("● pepperoni or flip ↻") in the
+     small step: the side seats' --min-orbit was tuned against a 165px plaque.
+     "Match" stays in the accessible text; the line by the hand says the turn. */
+  .plaque { padding: 7px 12px; }
   .plaque-row, .plaque-pair { gap: 6px; }
   .plaque-row { --gap-eat: 6px; }
   .match-glyph { width: 13px; height: 13px; }
-  .plaque-label { font-size: 8px; letter-spacing: .16em; }
-  .dir { display: none; }
-  .ribbon { font-size: 15px; }
-  .oven-mark { display: none; }
+  .match-suit, .match-value, .match-or, .dir-badge { font-size: var(--fs-s); }
+  .plaque-label {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
   /* Only the width cap is a phone fact; the pill's padding, type and badge all
      follow --ss now. */
   /* --min-orbit: the centre column's own half-width, so a side seat can never
@@ -2250,16 +2151,13 @@ body[data-screen="game"] { background: var(--page); }
   .bar-wild { flex-direction: column; align-items: stretch; }
   .wild-grid [data-wild-cancel] { grid-column: 1 / -1; }
   .strip-code { display: none; }
-  .wordmark { font-size: 44px; }
   .drawn-card { --cw: calc(var(--card-w) + 8px); }
-  .you-name { max-width: 96px; font-size: 12px; }
-  .you-status { font-size: 12.5px; }
-  .hand-label, .playable-label { font-size: 9px; letter-spacing: .16em; }
   .you-strip { gap: 9px; padding-bottom: 8px; }
   .help-dialog { padding: 18px; }
-  .foot { margin-top: 8px; padding-top: 8px; }
-  .hint { font-size: 13px; }
+  .foot { margin-top: 2px; }
 }
+
+@media (max-width: 359px) { .banner { font-size: var(--fs-m); } }
 
 /* A decision bar shortens the stage below the table's own height, so the top
    seat's clamp drags it down off the circumference and into the MATCH plaque's
@@ -2563,7 +2461,6 @@ body[data-screen="game"] { background: var(--page); }
     --table-fit: min(43vw, calc(var(--stage-h) * .86), 960px);
   }
   .stage.is-compressed .center { top: 50%; }
-  .stage.is-compressed .dir { display: none; }
 
   .tray {
     grid-column: 2;
@@ -2573,15 +2470,13 @@ body[data-screen="game"] { background: var(--page); }
     overflow-y: auto;
     overscroll-behavior: contain;
     border-top: 0;
-    border-left: 1px solid var(--hair);
+    border-left: 1px solid var(--raise);
     padding: 8px 12px 10px;
   }
   .tray > * { max-width: none; }
   .you-strip { padding-bottom: 6px; }
-  .label-row { justify-content: space-between; }
   .hand-row { gap: 5px; padding: 16px calc(var(--card-w) * .31) 12px; }
-  .oven-mark { display: none; }
-  .ribbon { font-size: 14px; }
+  .ribbon { font-size: var(--fs-s); }
   .action-row { margin-top: 6px; justify-content: flex-start; }
   /* This band overlaps the phone band (a 1800x700 window matches both) but has
      no draw button in the row, so the message goes back to sharing the line —
@@ -2613,7 +2508,7 @@ body[data-screen="game"] { background: var(--page); }
      at this band's 68px hand card those land on 68 and 50, the values this
      block used to hard-code) */
   .wild-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-  .wild-grid .btn { min-width: 0; padding-inline: 2px; font-size: 11px; }
+  .wild-grid .btn { min-width: 0; padding-inline: 2px; font-size: var(--fs-s); }
 }
 
 @media (max-height: 540px) and (min-width: 560px) and (max-width: 599px) {
@@ -2625,23 +2520,21 @@ body[data-screen="game"] { background: var(--page); }
    short label, no scores — a scoreboard on screen during a decision is noise);
    the board is what replaces the dead hand the moment a round ends. */
 
+/* "Slice 2 of 4 · 85 behind": a plain line, not a chip. */
 .slice-chip {
-  flex: 0 0 auto;
-  font-family: var(--font-mono); font-size: 11px; letter-spacing: .18em;
-  text-transform: uppercase; color: rgba(255,247,232,.42);
-  padding: 4px 9px; border-radius: 999px;
-  border: 1px solid rgba(255,247,232,.12);
-  white-space: nowrap;
+  flex: 0 1 auto; min-width: 0;
+  font-family: var(--font-body); font-size: var(--fs-s); font-variant-numeric: tabular-nums;
+  color: var(--ink-2); white-space: nowrap;
 }
 .slice-chip[hidden] { display: none; }
 
+/* The scoreboard is the tray's own content at round over: no box, no border.
+   The banner on the board has said who won; this is titled by the result
+   ("Slice 2 of 4") and its first line is the arithmetic. */
 .scoreboard {
   width: min(560px, 100%);
   margin: 0 auto;
-  padding: 18px 20px 16px;
-  border-radius: 18px;
-  background: rgba(255,247,232,.045);
-  border: 1px solid rgba(255,247,232,.12);
+  padding: 6px 0 4px;
   display: flex; flex-direction: column; gap: 12px;
 }
 .scoreboard[hidden] { display: none; }
@@ -2649,62 +2542,54 @@ body[data-screen="game"] { background: var(--page); }
 .score-head { text-align: center; }
 .score-title {
   margin: 0;
-  font-family: var(--font-display); font-weight: 800; font-size: 22px;
-  letter-spacing: .01em; color: var(--ink);
+  font-family: var(--font-body); font-weight: 700; font-size: var(--fs-l);
+  color: var(--ink);
 }
 .score-sub {
-  margin: 3px 0 0;
-  font-family: var(--font-voice); font-style: italic; font-size: 15px;
-  color: rgba(255,247,232,.5);
+  margin: 4px 0 0;
+  font-family: var(--font-body); font-size: var(--fs-m);
+  color: var(--ink-2);
 }
 
-.score-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.score-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .score-row {
   display: grid;
   /* rank | name | what they just banked | running total */
   grid-template-columns: 22px 1fr auto 56px;
   align-items: center; gap: 10px;
-  padding: 7px 10px; border-radius: 11px;
-  border: 1px solid transparent;
+  padding: 6px 10px; border-radius: 10px;
 }
 .score-rank {
-  font-family: var(--font-mono); font-size: 11px;
-  color: rgba(255,247,232,.35); text-align: center;
+  font-family: var(--font-body); font-size: var(--fs-s); font-variant-numeric: tabular-nums;
+  color: var(--ink-2); text-align: center;
 }
 .score-name {
-  font-family: var(--font-body); font-weight: 700; font-size: 15px;
-  color: rgba(255,247,232,.86);
+  font-family: var(--font-body); font-weight: 700; font-size: var(--fs-m);
+  color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* The points just banked — the one number that explains the round. */
 .score-delta {
-  font-family: var(--font-display); font-weight: 800; font-size: 14px;
+  font-family: var(--font-body); font-weight: 700; font-size: var(--fs-m); font-variant-numeric: tabular-nums;
   color: var(--bas-solid);
 }
 .score-total {
-  font-family: var(--font-display); font-weight: 800; font-size: 19px;
+  font-family: var(--font-body); font-weight: 700; font-size: var(--fs-l);
   color: var(--ink); text-align: right; font-variant-numeric: tabular-nums;
 }
-/* Your own row is marked by a border and a tint, never by colour alone. */
-.score-row.is-you {
-  background: rgba(255,247,232,.06);
-  border-color: rgba(255,247,232,.16);
-}
-.score-row.is-champion {
-  background: rgba(245,203,92,.14);
-  border-color: rgba(245,203,92,.42);
-}
+/* Your own row is marked by a ground, and the champion's by a crown and gold,
+   never by colour alone. */
+.score-row.is-you { background: var(--raise); }
 .score-row.is-champion .score-name,
 .score-row.is-champion .score-total { color: var(--gold); }
-/* A crown the champion row wears, so the win is not carried by gold alone. */
-.score-row.is-champion .score-rank::before { content: "★"; font-size: 13px; color: var(--gold); }
+.score-row.is-champion .score-rank::before { content: "★"; font-size: var(--fs-s); color: var(--gold); }
 .score-row.is-champion .score-rank { font-size: 0; }
 
 /* One pip per slice of the pie, filled as it is eaten. */
 .slice-pips { display: flex; justify-content: center; gap: 7px; }
 .slice-pip {
   width: 9px; height: 9px; border-radius: 50%;
-  border: 1.5px solid rgba(255,247,232,.28);
+  border: 1.5px solid var(--line);
   transition: background-color var(--t-state) ease, border-color var(--t-state) ease;
 }
 .slice-pip.is-done { background: var(--gold); border-color: var(--gold); }
@@ -2719,8 +2604,8 @@ body[data-screen="game"] { background: var(--page); }
    changes at the table. */
 .score-share-msg {
   margin: 0; text-align: center;
-  font-family: var(--font-voice); font-style: italic; font-size: 14px;
-  color: rgba(255,247,232,.5);
+  font-family: var(--font-body); font-size: var(--fs-s);
+  color: var(--ink-2);
 }
 .score-share-msg:empty { display: none; }
 
@@ -2760,27 +2645,23 @@ body[data-screen="game"] { background: var(--page); }
 }
 
 @media (max-width: 560px) {
-  .scoreboard { padding: 14px 14px 12px; border-radius: 15px; }
-  .score-title { font-size: 19px; }
-  .score-sub { font-size: 14px; }
   .score-row { grid-template-columns: 20px 1fr auto 48px; gap: 8px; padding: 6px 8px; }
-  .score-total { font-size: 17px; }
 }
 
 /* CREW — the lobby card's shell, a standings list and the last few pies. */
-.crew-title { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 30px; line-height: 1.05; overflow-wrap: anywhere; }
-.crew-sub { margin: 0; max-width: none; text-align: left; }   /* .home-hook centres; the title above is flush left */
+.crew-title { margin: 0; font-family: var(--font-body); font-weight: 700; font-size: var(--fs-xl); line-height: 1.1; overflow-wrap: anywhere; }
+.crew-sub { margin: 0; font-size: var(--fs-m); line-height: 1.4; color: var(--ink-2); }
 .crew-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .crew-rows:empty { display: none; }
-.crew-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.crew-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: var(--fs-m); }
 .crew-row-name { font-weight: 700; overflow-wrap: anywhere; }
-.crew-row.is-you .crew-row-name::after { content: ' · you'; font-weight: 400; color: var(--ink-3); }
-.crew-row-stat { font-family: var(--font-mono); font-size: 13px; color: var(--ink-3); white-space: nowrap; }
+.crew-row.is-you .crew-row-name::after { content: ' · you'; font-weight: 400; color: var(--ink-2); }
+.crew-row-stat { font-family: var(--font-body); font-size: var(--fs-s); font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap; }
 .crew-recent { display: flex; flex-direction: column; gap: 6px; }
 .crew-recent:empty { display: none; }
-.crew-pie { margin: 0; font-size: 14px; line-height: 1.4; color: var(--ink-3); overflow-wrap: anywhere; }
-.crew-pie b { color: var(--ink-1); }
-.crews-list { display: flex; flex-direction: column; gap: 6px; }
+.crew-pie { margin: 0; font-size: var(--fs-s); line-height: 1.4; color: var(--ink-2); overflow-wrap: anywhere; }
+.crew-pie b { color: var(--ink); }
+.crews-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 12px; }
 /* A 24-character crew name in a wide glyph is wider than the button on a 320px phone: ellipsize (the full name is the button's title), never spill. */
-.crews-list .btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crews-list .btn { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .crew-card > .btn-tiny { align-self: center; }

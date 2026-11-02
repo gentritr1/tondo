@@ -464,7 +464,7 @@ async function driveTo(cdp, scene, bots) {
       const done = await cdp.eval(`(() => {
         // Round over is ONLY the win banner (tone class 'win') together with the
         // host's "New round" button. The same banner element also carries
-        // "YOUR TURN", and treating that as the transition captured a mid-round
+        // "Your turn", and treating that as the transition captured a mid-round
         // screen and labelled it roundOver.
         const b = document.getElementById('banner');
         const nr = document.getElementById('newround-btn');
@@ -817,6 +817,57 @@ async function runCheck(a) {
         record('strip-text-clip', `mock:${scene}@${w}x${h}`, parsed.valid === true && parsed.pass === true,
           parsed.valid
             ? `texts=${parsed.carriers} [${parsed.texts.join(' | ')}]${parsed.clipped.length ? ' CLIPPED: ' + parsed.clipped.join(', ') : ''}`
+            : `INVALID: ${parsed.reason}`);
+      }
+    }
+
+    // ---- type-floor ----------------------------------------------------------
+    // The 2026-11-02 floor, held: on each first screen at 390x844 and
+    // 1440x900, every visible text outside the card and tile faces uses at most
+    // 5 sizes, at most 2 families (Bricolage, DM Sans), no uppercase transform,
+    // no letter-spacing, no italic, and every visible button or link is at
+    // least 44x44. Faces (.card, the pile, seat tiles and badges, your tile,
+    // the deck count) keep sizes derived from their own width and are counted
+    // apart, as is a font-size-0 glyph holder (it paints nothing). INVALID
+    // unless the expected screen is up and has visible text.
+    const TYPE_PROBE = (want) => `(async () => {
+      const t0 = Date.now();
+      while (document.body.dataset.screen !== ${JSON.stringify(want)} && Date.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 100));
+      if (document.body.dataset.screen !== ${JSON.stringify(want)}) return JSON.stringify({ valid: false, reason: 'screen is ' + document.body.dataset.screen });
+      await document.fonts.ready;
+      document.getAnimations().forEach((a) => { try { a.finish(); } catch {} });
+      const FACE = '.card, .top-card, .under-card, .drawn-card, .wild-card, .back-face, .seat-tile, .count-badge, .you-seat, .home-you, .deck-text, .sr-only, .dir';
+      const vis = [...document.querySelectorAll('body *')].filter((e) => {
+        const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+        return r.width && r.height && r.bottom > 0 && r.top < innerHeight && s.visibility !== 'hidden' && +s.opacity > 0
+          && parseFloat(s.fontSize) > 0 && !e.closest(FACE) && [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+      });
+      if (!vis.length) return JSON.stringify({ valid: false, reason: 'no visible text' });
+      const sizes = new Set(), fams = new Set(), bad = [];
+      for (const e of vis) {
+        const s = getComputedStyle(e), txt = e.textContent.trim().slice(0, 18);
+        sizes.add(s.fontSize); fams.add(s.fontFamily.split(',')[0].replace(/['"]/g, ''));
+        if (s.textTransform === 'uppercase') bad.push('upper:' + txt);
+        if (parseFloat(s.letterSpacing) > 0) bad.push('tracked:' + txt);
+        if (s.fontStyle === 'italic') bad.push('italic:' + txt);
+      }
+      const small = [...document.querySelectorAll('button, a, input')].filter((b) => {
+        const r = b.getBoundingClientRect(); return r.width && r.top < innerHeight && r.bottom > 0 && getComputedStyle(b).visibility !== 'hidden'
+          && !b.closest('.card') && (r.height < 44 || r.width < 44); }).map((b) => (b.textContent.trim() || b.getAttribute('aria-label') || b.id).slice(0, 16));
+      const sz = [...sizes].sort((a, b) => parseFloat(a) - parseFloat(b));
+      return JSON.stringify({ valid: true, sizes: sz, fams: [...fams], bad, small,
+        pass: sz.length <= 5 && fams.size <= 2 && bad.length === 0 && small.length === 0 });
+    })()`;
+    for (const [label, pathQ, want] of [['home a', '/?home=a', 'home'], ['home b', '/?home=b', 'home'],
+      ['mock:yourTurn', '/?mock=1&scene=yourTurn', 'game'], ['mock:roundOver', '/?mock=1&scene=roundOver', 'game']]) {
+      for (const [w, h] of [[390, 844], [1440, 900]]) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 768 });
+        await cdp.send('Page.navigate', { url: origin + pathQ });
+        await cdp.until(`document.readyState === 'complete'`, { what: `load ${label}@${w}x${h}` });
+        const parsed = JSON.parse(await cdp.eval(TYPE_PROBE(want)));
+        record('type-floor', `${label}@${w}x${h}`, parsed.valid === true && parsed.pass === true,
+          parsed.valid
+            ? `sizes=${parsed.sizes.length} [${parsed.sizes.join(' ')}] families=${parsed.fams.join(',')}${parsed.bad.length ? ' BAD: ' + parsed.bad.join(', ') : ''}${parsed.small.length ? ' UNDER44: ' + parsed.small.join(', ') : ''}`
             : `INVALID: ${parsed.reason}`);
       }
     }
