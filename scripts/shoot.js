@@ -858,7 +858,7 @@ async function runCheck(a) {
       return JSON.stringify({ valid: true, sizes: sz, fams: [...fams], bad, small,
         pass: sz.length <= 5 && fams.size <= 2 && bad.length === 0 && small.length === 0 });
     })()`;
-    for (const [label, pathQ, want] of [['home a', '/?home=a', 'home'], ['home b', '/?home=b', 'home'],
+    for (const [label, pathQ, want] of [['home', '/', 'home'],
       ['mock:yourTurn', '/?mock=1&scene=yourTurn', 'game'], ['mock:roundOver', '/?mock=1&scene=roundOver', 'game']]) {
       for (const [w, h] of [[390, 844], [1440, 900]]) {
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 768 });

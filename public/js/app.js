@@ -1450,11 +1450,6 @@ function renderLastTable() {
     ? 'with ' + last.roster.join(', ') : '';
 }
 
-/* ?home=a|b picks one of the two table-as-home layouts for the owner to
-   compare; both are the same markup, switched in CSS with no transition. The
-   loser is deleted once one is chosen. */
-document.body.dataset.home = new URLSearchParams(location.search).get('home') === 'b' ? 'b' : 'a';
-
 /** Your seat at the home table wears the first letter of the place card. */
 function paintHomeTile() {
   const name = (nodes['name-input'].value || '').trim();

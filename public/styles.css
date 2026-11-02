@@ -657,14 +657,11 @@ body.is-offline #newround-btn { opacity: .55; cursor: wait; }
    action deals a quick pie against three bots; inviting friends, a code, the
    last table and your crews are text links under it.
 
-   Two layouts share one markup, picked by ?home=a|b (body[data-home]) with no
-   transition, for the owner to compare; the loser is deleted.
-     a  "Seat": your seat at the near edge, the place card and the deal under
-        it. Wide screens move the wordmark and the quiet links to the corners,
-        the way the game's own strip does.
-     b  "Centrepiece": the place card and the deal sit in the middle of the
-        pie, where the MATCH plaque and the discard sit during play.
-   The pie is sized from what the screen has left after the words and the
+   Your seat is at the near edge, with the place card and the deal under it,
+   the way your tray sits under the table in the game. Wide screens move the
+   wordmark and the quiet links to the corners, as the game's own strip does.
+   (Chosen by the owner on 2026-11-02 over a "centrepiece" layout that put the
+   place card in the middle of the pie.) The pie is sized from what the screen has left after the words and the
    actions (--home-chrome, measured), so it fills the first screen without
    pushing the deal below the fold.
    ========================================================================== */
@@ -678,8 +675,8 @@ body[data-screen="crew"] #screen-crew { background: var(--page); }
   display: grid; justify-items: center; gap: 16px;
   /* Everything on the screen that is not the table, measured per layout
      (home card height - pie + the screen's 40px padding) at 1440x900, 1280x800,
-     390x844 and 360x640 on 2026-11-02: a 433-440 on phones and 252 on wide
-     screens, b 285 and (with the corner links) 239. Re-measure after changing
+     390x844 and 360x640 on 2026-11-02: 433-440 on phones and 252 on wide
+     screens. Re-measure after changing
      the words or the actions, or the deal slides below the fold. */
   --home-chrome: 440px;
   --home-d: clamp(220px, min(100vw - 32px, 100dvh - var(--home-chrome)), 760px);
@@ -736,38 +733,18 @@ body[data-screen="crew"] #screen-crew { background: var(--page); }
 .home-more > .msg { text-align: center; }
 .home-more > .msg:empty { min-height: 0; }
 
-/* ---- a: the seat ---------------------------------------------------------- */
-body[data-home="a"] .home-table { padding-top: var(--home-d); }
+.home-table { padding-top: var(--home-d); }
 /* Straight under your tile: the tile's centre is .95d, its bottom half a chair
    lower, and the box's own flow starts at d. */
-body[data-home="a"] .home-place { position: relative; margin-inline: auto; margin-top: calc(var(--chair) * .5 + 10px - var(--home-d) * .05); }
+.home-place { position: relative; margin-inline: auto; margin-top: calc(var(--chair) * .5 + 10px - var(--home-d) * .05); }
 @media (min-width: 900px) and (min-aspect-ratio: 6/5) {
   /* The wordmark and the quiet links go to the corners, as in the game strip,
      and give their height back to the pie. */
-  body[data-home="a"] .home-card { --home-chrome: 256px; }
-  body[data-home="a"] .home-head { position: absolute; left: 32px; top: 28px; text-align: left; max-width: 30ch; }
-  body[data-home="a"] .wordmark { font-size: 40px; }
-  body[data-home] .home-quiet { position: absolute; right: 24px; top: 24px; }
-  body[data-home="b"] .home-card { --home-chrome: 250px; }
-  body[data-home="b"] .home-head { max-width: 46ch; }
+  .home-card { --home-chrome: 256px; }
+  .home-head { position: absolute; left: 32px; top: 28px; text-align: left; max-width: 30ch; }
+  .wordmark { font-size: 40px; }
+  .home-quiet { position: absolute; right: 24px; top: 24px; }
 }
-
-/* ---- b: the centrepiece ---------------------------------------------------- */
-body[data-home="b"] .home-card { --home-chrome: 290px; }
-body[data-home="b"] .home-table { height: var(--home-d); }
-/* The place card, the deal and the note on one paper plaque in the middle of
-   the pie, sized to the sauce (.79 of the table) so its corners stay on it. */
-body[data-home="b"] .home-place {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-2deg);
-  width: min(280px, calc(var(--home-d) * .56)); gap: 8px;
-  padding: 14px 14px 10px; border-radius: 12px;
-  background: var(--paper); box-shadow: 0 4px 0 #60390E, 0 16px 30px #000;
-}
-body[data-home="b"] .place-input { transform: none; box-shadow: none; background: transparent; border-bottom: 2px solid var(--paper-2); border-radius: 0; min-height: 48px; }
-body[data-home="b"] .home-place .home-note { color: var(--paper-ink); }
-body[data-home="b"] .home-place :focus-visible { outline-color: var(--navy); }
-/* the plaque sits where your tile would, so the tile steps down onto the rim */
-body[data-home="b"] .home-you { top: calc(var(--home-d) * .97); }
 
 /* ------------------------------------------------------------------ lobby */
 .lobby-card {
