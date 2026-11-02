@@ -464,7 +464,7 @@ async function driveTo(cdp, scene, bots) {
       const done = await cdp.eval(`(() => {
         // Round over is ONLY the win banner (tone class 'win') together with the
         // host's "New round" button. The same banner element also carries
-        // "YOUR TURN", and treating that as the transition captured a mid-round
+        // "Your turn", and treating that as the transition captured a mid-round
         // screen and labelled it roundOver.
         const b = document.getElementById('banner');
         const nr = document.getElementById('newround-btn');
@@ -502,7 +502,7 @@ async function driveTo(cdp, scene, bots) {
         if (!wantPie) return;
         const complete = await cdp.eval(
           `(() => { const t = document.getElementById('score-title');
-            return !!(t && /takes the pie|shared/i.test(t.textContent)); })()`);
+            return !!(t && /pie complete/i.test(t.textContent)); })()`);
         if (complete) return;
         // Deal the next slice and carry on.
         await cdp.eval(`(() => { const b = document.getElementById('newround-btn');
@@ -773,6 +773,103 @@ async function runCheck(a) {
         parsed.valid
           ? `children=${parsed.visibleChildren} chip="${parsed.chip}" helpRight=${parsed.helpRight} limit=${parsed.limit} slack=${parsed.slack}${parsed.past.length ? ' PAST: ' + parsed.past.join(', ') : ''}`
           : `INVALID: ${parsed.reason}`);
+    }
+
+    // ---- strip-text-clip ---------------------------------------------------
+    // strip-fits asserts the HELP BUTTON'S edge, and it passed for months while
+    // the turn chip next to it showed 4 of 91px at 320 ("Your turn" cut to a
+    // sliver by `.queue { overflow: hidden }`). This asserts the TEXT: every
+    // element in `.strip` that carries a visible text node (not `.sr-only`)
+    // shows all of it — no ellipsis inside itself (scrollWidth > clientWidth)
+    // and no ancestor up to `.strip` that clips it, nor the viewport edge.
+    // INVALID unless the strip has a box and at least one text carrier.
+    const STRIP_TEXT_PROBE = `(() => {
+      const strip = document.querySelector('.strip');
+      if (!strip || !(strip.getBoundingClientRect().width > 0)) return JSON.stringify({ valid: false, reason: 'no .strip with a box' });
+      const shown = (e) => { const cs = getComputedStyle(e); const r = e.getBoundingClientRect();
+        return cs.display !== 'none' && cs.visibility !== 'hidden' && +cs.opacity > 0 && r.width > 0 && r.height > 0; };
+      const carriers = [...strip.querySelectorAll('*')].filter((e) => !e.closest('.sr-only') && shown(e)
+        && [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()));
+      if (!carriers.length) return JSON.stringify({ valid: false, reason: 'no visible text in .strip' });
+      const clipped = [];
+      for (const e of carriers) {
+        const r = e.getBoundingClientRect();
+        let visL = Math.max(r.left, 0), visR = Math.min(r.right, innerWidth);
+        for (let a = e.parentElement; a && a !== strip.parentElement; a = a.parentElement) {
+          if (getComputedStyle(a).overflowX === 'visible') continue;
+          const ar = a.getBoundingClientRect(); visL = Math.max(visL, ar.left); visR = Math.min(visR, ar.right);
+        }
+        // Only a box that clips can truncate its own text: with overflow
+        // visible a wider scrollWidth is spill (a 44px ::before hit area made
+        // "?" read 28/36px on main), and spill into a clipping ancestor or
+        // past the viewport is caught by the walk above.
+        const own = getComputedStyle(e).overflowX !== 'visible' && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0;
+        const vis = Math.max(0, visR - visL);
+        if (own || vis < r.width - 1) clipped.push('"' + e.textContent.trim().slice(0, 24) + '" '
+          + Math.round(own ? e.clientWidth : vis) + '/' + Math.round(own ? e.scrollWidth : r.width) + 'px');
+      }
+      return JSON.stringify({ valid: true, carriers: carriers.length, texts: carriers.map((e) => e.textContent.trim().slice(0, 24)), clipped, pass: clipped.length === 0 });
+    })()`;
+    for (const scene of ['yourTurn', 'opponents', 'roundOver']) {
+      for (const [w, h] of [[320, 568], [360, 640], [390, 844], [430, 932], [1280, 800]]) {
+        await gotoScene(scene, w, h);
+        const parsed = JSON.parse(await cdp.eval(STRIP_TEXT_PROBE));
+        record('strip-text-clip', `mock:${scene}@${w}x${h}`, parsed.valid === true && parsed.pass === true,
+          parsed.valid
+            ? `texts=${parsed.carriers} [${parsed.texts.join(' | ')}]${parsed.clipped.length ? ' CLIPPED: ' + parsed.clipped.join(', ') : ''}`
+            : `INVALID: ${parsed.reason}`);
+      }
+    }
+
+    // ---- type-floor ----------------------------------------------------------
+    // The 2026-11-02 floor, held: on each first screen at 390x844 and
+    // 1440x900, every visible text outside the card and tile faces uses at most
+    // 5 sizes, at most 2 families (Bricolage, DM Sans), no uppercase transform,
+    // no letter-spacing, no italic, and every visible button or link is at
+    // least 44x44. Faces (.card, the pile, seat tiles and badges, your tile,
+    // the deck count) keep sizes derived from their own width and are counted
+    // apart, as is a font-size-0 glyph holder (it paints nothing). INVALID
+    // unless the expected screen is up and has visible text.
+    const TYPE_PROBE = (want) => `(async () => {
+      const t0 = Date.now();
+      while (document.body.dataset.screen !== ${JSON.stringify(want)} && Date.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 100));
+      if (document.body.dataset.screen !== ${JSON.stringify(want)}) return JSON.stringify({ valid: false, reason: 'screen is ' + document.body.dataset.screen });
+      await document.fonts.ready;
+      document.getAnimations().forEach((a) => { try { a.finish(); } catch {} });
+      const FACE = '.card, .top-card, .under-card, .drawn-card, .wild-card, .back-face, .seat-tile, .count-badge, .you-seat, .home-you, .deck-text, .sr-only, .dir';
+      const vis = [...document.querySelectorAll('body *')].filter((e) => {
+        const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+        return r.width && r.height && r.bottom > 0 && r.top < innerHeight && s.visibility !== 'hidden' && +s.opacity > 0
+          && parseFloat(s.fontSize) > 0 && !e.closest(FACE) && [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+      });
+      if (!vis.length) return JSON.stringify({ valid: false, reason: 'no visible text' });
+      const sizes = new Set(), fams = new Set(), bad = [];
+      for (const e of vis) {
+        const s = getComputedStyle(e), txt = e.textContent.trim().slice(0, 18);
+        sizes.add(s.fontSize); fams.add(s.fontFamily.split(',')[0].replace(/['"]/g, ''));
+        if (s.textTransform === 'uppercase') bad.push('upper:' + txt);
+        if (parseFloat(s.letterSpacing) > 0) bad.push('tracked:' + txt);
+        if (s.fontStyle === 'italic') bad.push('italic:' + txt);
+      }
+      const small = [...document.querySelectorAll('button, a, input')].filter((b) => {
+        const r = b.getBoundingClientRect(); return r.width && r.top < innerHeight && r.bottom > 0 && getComputedStyle(b).visibility !== 'hidden'
+          && !b.closest('.card') && (r.height < 44 || r.width < 44); }).map((b) => (b.textContent.trim() || b.getAttribute('aria-label') || b.id).slice(0, 16));
+      const sz = [...sizes].sort((a, b) => parseFloat(a) - parseFloat(b));
+      return JSON.stringify({ valid: true, sizes: sz, fams: [...fams], bad, small,
+        pass: sz.length <= 5 && fams.size <= 2 && bad.length === 0 && small.length === 0 });
+    })()`;
+    for (const [label, pathQ, want] of [['home', '/', 'home'],
+      ['mock:yourTurn', '/?mock=1&scene=yourTurn', 'game'], ['mock:roundOver', '/?mock=1&scene=roundOver', 'game']]) {
+      for (const [w, h] of [[390, 844], [1440, 900]]) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 768 });
+        await cdp.send('Page.navigate', { url: origin + pathQ });
+        await cdp.until(`document.readyState === 'complete'`, { what: `load ${label}@${w}x${h}` });
+        const parsed = JSON.parse(await cdp.eval(TYPE_PROBE(want)));
+        record('type-floor', `${label}@${w}x${h}`, parsed.valid === true && parsed.pass === true,
+          parsed.valid
+            ? `sizes=${parsed.sizes.length} [${parsed.sizes.join(' ')}] families=${parsed.fams.join(',')}${parsed.bad.length ? ' BAD: ' + parsed.bad.join(', ') : ''}${parsed.small.length ? ' UNDER44: ' + parsed.small.join(', ') : ''}`
+            : `INVALID: ${parsed.reason}`);
+      }
     }
 
 

@@ -71,7 +71,7 @@
   const readYourTurn = () => {
     const banner = $('banner');
     finish(banner);
-    const o = bannerOverlaps((b) => b.textContent === 'YOUR TURN');
+    const o = bannerOverlaps((b) => b.textContent === 'Your turn');
     if (!o.bannerVisible) return Object.assign(o, { topCardOverlap: null, lowWouldCoverTopCard: null, placement: null });
     const card = $('top-card').getBoundingClientRect();
     const br = banner.getBoundingClientRect();

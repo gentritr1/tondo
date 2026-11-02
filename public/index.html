@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>TONDO</title>
+<title>Tondo</title>
 <meta name="description" content="A pizza card game for 2–4 players. Match toppings, flip the order, and catch your friends forgetting TONDO.">
 <meta name="theme-color" content="#0B0908">
 <!-- Declaring an icon is also what STOPS the browser requesting /favicon.ico,
@@ -11,7 +11,7 @@
 <link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=DM+Mono:wght@500&family=DM+Sans:wght@400;500;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=DM+Sans:opsz,wght@9..40,400;9..40,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./styles.css">
 <!-- The app is reached through a dynamic import() the preload scanner cannot
      see, so without this the module request does not start until the inline
@@ -24,62 +24,82 @@
 
 <!-- ------------------------------------------------------------------ HOME -->
 <section id="screen-home" class="screen home" role="main" aria-labelledby="home-title">
+  <!-- The table IS the front door: the same pie the game is played on, your
+       empty seat at it, and your name as the place card; see .home-card in
+       styles.css.
+       `.home-card` keeps its class: app.js hides it during an invite auto-join
+       and watches clicks inside it for the forget control. -->
   <div class="home-card">
-    <div class="home-deal" aria-hidden="true">
-      <span class="home-mini-card back-face"></span>
-      <span class="home-mini-card back-face"></span>
-      <span class="home-mini-card back-face"></span>
-    </div>
-    <h1 id="home-title" class="wordmark" tabindex="-1">TONDO</h1>
-    <p class="tagline">A pizza card game for 2&ndash;4 players.</p>
-    <p class="home-hook">Match toppings, flip the order, and catch your friends forgetting TONDO.</p>
-    <div class="home-facts" role="group" aria-label="Two to four players. Quick rounds. No account needed.">
-      <span>2&ndash;4 players</span><span>Quick rounds</span><span>No account</span>
-    </div>
+    <header class="home-head">
+      <h1 id="home-title" class="wordmark" tabindex="-1">Tondo</h1>
+      <p class="tagline">A pizza card game for 2&ndash;4 players. Match toppings, flip the order, and catch a friend forgetting TONDO.</p>
+    </header>
 
-    <label class="field" for="name-input">
-      <span class="field-label">Your name</span>
-      <input id="name-input" class="input" type="text" maxlength="14" autocomplete="nickname" placeholder="Chef">
-    </label>
+    <div class="home-table">
+      <!-- The real board, unlit: rim, crust, sauce and the four cuts. -->
+      <div class="ring" aria-hidden="true">
+        <div class="ring-gold"></div>
+        <div class="crust">
+          <div class="crust-char"></div>
+          <div class="crust-flour"></div>
+          <div class="sauce">
+            <div class="sauce-cheese"></div>
+            <div class="sauce-slices"></div>
+            <div class="sauce-vignette"></div>
+          </div>
+        </div>
+      </div>
+      <!-- Three empty chairs: a quick pie fills them with bots, an invite with friends. -->
+      <span class="home-chair home-chair-left" aria-hidden="true"></span>
+      <span class="home-chair home-chair-top" aria-hidden="true"></span>
+      <span class="home-chair home-chair-right" aria-hidden="true"></span>
+      <!-- Your seat: the tile wears the first letter of the name on the card. -->
+      <span id="home-tile" class="home-you" aria-hidden="true"></span>
 
-    <button id="create-btn" type="button" class="btn btn-primary btn-block">Create table</button>
-
-    <!-- Secondary to "Create table": two primaries on one card means neither
-         is primary. The hint is static helper text, not a tooltip. -->
-    <button id="quickpie-btn" type="button" class="btn btn-block" aria-describedby="quickpie-hint">One quick pie</button>
-    <p id="quickpie-hint" class="tagline quick-hint">Warm up against three bots while your friends arrive.</p>
-
-    <div class="rule"><span>or join one</span></div>
-
-    <!-- Present on first paint or not at all: `tondo.lastTable` is read
-         synchronously at boot, so this never appears after the card has been
-         painted and shoves "Create table" out from under a moving thumb. -->
-    <div id="last-table" class="last-table" hidden>
-      <button id="rejoin-btn" type="button" class="btn btn-block" aria-describedby="last-table-sub">Rejoin last table</button>
-      <p id="last-table-sub" class="home-hook last-table-sub"></p>
-    </div>
-
-    <!-- Crews this device has played into, newest first. Decided before first
-         paint (read synchronously at boot), like the last-table row above. -->
-    <div id="crews-row" class="last-table" hidden>
-      <span class="field-label">Your crews</span>
-      <div id="crews-list" class="crews-list"></div>
+      <div class="home-place">
+        <label class="place-card" for="name-input">
+          <span class="sr-only">Your name</span>
+          <input id="name-input" class="place-input" type="text" maxlength="14" autocomplete="nickname" placeholder="Your name" spellcheck="false">
+        </label>
+        <button id="quickpie-btn" type="button" class="btn btn-primary" aria-describedby="quickpie-hint">Deal a quick pie</button>
+        <p id="quickpie-hint" class="home-note">You and three bots, dealt now.</p>
+      </div>
     </div>
 
-    <div class="join-row">
-      <label class="field field-grow" for="code-input">
-        <span class="field-label">Table code</span>
-        <input id="code-input" class="input code-input" type="text" maxlength="12" autocapitalize="characters" spellcheck="false" placeholder="BASIL-4821">
-      </label>
-      <button id="join-btn" type="button" class="btn">Join</button>
-    </div>
+    <div class="home-more">
+      <div class="home-links">
+        <button id="create-btn" type="button" class="btn btn-link">Invite friends</button>
+        <button id="join-toggle" type="button" class="btn btn-link" aria-expanded="false" aria-controls="join-row">Have a code?</button>
+      </div>
 
-    <p id="home-msg" class="msg" role="status" aria-live="polite"></p>
-    <button type="button" class="btn btn-tiny" data-help-open>How to play</button>
-    <!-- The card's quiet register, same species as "How to play". It arms on
-         the first tap and wipes on the second; the warning is announced by
-         #home-msg, which is already a polite live region. -->
-    <button id="forget-btn" type="button" class="btn btn-tiny btn-forget">Forget this device</button>
+      <div id="join-row" class="join-row" hidden>
+        <label class="field field-grow" for="code-input">
+          <span class="sr-only">Table code</span>
+          <input id="code-input" class="input code-input" type="text" maxlength="12" autocapitalize="characters" spellcheck="false" placeholder="Table code, e.g. BASIL-4821">
+        </label>
+        <button id="join-btn" type="button" class="btn">Join</button>
+      </div>
+
+      <!-- Present on first paint or not at all: `tondo.lastTable` and the crews
+           are read synchronously at boot, so neither appears after the table
+           has been painted and shoves the controls from under a thumb. -->
+      <div id="last-table" class="home-row" hidden>
+        <button id="rejoin-btn" type="button" class="btn btn-link" aria-describedby="last-table-sub">Rejoin last table</button>
+        <span id="last-table-sub" class="home-note"></span>
+      </div>
+      <div id="crews-row" class="home-row" hidden>
+        <span class="home-note">Your crews</span>
+        <div id="crews-list" class="crews-list"></div>
+      </div>
+
+      <p id="home-msg" class="msg" role="status" aria-live="polite"></p>
+      <div class="home-links home-quiet">
+        <button type="button" class="btn btn-link" data-help-open>How to play</button>
+        <!-- Arms on the first tap and wipes on the second; the warning is
+             announced by #home-msg, which is already a polite live region. -->
+        <button id="forget-btn" type="button" class="btn btn-link btn-forget">Forget this device</button>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -87,7 +107,7 @@
 <section id="screen-lobby" class="screen lobby" role="main" aria-labelledby="lobby-title">
   <div class="lobby-card">
     <div class="lobby-head">
-      <h1 id="lobby-title" class="lobby-mark" tabindex="-1">TONDO</h1>
+      <h1 id="lobby-title" class="lobby-mark" tabindex="-1">Tondo</h1>
       <div class="field-label">Table code</div>
       <div class="code-row">
         <span id="room-code" class="code">&mdash;</span>
@@ -139,8 +159,9 @@
 
   <div class="strip">
     <div class="strip-inner">
-      <h1 id="game-title" class="strip-mark" tabindex="-1">TONDO</h1>
-      <div id="queue" class="queue"></div>
+      <h1 id="game-title" class="strip-mark" tabindex="-1">Tondo</h1>
+      <!-- The turn is said on the table (the lit wedge and seat) and once by
+           your hand (#hint); the strip no longer repeats it. -->
       <div id="slice-chip" class="slice-chip" hidden></div>
       <div id="strip-code" class="strip-code"></div>
       <button id="sound-btn" type="button" class="btn btn-tiny strip-sound" aria-pressed="false">
@@ -179,7 +200,6 @@
           <div class="dir-sweep" aria-hidden="true"></div>
           <div id="ledger" class="ledger"></div>
           <div class="sauce-vignette"></div>
-          <div class="oven-mark">TONDO</div>
         </div>
       </div>
     </div>
@@ -189,23 +209,18 @@
            screen reader reads the topping and the number as one requirement
            rather than as three loose words in the middle of the table. -->
       <div id="plaque" class="plaque" role="group" aria-label="Match requirement">
-        <div class="plaque-head">
-          <span id="match-label" class="plaque-label">Match</span>
-          <!-- Glyphs, not words: #match-suit and #dir-label say the same
-               things in text, and naming the group does not hide its
-               children — unhidden, the plaque read "Topping / ↻ / ≈ /
-               Anchovy". -->
-          <span id="dir-badge" class="dir-badge" aria-hidden="true">&#8635;</span>
-        </div>
+        <!-- One plain line: "Match basil or 7". The glyphs are aria-hidden:
+             #match-suit and #dir-label say the same things in text, and naming
+             the group does not hide its children. -->
         <div class="plaque-row">
-          <div class="plaque-pair">
-            <span id="match-glyph" class="match-glyph" aria-hidden="true"></span>
-            <span id="match-suit" class="match-suit"></span>
-          </div>
-          <div id="match-or-wrap" class="plaque-pair fx-tight">
+          <span id="match-label" class="plaque-label">Match</span>
+          <span id="match-glyph" class="match-glyph" aria-hidden="true"></span>
+          <span id="match-suit" class="match-suit"></span>
+          <span id="match-or-wrap" class="plaque-pair fx-tight">
             <span class="match-or">or</span>
             <span id="match-value" class="match-value"></span>
-          </div>
+          </span>
+          <span id="dir-badge" class="dir-badge" aria-hidden="true">&#8635;</span>
         </div>
       </div>
 
@@ -253,16 +268,11 @@
         <span id="you-count" class="you-count" aria-hidden="true"></span>
       </span>
       <span id="you-count-text" class="sr-only"></span>
-      <span class="you-pill">
-        <span id="you-name" class="you-name">You</span>
-        <span id="you-status" class="you-status fx-fade"></span>
-      </span>
+      <!-- The one line by the hand: whose turn it is and what to do. -->
+      <div id="hint" class="hint txt-fade"></div>
+      <!-- Only a transient note or the forgot-TONDO alarm; never the turn. -->
+      <span id="you-status" class="you-status fx-fade"></span>
       <span id="you-pips" class="you-pips" aria-hidden="true"></span>
-
-      <div class="label-row">
-        <div id="hand-label" class="hand-label txt-fade">Your hand</div>
-        <div id="playable-label" class="playable-label txt-fade"></div>
-      </div>
     </div>
 
     <!-- contextual bars -->
@@ -383,7 +393,6 @@
     </div>
 
     <div class="foot">
-      <div id="hint" class="hint txt-fade"></div>
       <button id="game-leave" type="button" class="btn btn-tiny">Leave</button>
     </div>
   </div>
