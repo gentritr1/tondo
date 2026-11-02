@@ -1817,6 +1817,11 @@ body[data-screen="game"] { background: var(--page); }
 /* No border-radius override here: the ghost's corners must scale with its
    --cw exactly as the pile card's do, or the radius pops at the hand-off. */
 .travel-back { --cw: 64px; --cs: calc(var(--cw) / 96px); }
+/* An opponent's card flies from their seat at seat size (~50px wide). The
+   suit code's 11px floor is for reading a card in your hand; on the ghost it
+   made "SKIP" or "CHZ" fill the card, so the flight read as a text label
+   rather than a card. In flight the whole face scales as one. */
+.travel-card .card-suit { font-size: calc(10px * var(--cs)); }
 
 /* ------------------------------------------------------------------ tray */
 /* Its own ground, no rule on top: the ground change is the edge. */
