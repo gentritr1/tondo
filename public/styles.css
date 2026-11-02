@@ -676,6 +676,11 @@ body[data-screen="crew"] #screen-crew { background: var(--page); }
 .home-card {
   width: 100%; margin: auto;
   display: grid; justify-items: center; gap: 16px;
+  /* Everything on the screen that is not the table, measured per layout
+     (home card height - pie + the screen's 40px padding) at 1440x900, 1280x800,
+     390x844 and 360x640 on 2026-11-02: a 433-440 on phones and 252 on wide
+     screens, b 285 and (with the corner links) 239. Re-measure after changing
+     the words or the actions, or the deal slides below the fold. */
   --home-chrome: 440px;
   --home-d: clamp(220px, min(100vw - 32px, 100dvh - var(--home-chrome)), 760px);
   --chair: clamp(36px, calc(var(--home-d) * .1), 62px);
@@ -739,14 +744,16 @@ body[data-home="a"] .home-place { position: relative; margin-inline: auto; margi
 @media (min-width: 900px) and (min-aspect-ratio: 6/5) {
   /* The wordmark and the quiet links go to the corners, as in the game strip,
      and give their height back to the pie. */
-  body[data-home="a"] .home-card { --home-chrome: 300px; }
+  body[data-home="a"] .home-card { --home-chrome: 256px; }
   body[data-home="a"] .home-head { position: absolute; left: 32px; top: 28px; text-align: left; max-width: 30ch; }
   body[data-home="a"] .wordmark { font-size: 40px; }
-  body[data-home="a"] .home-quiet { position: absolute; right: 24px; top: 24px; }
+  body[data-home] .home-quiet { position: absolute; right: 24px; top: 24px; }
+  body[data-home="b"] .home-card { --home-chrome: 250px; }
+  body[data-home="b"] .home-head { max-width: 46ch; }
 }
 
 /* ---- b: the centrepiece ---------------------------------------------------- */
-body[data-home="b"] .home-card { --home-chrome: 300px; }
+body[data-home="b"] .home-card { --home-chrome: 290px; }
 body[data-home="b"] .home-table { height: var(--home-d); }
 /* The place card, the deal and the note on one paper plaque in the middle of
    the pie, sized to the sauce (.79 of the table) so its corners stay on it. */

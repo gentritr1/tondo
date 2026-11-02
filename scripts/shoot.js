@@ -502,7 +502,7 @@ async function driveTo(cdp, scene, bots) {
         if (!wantPie) return;
         const complete = await cdp.eval(
           `(() => { const t = document.getElementById('score-title');
-            return !!(t && /takes the pie|shared/i.test(t.textContent)); })()`);
+            return !!(t && /pie complete/i.test(t.textContent)); })()`);
         if (complete) return;
         // Deal the next slice and carry on.
         await cdp.eval(`(() => { const b = document.getElementById('newround-btn');
